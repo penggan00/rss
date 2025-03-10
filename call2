@@ -1,0 +1,127 @@
+import os
+import asyncio
+import html
+from datetime import datetime
+import pytz
+import requests
+from dotenv import load_dotenv
+from lunarcalendar import Converter, Solar, Lunar
+
+# 加载环境变量
+load_dotenv()
+
+# 配置参数
+TOKEN = os.getenv('TELEGRAM_API_KEY')
+CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+# 设置香港时区
+hong_kong = pytz.timezone('Asia/Hong_Kong')
+BASE_DATE = datetime(2024, 12, 6, tzinfo=hong_kong)
+
+def send_telegram_message(plain_text, html_text):
+    """双模式消息发送"""
+    try:
+        response = requests.post(
+            f'https://api.telegram.org/bot{TOKEN}/sendMessage',
+            data={
+                'chat_id': CHAT_ID,
+                'text': html_text,
+                'parse_mode': 'HTML'
+            }
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        try:
+            requests.post(
+                f'https://api.telegram.org/bot{TOKEN}/sendMessage',
+                data={'chat_id': CHAT_ID, 'text': plain_text}
+            )
+        except Exception as e:
+            print(f"全部发送方式失败: {e}")
+
+async def check_reminders():
+    now = datetime.now(hong_kong)
+    current_date = now.strftime("%Y年%m月%d日")
+    
+    # 初始化消息列表
+    messages = [f"📅 温馨提醒：今天是{current_date}，请留意以下事项："]
+
+    # ================= 日常提醒 =================
+    # 每日定时提醒 (08:00)
+    if now.hour == 8 and now.minute == 0:
+        messages.append("🕗 时间到，记得吃药！")
+
+    # ================= 周期性提醒 =================
+    # 每10天通行证续签
+    if (now - BASE_DATE).days % 10 == 0:
+        messages.append("🔄 续签通行证！")
+
+    # ================= 固定日期年提醒 =================
+    annual_reminders = {
+        (3, 1): "🚗 小汽车打腊保养",
+        (5, 1): "📝 从业资格证年审到期",
+        (10, 5): "💍 结婚周年纪念日",
+        (11, 26): "✈️ 彭昊一离港纪念日",
+        (12, 1): "📋 小车年检保险到期"
+    }
+    if (now.month, now.day) in annual_reminders:
+        messages.append(annual_reminders[(now.month, now.day)])
+
+    # ================= 特定年份提醒 =================
+    specific_year_reminders = {
+        (2025, 4, 5): "🏦 换领建行银行卡",
+        (2026, 10, 5): "💎 结婚20周年纪念",
+        (2027, 5, 1): "🏥 彭贝娜医保卡换卡",
+        (2027, 5, 11): "🆔 彭付生身份证换证",
+        (2028, 6, 1): "💳 招商银行卡到期",
+        (2037, 3, 22): "🆔 本人身份证换证"
+    }
+    if (now.year, now.month, now.day) in specific_year_reminders:
+        messages.append(specific_year_reminders[(now.year, now.month, now.day)])
+
+    # ================= 每月固定提醒 =================
+    if now.day == 1:
+        messages.append("📸 每月提醒：云闪付汽车拍照")
+
+    # ================= 农历提醒 =================
+    lunar_date = Converter.Solar2Lunar(Solar(now.year, now.month, now.day))
+    lunar_birthdays = {
+        (2, 1): "🎂 杜根华 农历生日",
+        (2, 28): "🎂 彭佳文 农历生日",
+        (3, 11): "🎂 刘裕萍 农历生日",
+        (4, 12): "🎂 彭绍莲 农历生日",
+        (4, 20): "🎂 邬思 农历生日",
+        (4, 27): "🎂 彭博 农历生日",
+        (5, 5): "🎂 周子君 农历生日",
+        (5, 17): "🎂 杜俊豪 农历生日",
+        (8, 17): "🎂 邬启元 农历生日",
+        (8, 19): "🎂 奶奶 农历生日",
+        (10, 9): "🎂 彭付生 农历生日",
+        (10, 18): "🎂 彭贝娜 农历生日",
+        (11, 12): "🎂 彭辉 农历生日",
+        (11, 22): "🎂 彭干 农历生日",
+        (12, 1): "🎂 彭昊一 农历生日",
+        (12, 29): "🎂 彭世庆 农历生日"
+    }
+    if (lunar_date.month, lunar_date.day) in lunar_birthdays:
+        messages.append(lunar_birthdays[(lunar_date.month, lunar_date.day)])
+
+    # ================= 消息发送 =================
+    if len(messages) > 1:
+        # 构造消息内容
+        plain = '\n\n'.join(messages)
+        
+        # HTML格式处理
+        escaped = []
+        for msg in messages:
+            # 首行不加粗，其他行加粗
+            if msg.startswith("📅"):
+                escaped.append(html.escape(msg))
+            else:
+                escaped.append(f"<b>{html.escape(msg)}</b>")
+        
+        html_content = "<br/><br/>".join(escaped)
+        send_telegram_message(plain, html_content)
+
+if __name__ == "__main__":
+    asyncio.run(check_reminders())
