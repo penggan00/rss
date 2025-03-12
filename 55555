@@ -46,14 +46,11 @@ RSS_FEEDS = [
 ]
 #主题+内容
 THIRD_RSS_FEEDS = [
-   # 'https://36kr.com/feed-newsflash',
-  #  'https://rss.owo.nz/10jqka/realtimenews',
-
+    'https://blog.090227.xyz/atom.xml',
+    'https://www.freedidi.com/feed',
 ]
  # 主题+预览
 FOURTH_RSS_FEEDS = [
-    'https://blog.090227.xyz/atom.xml',
-    'https://www.freedidi.com/feed',
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
     'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點

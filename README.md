@@ -1,17 +1,22 @@
 git clone https://github.com/penggan00/rss.git  
+
 chmod +x ~/rss/rss.sh  
 chmod +x ~/rss/rss2.sh  
 chmod +x ~/rss/setup.sh  
 chmod +x ~/rss/mail.sh
 chmod +x ~/rss/time.sh
+chmod +x ~/rss/usd.sh
 # 安装
 /bin/bash ~/rss/setup.sh
 
 
+30 */1 * * * /bin/bash ~/rss/rss.sh
+0 */4 * * * /bin/bash ~/rss/rss2.sh
 
-pip install aiohttp feedparser python-dotenv telegram-bot
-pip install tencentcloud-sdk-python
-pip install imaplib email requests html2text python-telegram-bot uuid
+
+pip install telegram feedparser dotenv asyncio aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python aiomysql imaplib email html2text chardet
+pip uninstall tencentcloud
+
 
 30 */1 * * * /bin/bash ~/rss/rss.sh
 使用  python-telegram-bot  库的  escape_markdown  函数自动转义：保留去除html标签，用库自动转义替换其他处理方式和链接。删除def format_link_markdown_v2(text, url):
@@ -22,11 +27,14 @@ rss.py
 # 24小时youtube
 rss2.py
 
+
+source /root/rss/rss_venv/bin/activate
+
 # 创建虚拟环境
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 mail.py
+python3 rss.py
 pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 # 生成依赖
