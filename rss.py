@@ -76,7 +76,7 @@ FOURTH_RSS_FEEDS = [
 FIFTH_RSS_FEEDS = [
     'https://rsshub.app/twitter/media/elonmusk',  #elonmusk
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCupvZG-5ko_eiXAupbDfxWw', # cnn
-    'https://rss.penggan.us.kg/rss/4734eed5ffb55689bfe8ebc4f55e63bd_chinese_simplified', # Asmongold TV
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 
 ]
 

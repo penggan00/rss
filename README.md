@@ -11,11 +11,11 @@ chmod +x ~/rss/usd.sh
 
 
 30 */1 * * * /bin/bash ~/rss/rss.sh
-0 */4 * * * /bin/bash ~/rss/rss2.sh
+0 */3 * * * /bin/bash ~/rss/rss2.sh
 
 
-pip install telegram feedparser dotenv asyncio aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python aiomysql imaplib email html2text chardet
-pip uninstall tencentcloud
+pip install tencentcloud feedparser dotenv asyncio aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python aiomysql imaplib email html2text chardet
+pip uninstall dotenv
 
 
 30 */1 * * * /bin/bash ~/rss/rss.sh
