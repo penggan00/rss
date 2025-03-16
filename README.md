@@ -27,6 +27,7 @@ rss.py
 # 24小时youtube
 rss2.py
 
+pip install supabase aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python supabase
 
 source /root/rss/rss_venv/bin/activate
 

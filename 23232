@@ -1,0 +1,18 @@
+CREATE TABLE rss_status (
+    feed_url TEXT PRIMARY KEY,  -- RSS 源 URL，作为主键
+    identifier TEXT,          -- 最新条目的唯一标识符
+    timestamp TEXT             -- 最新条目的时间戳
+);
+
+
+psql "postgresql://penggan00:fkuefggh11@db.vdwdwogthfmvszqnqums.supabase.co:5432/postgres?sslmode=require"
+
+db.vdwdwogthfmvszqnqums.supabase.co:5432:postgres:penggan0:fkuefggh11
+
+
+PGHOST=db.vdwdwogthfmvszqnqums.supabase.co
+PGPORT=5432
+PGDATABASE=postgres
+PGUSER=penggan0
+PGPASSWORD=fkuefggh11
+PGSSLMODE=require
