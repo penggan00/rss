@@ -16,3 +16,6 @@ PGDATABASE=postgres
 PGUSER=penggan0
 PGPASSWORD=fkuefggh11
 PGSSLMODE=require
+
+
+CREATE DATABASE rsstt;
