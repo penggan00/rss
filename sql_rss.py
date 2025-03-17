@@ -54,7 +54,9 @@ RSS_FEEDS = [
 #主题+内容
 THIRD_RSS_FEEDS = [
     'https://36kr.com/feed-newsflash',
+  #  'https://web.215155.xyz/36kr', 
   #  'https://rss.owo.nz/10jqka/realtimenews',
+  #  'https://web.215155.xyz/720', 
 ]
  # 主题+预览
 FOURTH_RSS_FEEDS = [
@@ -82,6 +84,7 @@ FOURTH_RSS_FEEDS = [
 # 翻译主题+链接的
 FIFTH_RSS_FEEDS = [
     'https://rsshub.app/twitter/media/elonmusk',  #elonmusk
+   # 'https://web.215155.xyz/elonmusk',  #elonmusk
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCupvZG-5ko_eiXAupbDfxWw', # cnn
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 

@@ -49,12 +49,12 @@ postgresql://rss_owner:npg_ca0ShRoWi2qK@ep-old-poetry-a6vtxsbv-pooler.us-west-2.
 RSS_FEEDS = [
   #  'https://blog.090227.xyz/atom.xml',  # CM
    # 'https://www.freedidi.com/feed', # 零度解说
-   # 'https://rsshub.penggan.us.kg/bilibili/hot-search', # bilibili
+   # 'https://rsshub.215155.xyz/bilibili/hot-search', # bilibili
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5c91d2e23882afa09dff4901', # 36氪 - 24小时热榜
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18', # 微博热搜
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608', # 百度热搜榜
-   # 'https://rsshub.penggan.us.kg/guancha/headline', # 观察网
-   # 'https://rsshub.penggan.us.kg/zaobao/znews/china', # 联合早报
+   # 'https://rsshub.215155.xyz/guancha/headline', # 观察网
+   # 'https://rsshub.215155.xyz/zaobao/znews/china', # 联合早报
    # 'https://36kr.com/feed',    # 36氪 
     # 添加更多 RSS 源
 ]
@@ -93,19 +93,19 @@ SECOND_RSS_FEEDS = [
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFyMGc6h30NMCd6HCk0ZPA', # 哔哩哔哩动画
 ]
 36氪:https://36kr.com/feed
-《联合早报》:中国:新闻:https://rsshub.penggan.us.kg/zaobao/znews/china
-观察者网 : 头条:https://rsshub.penggan.us.kg/guancha/headline
-观察者网 : 全部:https://rsshub.penggan.us.kg/guancha
+《联合早报》:中国:新闻:https://rsshub.215155.xyz/zaobao/znews/china
+观察者网 : 头条:https://rsshub.215155.xyz/guancha/headline
+观察者网 : 全部:https://rsshub.215155.xyz/guancha
 百度热搜榜:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608
 bilibili : 综合热门:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6
 微博热搜:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
 /sub https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
-/sub https://rsshub.penggan.us.kg/guancha https://rsshub.penggan.us.kg/zaobao/znews/china https://rsshub.penggan.us.kg/guancha/headline
+/sub https://rsshub.215155.xyz/guancha https://rsshub.215155.xyz/zaobao/znews/china https://rsshub.215155.xyz/guancha/headline
 
 
-/sub https://rsshub.penggan.us.kg/zaobao/znews/china https://rsshub.penggan.us.kg/guancha/headline https://rsshub.penggan.us.kg/guancha https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
+/sub https://rsshub.215155.xyz/zaobao/znews/china https://rsshub.215155.xyz/guancha/headline https://rsshub.215155.xyz/guancha https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
 
 
