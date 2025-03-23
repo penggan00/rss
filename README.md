@@ -4,7 +4,7 @@ chmod +x ~/rss/rss.sh
 chmod +x ~/rss/rss2.sh  
 chmod +x ~/rss/setup.sh  
 chmod +x ~/rss/mail.sh
-chmod +x ~/rss/time.sh
+chmod +x ~/rss/call.sh
 chmod +x ~/rss/usd.sh
 # 安装
 /bin/bash ~/rss/setup.sh
@@ -20,7 +20,7 @@ pip uninstall dotenv
 
 30 */1 * * * /bin/bash ~/rss/rss.sh
 使用  python-telegram-bot  库的  escape_markdown  函数自动转义：保留去除html标签，用库自动转义替换其他处理方式和链接。删除def format_link_markdown_v2(text, url):
-
+pip install google-generativeai requests python-dotenv urllib3
 crontab -e
 # 无链接
 rss.py
@@ -28,14 +28,19 @@ rss.py
 rss2.py
 
 pip install supabase aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python supabase
+pip install lunarcalendar
+pip install python-dotenv yfinance requests
+pip install --upgrade yfinance
 
-source /root/rss/rss_venv/bin/activate
+pip install tenacity
 
+
+apt install python3.12-venv
 # 创建虚拟环境
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 mail.py
+python3 rss.py
 pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 # 生成依赖
@@ -45,6 +50,8 @@ deactivate
 
 postgresql://postgres:yufJkqcqSyrNerCliBCSiMJBvmURuiyF@caboose.proxy.rlwy.net:36030/railway
 postgresql://rss_owner:npg_ca0ShRoWi2qK@ep-old-poetry-a6vtxsbv-pooler.us-west-2.aws.neon.tech/rss?sslmode=require
+
+postgresql://postgres:[YOUR-PASSWORD]@db.vdwdwogthfmvszqnqums.supabase.co:5432/postgres
 # RSS 源列表
 RSS_FEEDS = [
   #  'https://blog.090227.xyz/atom.xml',  # CM

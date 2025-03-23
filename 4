@@ -1,0 +1,384 @@
+import asyncio
+import aiohttp
+import logging
+import re
+import os
+import json
+import hashlib
+from pathlib import Path
+from datetime import datetime
+from dotenv import load_dotenv
+from feedparser import parse
+from telegram import Bot
+from telegram.error import BadRequest
+from tencentcloud.common import credential
+from tencentcloud.common.profile.client_profile import ClientProfile
+from tencentcloud.common.profile.http_profile import HttpProfile
+from tencentcloud.tmt.v20180321 import tmt_client, models
+from supabase import create_client, Client
+import pytz
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+# --------------------------
+# 初始化配置部分
+# --------------------------
+
+# 加载.env环境变量文件
+load_dotenv()
+
+# 配置项目根目录
+BASE_DIR = Path(__file__).resolve().parent
+
+# 配置日志系统
+logging.basicConfig(
+    filename=BASE_DIR / "rss.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    encoding="utf-8"
+)
+logger = logging.getLogger(__name__)
+
+# 配置UTC时区
+UTC_TZ = pytz.utc
+
+# --------------------------
+# 服务客户端初始化
+# --------------------------
+
+def get_supabase() -> Client:
+    """初始化Supabase数据库客户端"""
+    DB_URL = os.getenv("DB_URL")
+    DB_API_KEY = os.getenv("DB_API_KEY")
+    return create_client(DB_URL, DB_API_KEY)
+
+supabase = get_supabase()
+
+# --------------------------
+# RSS源配置
+# --------------------------
+
+# 第一类源：需要翻译的新闻源
+RSS_FEEDS = [
+    'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC新闻
+    'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK新闻
+]
+
+# 第三类源：中文简讯
+THIRD_RSS_FEEDS = [
+    'https://36kr.com/feed-newsflash',              # 36氪快讯
+]
+
+# 第四类源：YouTube频道
+FOURTH_RSS_FEEDS = [
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w',  # 零度解说
+]
+
+# 第五类源：需要翻译的社交媒体
+FIFTH_RSS_FEEDS = [
+    'https://rsshub.app/twitter/media/elonmusk',    # Elon Musk推特
+]
+
+# --------------------------
+# 工具函数
+# --------------------------
+
+def remove_html_tags(text: str) -> str:
+    """移除HTML标签并保留文本内容"""
+    return re.sub(r'<[^>]*>', '', text)
+
+def escape_markdown_v2(text: str, exclude: list = None) -> str:
+    """转义MarkdownV2特殊字符"""
+    if exclude is None:
+        exclude = []
+    # 需要转义的字符列表
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    # 过滤不需要转义的字符
+    escape_chars = [c for c in special_chars if c not in exclude]
+    # 创建正则表达式模式
+    pattern = re.compile(f'([{"".join(re.escape(c) for c in escape_chars)}])')
+    return pattern.sub(r'\\\1', text)
+
+def get_entry_identifier(entry) -> str:
+    """
+    生成稳定的条目唯一标识符
+    使用SHA256哈希确保即使部分字段变化也能保持稳定
+    """
+    identifier_parts = []
+    
+    # 优先使用稳定字段
+    for field in ['guid', 'link', 'id']:
+        if hasattr(entry, field):
+            identifier_parts.append(str(getattr(entry, field)))
+    
+    # 备用字段：标题 + 时间戳
+    if not identifier_parts:
+        identifier_parts.append(entry.get('title', ''))
+        identifier_parts.append(str(get_entry_timestamp(entry).timestamp()))
+    
+    # 生成哈希值
+    combined = "|".join(identifier_parts)
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+def get_entry_timestamp(entry) -> datetime:
+    """获取条目的标准化UTC时间"""
+    # 尝试不同时间字段
+    time_fields = [
+        ('published_parsed', 'published'),
+        ('pubDate_parsed', 'pubDate'),
+        ('updated_parsed', 'updated')
+    ]
+    
+    for parsed_field, _ in time_fields:
+        if hasattr(entry, parsed_field) and getattr(entry, parsed_field):
+            dt = datetime(*getattr(entry, parsed_field)[:6])
+            return UTC_TZ.localize(dt)  # 转换为UTC时区
+    
+    # 默认返回当前UTC时间
+    return UTC_TZ.localize(datetime.utcnow())
+
+# --------------------------
+# 核心功能模块
+# --------------------------
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1))
+async def fetch_feed(session: aiohttp.ClientSession, feed_url: str):
+    """
+    带重试机制的RSS抓取函数
+    使用指数退避策略：1s, 2s, 4s
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36',
+        'Cache-Control': 'no-cache'
+    }
+    try:
+        async with session.get(feed_url, headers=headers, timeout=30) as response:
+            response.raise_for_status()
+            return parse(await response.read())
+    except Exception as e:
+        logger.error(f"抓取失败 {feed_url}: {str(e)}")
+        raise
+
+async def send_single_message(bot: Bot, chat_id: str, text: str, disable_preview: bool = False):
+    """
+    分块发送长消息（解决Telegram 4096字符限制）
+    自动处理Markdown转义和消息分片
+    """
+    MAX_LENGTH = 4096
+    try:
+        # 按段落分割保持语义完整性
+        paragraphs = text.split('\n\n')
+        current_chunk = []
+        current_length = 0
+
+        for para in paragraphs:
+            para_length = len(para.encode('utf-8'))
+            if current_length + para_length + 2 > MAX_LENGTH:  # +2是换行符
+                # 发送当前块
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text='\n\n'.join(current_chunk),
+                    parse_mode='MarkdownV2',
+                    disable_web_page_preview=disable_preview
+                )
+                # 重置
+                current_chunk = []
+                current_length = 0
+
+            current_chunk.append(para)
+            current_length += para_length + 2
+
+        # 发送剩余内容
+        if current_chunk:
+            await bot.send_message(
+                chat_id=chat_id,
+                text='\n\n'.join(current_chunk),
+                parse_mode='MarkdownV2',
+                disable_web_page_preview=disable_preview
+            )
+    except BadRequest as e:
+        logger.error(f"消息格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"消息发送失败: {str(e)}")
+
+async def auto_translate_text(text: str) -> str:
+    """使用腾讯云API进行中英翻译"""
+    try:
+        cred = credential.Credential(
+            os.getenv("TENCENTCLOUD_SECRET_ID"),
+            os.getenv("TENCENTCLOUD_SECRET_KEY")
+        )
+        clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
+        client = tmt_client.TmtClient(cred, "na-siliconvalley", clientProfile)
+
+        req = models.TextTranslateRequest()
+        req.SourceText = remove_html_tags(text)
+        req.Source = "auto"
+        req.Target = "zh"
+        req.ProjectId = 0
+
+        return client.TextTranslate(req).TargetText
+    except Exception as e:
+        logger.error(f"翻译失败: {str(e)}")
+        return text
+
+# --------------------------
+# 状态管理模块
+# --------------------------
+
+async def load_status() -> dict:
+    """从数据库加载处理状态"""
+    try:
+        response = supabase.table('rss_status').select('*').execute()
+        return {item['feed_url']: {
+            'identifier': item['identifier'],
+            'timestamp': datetime.fromisoformat(item['timestamp'])
+        } for item in response.data}
+    except Exception as e:
+        logger.error(f"状态加载失败: {str(e)}")
+        return {}
+
+async def save_single_status(feed_url: str, identifier: str, timestamp: datetime):
+    """原子化保存单个源的状态"""
+    try:
+        record = {
+            'feed_url': feed_url,
+            'identifier': identifier,
+            'timestamp': timestamp.isoformat()
+        }
+        supabase.table('rss_status').upsert([record]).execute()
+        logger.debug(f"状态已保存: {feed_url} => {identifier[:8]}...")
+    except Exception as e:
+        logger.error(f"状态保存失败 {feed_url}: {str(e)}")
+
+# --------------------------
+# 处理器模块
+# --------------------------
+
+async def process_general_feed(session: aiohttp.ClientSession, feed_url: str, status: dict, bot: Bot, translate: bool = True):
+    """
+    通用处理器（适用于第一、五类源）
+    功能特点：
+    1. 自动检测新条目
+    2. 支持中英翻译
+    3. 自动更新处理状态
+    """
+    try:
+        logger.info(f"开始处理源: {feed_url}")
+        feed_data = await fetch_feed(session, feed_url)
+        
+        # 检查数据有效性
+        if not feed_data or not feed_data.entries:
+            logger.info(f"源 {feed_url} 无有效内容")
+            return ""
+
+        # 获取当前状态
+        current_status = status.get(feed_url, {})
+        last_id = current_status.get('identifier')
+        last_time = current_status.get('timestamp')
+
+        # 按时间排序（从新到旧）
+        sorted_entries = sorted(feed_data.entries, 
+                              key=lambda x: get_entry_timestamp(x),
+                              reverse=True)
+
+        new_entries = []
+        latest_entry = None
+
+        # 检测新条目
+        for entry in sorted_entries:
+            entry_id = get_entry_identifier(entry)
+            entry_time = get_entry_timestamp(entry)
+            
+            # 找到已处理条目则停止
+            if last_id == entry_id:
+                logger.info(f"发现已处理条目: {entry_id[:8]}...")
+                break
+            
+            # 时间过滤（防止时钟不同步）
+            if last_time and entry_time <= last_time:
+                logger.info(f"跳过过期条目: {entry_time}")
+                break
+
+            new_entries.append(entry)
+            if not latest_entry or entry_time > get_entry_timestamp(latest_entry):
+                latest_entry = entry
+
+        # 没有新内容
+        if not new_entries:
+            logger.info(f"无新内容: {feed_url}")
+            return ""
+
+        # 更新最新状态
+        if latest_entry:
+            new_id = get_entry_identifier(latest_entry)
+            new_time = get_entry_timestamp(latest_entry)
+            await save_single_status(feed_url, new_id, new_time)
+            status[feed_url] = {'identifier': new_id, 'timestamp': new_time}
+
+        # 构建消息内容
+        source_name = feed_data.feed.get('title', feed_url)
+        message = [f"**{escape_markdown_v2(source_name, ['*'])}** 更新通知\n"]
+
+        for entry in reversed(new_entries):  # 按旧到新顺序发送
+            title = remove_html_tags(entry.title)
+            summary = remove_html_tags(getattr(entry, 'summary', ''))
+            link = entry.link
+
+            # 翻译处理
+            if translate:
+                title = await auto_translate_text(title)
+                summary = await auto_translate_text(summary)
+
+            # 转义Markdown
+            safe_title = escape_markdown_v2(title, ['*'])
+            safe_summary = escape_markdown_v2(summary)
+            safe_link = escape_markdown_v2(link)
+
+            # 构建条目
+            entry_msg = f"• *{safe_title}*\n{safe_summary}\n[阅读原文]({safe_link})"
+            message.append(entry_msg)
+
+        message.append(f"\n✅ 共 {len(new_entries)} 条更新")
+        return '\n\n'.join(message)
+
+    except Exception as e:
+        logger.error(f"处理失败 {feed_url}: {str(e)}")
+        return ""
+
+# --------------------------
+# 主程序
+# --------------------------
+
+async def main():
+    """主异步函数"""
+    async with aiohttp.ClientSession() as session:
+        # 初始化机器人
+        bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+        chat_ids = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
+        
+        # 加载处理状态
+        status = await load_status()
+        logger.info("已加载状态记录: %d 条", len(status))
+
+        try:
+            # 处理第一类源（国际新闻）
+            for idx, url in enumerate(RSS_FEEDS, 1):
+                if message := await process_general_feed(session, url, status, bot):
+                    for cid in chat_ids:
+                        await send_single_message(bot, cid, message, True)
+                    logger.info(f"完成处理新闻源 ({idx}/{len(RSS_FEEDS)})")
+
+            # 处理第五类源（社交媒体）
+            for idx, url in enumerate(FIFTH_RSS_FEEDS, 1):
+                if message := await process_general_feed(session, url, status, bot):
+                    for cid in chat_ids:
+                        await send_single_message(bot, cid, message, False)
+                    logger.info(f"完成处理社媒源 ({idx}/{len(FIFTH_RSS_FEEDS)})")
+
+        except Exception as e:
+            logger.critical(f"主程序异常: {str(e)}")
+        finally:
+            logger.info("程序运行结束")
+
+if __name__ == "__main__":
+    asyncio.run(main())

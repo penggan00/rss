@@ -17,9 +17,9 @@ pip install --upgrade pip
 # 检查是否已存在对应的 crontab 任务
 (crontab -l | grep -q '~/rss/mail.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
 (crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "30 */1 * * * /bin/bash ~/rss/rss.sh") | crontab -
-(crontab -l | grep -q '~/rss/rss2.py') || (crontab -l; echo "44 */8 * * * /bin/bash ~/rss/rss2.sh") | crontab -
-(crontab -l | grep -q '~/rss/time.py') || (crontab -l; echo "0 2 * * * /bin/bash ~/rss/time.sh") | crontab -
-(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "28 3 * * * /bin/bash ~/rss/usa.sh") | crontab -
+(crontab -l | grep -q '~/rss/rss2.py') || (crontab -l; echo "45 */3 * * * /bin/bash ~/rss/rss2.sh") | crontab -
+(crontab -l | grep -q '~/rss/call.py') || (crontab -l; echo "20 10 * * * /bin/bash ~/rss/call.sh") | crontab -
+(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "0 11,15 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
 
 echo "设置完成！"
 
