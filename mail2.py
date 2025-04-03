@@ -14,6 +14,8 @@ from email.utils import parseaddr
 import google.generativeai as genai
 from typing import Optional
 from md2tgmd import escape
+import time
+from collections import deque
 
 # 版本检查
 from telegram import __version__ as TG_VER
@@ -32,9 +34,12 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MAX_MESSAGE_LENGTH = 3800
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true" # 
 GEMINI_RETRY_DELAY = 5
 GEMINI_MAX_RETRIES = 3
+IMAP_TIMEOUT = 30  # IMAP连接超时时间(秒)
+TELEGRAM_RATE_LIMIT = 1.0  # 每条消息之间的最小间隔(秒)
+RUN_INTERVAL = 300  # 每5分钟运行一次(秒)
 
 # 配置logging
 logging.basicConfig(
@@ -109,7 +114,7 @@ class ContentProcessor:
                 seen.add(clean_url)
                 urls.append((raw_url, clean_url, match.start(), match.end()))
 
-        return urls[:5]
+        return urls[:15]
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -238,99 +243,162 @@ class MessageFormatter:
 
 class GeminiAI:
     def __init__(self, api_key):
-        """初始化Gemini模型"""
+        """初始化Gemini模型（增强媒体URL处理版）
+        
+        Args:
+            api_key: Gemini API密钥
+        """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
-        self._card_regex = re.compile(r'\b\d{12}(\d{4})\b')
-        self._base64_regex = re.compile(r'[a-zA-Z0-9+/]{50,}')
+        
+        # 媒体URL正则（匹配http/https协议）
+        self._media_url_regex = re.compile(
+            r'((?:https?://)[^\s>"\'{}|\\^`]+\.(?:'
+            r'png|jpe?g|gif|bmp|webp|svg|ico|tiff?|'  # 图片格式
+            r'mp4|mov|avi|mkv|webm|flv|wmv|3gp|mpe?g|'  # 视频格式
+            r'mp3|wav|ogg|flac|aac|m4a|wma))',  # 音频格式
+            re.IGNORECASE
+        )
+        
+        # 通用URL正则（用于去重）
+        self._url_regex = re.compile(
+            r'(https?://[^\s>"\'{}|\\^`]+)', 
+            re.IGNORECASE
+        )
 
     def generate_summary(self, text: str) -> Optional[str]:
-        """
-        生成邮件正文摘要（输出原始Markdown不转义）
-        """
-        prompt = """Please process the email body (do not process sender or subject):
-1. If content has no Chinese, translate to Chinese while preserving technical terms
-Use standard MarkdownV2 format:
-   - Bold: ​**important** 
-   - Italic: _note_
-   - Monospace: `code`
-2. Maintain line breaks and paragraphs
-3. Do not escape any characters (keep _* etc. as-is)
-4. For URLs, automatically find preceding or above-line phrases and convert to Markdown hyperlinks.
-"""
+        """生成邮件正文摘要"""
+        prompt = """Please process the following message body content (only the processed information will be returned):
+1. The content is not in Chinese, please translate it into Chinese while retaining technical terms
+2. Use the standard Markdown format:
+   - Bold: ** Important content **
+   - Italic: _Comments_
+   - Constant width font: `Code`
+3. Necessary line breaks and spaces
+4. For URLs:
+   - Automatically find previous descriptions
+   - Convert to Markdown hyperlink format: [Description](URL)
+5. If the content is too long, extract key information and summarize it
+6. Do not include any instructions on the processing process in the output
+7. Ensure that the output can be sent directly as a Telegram markdown message and do not escape any characters"""  # 保持原有prompt不变
         try:
             processed_text = self._preprocess_text(text)
             response = self.model.generate_content(
                 prompt + processed_text,
-                generation_config={"temperature": 0.3}
+                generation_config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 2000
+                }
             )
             return response.text if response.text else None
         except Exception as e:
-            logging.error(f"AI处理失败: {e}")
+            logging.error(f"AI处理失败: {str(e)[:200]}...")  # 截断长错误信息
             return None
 
     def _preprocess_text(self, text: str) -> str:
-        """文本预处理"""
-        text = self._card_regex.sub('****-****-****-\\1', text)
-        return self._base64_regex.sub('[DATA]', text)
+        """
+        文本预处理增强版：
+        1. 过滤所有媒体URL（图片/视频/音频）
+        2. 智能URL去重（忽略http/https协议差异）
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            str: 处理后的文本
+        """
+        # 1. 过滤媒体URL（保留原始协议）
+        text = self._media_url_regex.sub('[MEDIA]', text)
+        
+        # 2. URL去重处理
+        seen_urls = set()
+        def replace_duplicate_urls(match):
+            url = match.group(1)
+            # 标准化比较（忽略协议和大小写）
+            normalized = url.lower().replace('http://', 'https://')
+            if normalized in seen_urls:
+                return ""  # 移除重复URL
+            seen_urls.add(normalized)
+            return url  # 保留原始URL
+            
+        return self._url_regex.sub(replace_duplicate_urls, text)
 
 class TelegramBot:
     def __init__(self):
         self.bot = telegram.Bot(TELEGRAM_TOKEN)
+        self.last_message_time = 0
+        self.message_queue = deque()
 
-    async def send_message(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
-        """发送消息，失败时回退到未转义的原始文本"""
+    async def _rate_limited_send(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
+        """带速率限制的消息发送"""
+        now = time.time()
+        elapsed = now - self.last_message_time
+        if elapsed < TELEGRAM_RATE_LIMIT:
+            await asyncio.sleep(TELEGRAM_RATE_LIMIT - elapsed)
+        
         try:
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=escaped_text or raw_text,  # 优先用转义后的
+                text=escaped_text or raw_text,
                 parse_mode=parse_mode,
                 disable_web_page_preview=True
             )
+            self.last_message_time = time.time()
         except telegram.error.BadRequest:
-            # 回退到未转义的原始文本
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=raw_text,  # 发送未转义的原始内容
+                text=raw_text,
                 parse_mode=None,
                 disable_web_page_preview=True
             )
+            self.last_message_time = time.time()
         except Exception as e:
             logging.error(f"消息发送失败: {e}")
 
-async def main():
-    # 初始化
-    from md2tgmd import escape
+    async def send_message(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
+        """将消息加入队列并处理"""
+        self.message_queue.append((raw_text, escaped_text, parse_mode))
+        await self._process_queue()
+
+    async def _process_queue(self):
+        """处理消息队列"""
+        while self.message_queue:
+            raw_text, escaped_text, parse_mode = self.message_queue.popleft()
+            await self._rate_limited_send(raw_text, escaped_text, parse_mode)
+
+def clean_ai_text(text: str) -> str:
+    """
+    清理AI处理后的文本：
+    1. 移除所有|符号
+    2. 移除仅含-或多于2个连续-的行
+    """
+    if not text:
+        return text
+    
+    # 1. 移除所有|符号
+    text = text.replace('|', '')
+    
+    # 2. 清理无效的-行
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        stripped_line = line.strip()
+        # 跳过仅含-的行
+        if stripped_line.replace('-', '') == '' and len(stripped_line) >= 1:
+            continue
+        cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
+async def check_emails():
+    """检查邮件的核心逻辑"""
     bot = TelegramBot()
     gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
 
-    def clean_ai_text(text: str) -> str:
-        """
-        清理AI处理后的文本：
-        1. 移除所有|符号
-        2. 移除仅含-或多于2个连续-的行
-        """
-        if not text:
-            return text
-        
-        # 1. 移除所有|符号
-        text = text.replace('|', '')
-        
-        # 2. 清理无效的-行
-        lines = text.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            stripped_line = line.strip()
-            # 跳过仅含-的行
-            if stripped_line.replace('-', '') == '' and len(stripped_line) >= 1:
-                continue
-            cleaned_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
-
     try:
-        with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
+        # 使用带超时的IMAP连接
+        with imaplib.IMAP4_SSL(IMAP_SERVER, timeout=IMAP_TIMEOUT) as mail:
             mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             mail.select("INBOX")
 
@@ -359,11 +427,11 @@ async def main():
                     # 3. AI处理并清理文本
                     if gemini_ai:
                         body = gemini_ai.generate_summary(body) or body
-                        body = clean_ai_text(body)  # 清理|和-行
+                        body = clean_ai_text(body)
 
                     # 4. 准备发送内容
-                    safe_message = escape(f"{header}{body}")  # 转义后的Markdown
-                    raw_message = f"{header}{body}"           # 原始未转义文本
+                    safe_message = escape(f"{header}{body}")
+                    raw_message = f"{header}{body}"
 
                     # 5. 分割内容
                     chunks = MessageFormatter.split_content(safe_message, MAX_MESSAGE_LENGTH)
@@ -371,11 +439,7 @@ async def main():
 
                     # 6. 发送消息
                     for safe_chunk, raw_chunk in zip(chunks, raw_chunks):
-                        await bot.send_message(
-                            raw_text=raw_chunk,
-                            escaped_text=safe_chunk,
-                            parse_mode='MarkdownV2'
-                        )
+                        await bot.send_message(raw_chunk, safe_chunk)
 
                     # 7. 标记为已读
                     mail.store(num, "+FLAGS", "\\Seen")
@@ -384,8 +448,20 @@ async def main():
                     logging.error(f"邮件处理异常: {e}", exc_info=True)
                     continue
 
+    except imaplib.IMAP4.abort as e:
+        logging.error(f"IMAP连接超时: {e}", exc_info=True)
     except Exception as e:
         logging.error(f"IMAP连接异常: {e}", exc_info=True)
+
+async def main():
+    """主循环，每5分钟运行一次检查"""
+    while True:
+        try:
+            await check_emails()
+        except Exception as e:
+            logging.error(f"主循环异常: {e}", exc_info=True)
+        
+        await asyncio.sleep(RUN_INTERVAL)
 
 if __name__ == "__main__":
     asyncio.run(main())

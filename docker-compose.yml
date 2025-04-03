@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  rss-bot:
+    image: yourusername/rss-bot-deps:latest
+    container_name: rss-bot
+    restart: unless-stopped
+    volumes:
+      - ./rss.py:/app/rss.py:ro            # 只读挂载脚本
+      - ./.env:/app/.env:ro                 # 只读挂载环境文件
+      - rss_data:/app/data                  # 使用命名卷持久化数据
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep [p]ython || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  rss_data:

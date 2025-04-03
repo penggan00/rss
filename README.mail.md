@@ -1,252 +1,324 @@
 import imaplib
 import email
-import requests
-import re
-import logging
-import mysql.connector
-from datetime import datetime
-import pytz
-from mysql.connector import pooling
-from bs4 import BeautifulSoup
-from email.utils import parsedate_to_datetime
-from telegram.helpers import escape_markdown
-from email.utils import parseaddr
+from email.header import decode_header
+import html2text
+import telegram
 import os
+import asyncio
+import re
+import chardet
 from dotenv import load_dotenv
+from email.utils import parseaddr
 
-# 设置日志记录并分级
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
-
-# 加载 .env 文件
 load_dotenv()
 
-# 从环境变量获取配置信息
-email_user = os.getenv("EMAIL_USER")
-email_password = os.getenv("EMAIL_PASSWORD")
-imap_server = os.getenv("IMAP_SERVER")
-
-TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
+# 配置信息
+IMAP_SERVER = os.getenv("IMAP_SERVER")
+EMAIL_ADDRESS = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+MAX_MESSAGE_LENGTH = 3900  # 保留安全余量
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-dbconfig = {
-    "host": os.getenv("DB_HOST"),
-    "database": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
-    "pool_name": "mypool",
-    "pool_size": 5
-}
+class EmailDecoder:
+    @staticmethod
+    def decode_email_header(header):
+        """智能解码邮件头"""
+        if not header:
+            return ""
+        try:
+            decoded = decode_header(header)
+            return ''.join([
+                t[0].decode(t[1] or 'utf-8', errors='ignore') 
+                if isinstance(t[0], bytes) 
+                else str(t[0])
+                for t in decoded
+            ])
+        except Exception as e:
+            # logging.error(f"Header decode error: {e}")
+            return str(header)
 
-connection_pool = mysql.connector.pooling.MySQLConnectionPool(**dbconfig)
+    @staticmethod
+    def detect_encoding(content):
+        """编码检测优化"""
+        try:
+            result = chardet.detect(content)
+            if result['confidence'] > 0.7:
+                return result['encoding']
+            return 'gb18030' if b'\x80' in content[:100] else 'utf-8'
+        except Exception as e:
+            # logging.error(f"Encoding detection error: {e}")
+            return 'gb18030'
 
-# 获取数据库连接
-def get_connection():
-    try:
-        return connection_pool.get_connection()
-    except mysql.connector.Error as e:
-        logger.error(f"Error getting database connection: {e}")
-        return None
+class ContentProcessor:
+    @staticmethod
+    def normalize_newlines(text):
+        """统一换行符并合并空行"""
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        return re.sub(r'\n{3,}', '\n\n', text)
 
-# 加载已发送的邮件记录
-def load_sent_mail():
-    connection = get_connection()
-    if connection is None:
-        return set()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT message_id FROM sent_mail")
-            rows = cursor.fetchall()
-            sent_mail_ids = {row[0] for row in rows}
-            logger.info(f"Loaded sent mail IDs: {sent_mail_ids}")
-            return sent_mail_ids
-    except mysql.connector.Error as e:
-        logger.error(f"Error fetching sent mail IDs: {e}")
-        return set()
-    finally:
-        if connection:
-            connection.close()
+    @staticmethod
+    def clean_text(text):
+        """终极文本清洗"""
+        text = text.replace('|', '')
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+        text = ContentProcessor.normalize_newlines(text)
+        text = '\n'.join(line.strip() for line in text.split('\n'))
+        text = re.sub(r'<[^>]+>', '', text)
+        return text.strip()
 
-# 批量保存已发送的邮件记录
-def save_sent_mail_to_db(mail_entries):
-    if not mail_entries:
-        return
-    connection = get_connection()
-    if connection is None:
-        return
-    try:
-        with connection.cursor() as cursor:
-            sql = "INSERT IGNORE INTO sent_mail (url, subject, message_id) VALUES (%s, %s, %s)"
-            cursor.executemany(sql, [(entry['url'], entry['subject'], entry['message_id']) for entry in mail_entries])
-            connection.commit()  # 批量提交事务
-            logger.info(f"Saved {len(mail_entries)} mail entries: {mail_entries}")
-    except mysql.connector.Error as e:
-        logger.error(f"Error saving sent mail: {e}")
-    finally:
-        if connection:
-            connection.close()
+    @staticmethod
+    def extract_urls(html):
+        """智能链接过滤"""
+        url_pattern = re.compile(
+            r'(https?://[^\s>"\'{}|\\^`]+)',
+            re.IGNORECASE
+        )
+        urls = []
+        seen = set()
+        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
 
-# 发送消息到 Telegram
-def send_message(text):
-    try:
-        MAX_MESSAGE_LENGTH = 4000
-        messages = [text[i:i + MAX_MESSAGE_LENGTH] for i in range(0, len(text), MAX_MESSAGE_LENGTH)]
-        
-        for message_part in messages:
-            # 尝试使用 Markdown 格式推送
-            response = requests.post(f'https://api.telegram.org/bot{TELEGRAM_API_KEY}/sendMessage',
-                                     data={'chat_id': TELEGRAM_CHAT_ID, 'text': message_part, 'parse_mode': 'Markdown'})
+        for match in url_pattern.finditer(html):
+            raw_url = match.group(1)
+            clean_url = re.sub(r'[{}|\\)(<>`]', '', raw_url.split('"')[0])
             
-            if response.status_code == 200:
-                logger.info(f"Message sent successfully in Markdown format: {message_part[:50]}...")  # 记录成功推送的前50字符
-                continue  # 推送成功，继续发送下一条
+            if not (10 < len(clean_url) <= 100):
+                continue
+                
+            if any(d in clean_url for d in exclude_domains):
+                continue
+                
+            if clean_url not in seen:
+                seen.add(clean_url)
+                urls.append(clean_url)
+                
+        return urls[:5]
 
-            elif response.status_code == 400:
-                logger.warning("Markdown format push failed, switching to plain text.")
+    @staticmethod
+    def convert_html_to_text(html_bytes):
+        """HTML转换强化"""
+        try:
+            encoding = EmailDecoder.detect_encoding(html_bytes)
+            html = html_bytes.decode(encoding, errors='replace')
+            
+            converter = html2text.HTML2Text()
+            converter.body_width = 0
+            converter.ignore_links = True
+            converter.ignore_images = True
+            converter.ignore_emphasis = True
+            
+            text = converter.handle(html)
+            text = ContentProcessor.clean_text(text)
+            
+            urls = ContentProcessor.extract_urls(html)
+            
+            final_text = text
+            if urls:
+                final_text += "\n\n相关链接：\n" + "\n".join(urls)
+                
+            return ContentProcessor.normalize_newlines(final_text)
+            
+        except Exception as e:
+            # logging.error(f"HTML处理失败: {e}")
+            return "⚠️ 内容解析异常"
 
-                # 失败时使用纯文本推送
-                response = requests.post(f'https://api.telegram.org/bot{TELEGRAM_API_KEY}/sendMessage',
-                                         data={'chat_id': TELEGRAM_CHAT_ID, 'text': message_part})
+class EmailHandler:
+    @staticmethod
+    def get_email_content(msg):
+        """统一内容获取"""
+        try:
+            content = ""
+            for part in msg.walk():
+                if part.get_content_type() == 'text/html':
+                    html_bytes = part.get_payload(decode=True)
+                    content = ContentProcessor.convert_html_to_text(html_bytes)
+                    break
+                    
+            if not content:
+                for part in msg.walk():
+                    if part.get_content_type() == 'text/plain':
+                        text_bytes = part.get_payload(decode=True)
+                        encoding = EmailDecoder.detect_encoding(text_bytes)
+                        raw_text = text_bytes.decode(encoding, errors='replace')
+                        content = ContentProcessor.clean_text(raw_text)
+                        break
+                        
+            if not content and any(part.get_content_maintype() == 'image' for part in msg.walk()):
+                content = "📨 图片内容（文本信息如下）\n" + "\n".join(
+                    f"{k}: {v}" for k,v in msg.items() if k.lower() in ['subject', 'from', 'date']
+                )
+                
+            return ContentProcessor.normalize_newlines(content or "⚠️ 无法解析内容")
+            
+        except Exception as e:
+            # logging.error(f"内容提取失败: {e}")
+            return "⚠️ 内容提取异常"
 
-                if response.status_code == 200:
-                    logger.info(f"Message sent successfully in plain text format: {message_part[:50]}...")
+class MessageFormatter:
+    @staticmethod
+    def format_message(sender, subject, content):
+        """返回分离的header和body"""
+        realname, email_address = parseaddr(sender)
+        
+        clean_realname = re.sub(r'[|]', '', realname).strip()
+        clean_email = email_address.strip()
+        clean_subject = re.sub(r'\s+', ' ', subject).replace('|', '')
+        
+        sender_lines = []
+        if clean_realname:
+            sender_lines.append(f"✉️ {clean_realname}")
+        if clean_email:
+            sender_lines.append(f"{clean_email}")
+        
+        formatted_content = ContentProcessor.normalize_newlines(content)
+        
+        header = (
+            f"{' '.join(sender_lines)}\n"
+            f"{clean_subject}\n\n"
+        )
+        return header, formatted_content
+
+    @staticmethod
+    def split_content(text, max_length):
+        """智能分割优化（返回分割后的块列表）"""
+        chunks = []
+        current_chunk = []
+        current_length = 0
+
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+
+        for para in paragraphs:
+            potential_add = len(para) + (2 if current_chunk else 0)
+
+            if current_length + potential_add > max_length:
+                if current_chunk:
+                    chunks.append('\n\n'.join(current_chunk))
+                    current_chunk = []
+                    current_length = 0
+                    
+                    if len(para) > max_length:
+                        start = 0
+                        while start < len(para):
+                            end = start + max_length
+                            chunks.append(para[start:end])
+                            start = end
+                        continue
+                    else:
+                        current_chunk.append(para)
+                        current_length = len(para)
                 else:
-                    logger.error(f"Failed to send message even in plain text format: {message_part[:50]}..., Status Code: {response.status_code}")
-                    response.raise_for_status()
-
-            elif response.status_code == 429:
-                retry_after = int(response.headers.get('Retry-After', 1))
-                logger.warning(f"Telegram API rate limited, retrying after {retry_after} seconds")
-                time.sleep(retry_after)
+                    start = 0
+                    while start < len(para):
+                        end = start + max_length
+                        chunks.append(para[start:end])
+                        start = end
             else:
-                logger.error(f"Unexpected error: Status Code {response.status_code}")
-                response.raise_for_status()
+                current_chunk.append(para)
+                current_length += potential_add
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"RequestException while sending message to Telegram: {e}")
-    except Exception as e:
-        logger.error(f"Error sending message to Telegram: {e}")
+        if current_chunk:
+            chunks.append('\n\n'.join(current_chunk))
 
-# 解码邮件头
-def decode_header(header):
-    decoded_fragments = email.header.decode_header(header)
-    return ''.join(
-        fragment.decode(encoding or 'utf-8') if isinstance(fragment, bytes) else fragment
-        for fragment, encoding in decoded_fragments
-    )
+        # 最终长度校验
+        final_chunks = []
+        for chunk in chunks:
+            while len(chunk) > max_length:
+                final_chunks.append(chunk[:max_length])
+                chunk = chunk[max_length:]
+            if chunk:
+                final_chunks.append(chunk)
+        
+        return final_chunks
 
-# 清理邮件正文
-def clean_email_body(body):
-    soup = BeautifulSoup(body, 'html.parser')
-    text = soup.get_text()
-    text = re.sub(r'\n\s*\n+', '\n', text)
-    return text.strip()
-
-# 获取邮件正文
-def get_email_body(msg):
-    body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            charset = part.get_content_charset() or 'utf-8'
+class TelegramBot:
+    def __init__(self):
+        self.bot = telegram.Bot(TELEGRAM_TOKEN)
+        
+    async def send_message(self, text):
+        """最终发送处理"""
+        try:
+            final_text = ContentProcessor.normalize_newlines(text)
+            final_text = re.sub(r'^\s*[-]{2,}\s*$', '', final_text, flags=re.MULTILINE)
             
-            if content_type in ['text/html', 'text/plain']:
-                body = part.get_payload(decode=True).decode(charset, errors='ignore')
-                break
-    else:
-        charset = msg.get_content_charset() or 'utf-8'
-        body = msg.get_payload(decode=True).decode(charset, errors='ignore')
-        
-    return clean_email_body(body)
+            await self.bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=final_text,
+                parse_mode=None,
+                disable_web_page_preview=True
+            )
+        except telegram.error.BadRequest as e:
+            # logging.error(f"消息过长错误: {str(e)[:200]}")
+            pass
+        except Exception as e:
+            # logging.error(f"发送失败: {str(e)[:200]}")
+            pass
 
-# 清理邮件主题
-def clean_subject(subject):
-    return re.sub(r'[^\w\s]', '', subject)
-def clean_subject(name):
-    return re.sub(r'[^\w\s]', '', name)
-def clean_subject(body):
-    # 去除 Markdown 中的斜体星号 *
-    return re.sub(r'\*', '', body)
-
-# 获取并处理未读邮件
-def fetch_emails():
-    sent_mail = load_sent_mail()  # 已发送的邮件集合
-    new_sent_mail = []
-
+async def main():
+    bot = TelegramBot()
+    
     try:
-        mail = imaplib.IMAP4_SSL(imap_server)
-        mail.login(email_user, email_password)
-        mail.select('inbox')
+        with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
+            mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            mail.select("INBOX")
+            
+            _, nums = mail.search(None, "UNSEEN")
+            if not nums[0]:
+                # logging.info("无未读邮件")
+                return
 
-        status, messages = mail.search(None, '(UNSEEN)')
-        if status != 'OK':
-            logger.error("Error searching for emails")
-            return
-        
-        email_ids = messages[0].split()
-        
-        for email_id in email_ids:
-            try:
-                _, msg_data = mail.fetch(email_id, '(RFC822)')
-                msg = email.message_from_bytes(msg_data[0][1])
+            for num in nums[0].split():
+                try:
+                    _, data = mail.fetch(num, "(RFC822)")
+                    msg = email.message_from_bytes(data[0][1])
+                    
+                    sender = EmailDecoder.decode_email_header(msg.get("From"))
+                    subject = EmailDecoder.decode_email_header(msg.get("Subject"))
+                    content = EmailHandler.get_email_content(msg)
 
-                message_id = msg['Message-ID']
-                if not message_id:
-                    logger.warning(f"Email ID {email_id} has no Message-ID, generating a unique identifier.")
-                    subject = clean_subject(decode_header(msg['subject']))
-                    sender = decode_header(msg['from'])
-                    url = f"https://mail.qq.com/{sender}"
-                    message_id = f"{url}-{subject}"  # 组合 url 和 subject 生成唯一标识符
+                    header, body = MessageFormatter.format_message(sender, subject, content)
+                    header_len = len(header)
+                    max_body_len = MAX_MESSAGE_LENGTH - header_len
 
-                if message_id in sent_mail:
-                    logger.info(f"Email already sent: {message_id}")
+                    # 处理header过长的情况
+                    if max_body_len <= 0:
+                        header = header[:MAX_MESSAGE_LENGTH-4] + "..."
+                        header_len = len(header)
+                        max_body_len = MAX_MESSAGE_LENGTH - header_len
+
+                    # 第一步：分割带header的首个消息
+                    first_part_chunks = MessageFormatter.split_content(body, max_body_len)
+                    
+                    # 发送首个消息（如果有内容）
+                    if first_part_chunks:
+                        first_chunk = first_part_chunks[0]
+                        await bot.send_message(header + first_chunk)
+                        
+                        # 第二步：处理剩余内容（不带header）
+                        remaining_body = '\n\n'.join(
+                            para 
+                            for chunk in first_part_chunks[1:] 
+                            for para in chunk.split('\n\n')
+                        )
+                    else:
+                        remaining_body = body
+
+                    # 第三步：分割剩余内容（使用完整长度限制）
+                    subsequent_chunks = MessageFormatter.split_content(remaining_body, MAX_MESSAGE_LENGTH)
+                    
+                    # 发送后续消息
+                    for chunk in subsequent_chunks:
+                        await bot.send_message(chunk)
+                        
+                    mail.store(num, "+FLAGS", "\\Seen")
+                    
+                except Exception as e:
+                    # logging.error(f"处理异常: {str(e)[:200]}")
                     continue
 
-                subject = clean_subject(decode_header(msg['subject']))
-                sender = decode_header(msg['from'])
-
-                # 解析发件人
-                name, email_address = parseaddr(sender)
-                # 检查邮件日期字段
-                date_str = msg.get('date')
-                if date_str is None:
-                    logger.warning(f"Email ID {email_id} has no Date header, using current time as fallback.")
-                    email_date_bj = datetime.now(pytz.timezone('Asia/Shanghai'))
-                else:
-                    try:
-                        email_date = parsedate_to_datetime(date_str)
-                        email_date_bj = email_date.astimezone(pytz.timezone('Asia/Shanghai'))
-                    except Exception as e:
-                        logger.warning(f"Error parsing date for email ID {email_id}: {e}, using current time as fallback.")
-                        email_date_bj = datetime.now(pytz.timezone('Asia/Shanghai'))
-
-                body = get_email_body(msg)
-
-                url = f"https://mail.qq.com/{sender}"
-
-                message = f'''
-✉️ *{name}* <{email_address}>
-{subject}
-
-{body}
-'''
-                send_message(message)
-
-                new_sent_mail.append({
-                    'url': url,
-                    'subject': subject,
-                    'message_id': message_id
-                })
-
-            except Exception as e:
-                logger.error(f"Error processing email ID {email_id}: {e}")
-
     except Exception as e:
-        logger.error(f"Error fetching emails: {e}")
-    finally:
-        mail.logout()
-        if new_sent_mail:
-            save_sent_mail_to_db(new_sent_mail)
+        # logging.error(f"连接异常: {str(e)[:200]}")
+        pass
 
-if __name__ == '__main__':
-    fetch_emails()
+if __name__ == "__main__":
+    asyncio.run(main())

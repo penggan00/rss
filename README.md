@@ -28,20 +28,17 @@ rss.py
 rss2.py
 pip3 show pyTelegramBotAPI google-generativeai aiohttp md2tgmd Pillow
 
-pip install supabase aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python supabase
-pip install lunarcalendar
-pip install python-dotenv yfinance requests
-pip install --upgrade yfinance
+apt install python3-venv
+pip install lunarcalendar yfinance aiohttp feedparser python-dotenv python-telegram-bot tencentcloud-sdk-python pytz tenacity
 
-pip install tenacity
 
 pip install tushare pandas
-apt install python3.10-venv
+apt install python3-venv
 # 创建虚拟环境
-python3 -m venv gpt_venv
+python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 rss.py
+python3 usd.py
 pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 # 生成依赖
