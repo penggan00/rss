@@ -298,6 +298,7 @@ class TelegramBot:
 
 async def main():
     # 初始化
+    from md2tgmd import escape
     bot = TelegramBot()
     gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
 

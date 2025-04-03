@@ -3,6 +3,7 @@ import requests
 import os
 import logging
 from dotenv import load_dotenv
+import time
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,30 +31,35 @@ def escape_markdown(text):
 def format_price(price):
     return f"{price:.2f}"
 
-def get_price(symbol, name):
-    try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="2d")
-        if len(data) >= 2:
-            price = data['Close'].iloc[-1]
-            prev_close = data['Close'].iloc[-2]
-            price_change = price - prev_close  # 涨跌点数
-            percent_change = ((price - prev_close) / prev_close) * 100
+def get_price(symbol, name, retries=3):
+    for i in range(retries):
+        try:
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period="2d")
+            if len(data) >= 2:
+                price = data['Close'].iloc[-1]
+                prev_close = data['Close'].iloc[-2]
+                price_change = price - prev_close  # 涨跌点数
+                percent_change = ((price - prev_close) / prev_close) * 100
 
-            if price_change > 0:
-                emoji = "🔴"
-                color = f"*{escape_markdown(format_price(price))}* (+{escape_markdown(format_price(price_change))}, +{escape_markdown(f'{percent_change:.2f}%')})"
+                if price_change > 0:
+                    emoji = "🔴"
+                    color = f"*{escape_markdown(format_price(price))}* (+{escape_markdown(format_price(price_change))}, +{escape_markdown(f'{percent_change:.2f}%')})"
+                else:
+                    emoji = "🔵"
+                    color = f"*{escape_markdown(format_price(price))}* ({escape_markdown(format_price(price_change))}, {escape_markdown(f'{percent_change:.2f}%')})"
+
+                return f"{emoji} {escape_markdown(name)}: {color}\n"  # 使用换行符
             else:
-                emoji = "🔵"
-                color = f"*{escape_markdown(format_price(price))}* ({escape_markdown(format_price(price_change))}, {escape_markdown(f'{percent_change:.2f}%')})"
-
-            return f"{emoji} {escape_markdown(name)}: {color}\n"  # 使用换行符
-        else:
-            logging.warning(f"未能获取 {name} ({symbol}) 的足够数据")
-            return f"⚠️ 未能获取 {escape_markdown(name)} 的数据\n" # 使用换行符
-    except Exception as e:
-        logging.error(f"获取 {name} ({symbol}) 数据时出错: {e}")
-        return f"⚠️ 获取 {escape_markdown(name)} 数据时出错\n" # 使用换行符
+                logging.warning(f"未能获取 {name} ({symbol}) 的足够数据")
+                return f"⚠️ 未能获取 {escape_markdown(name)} 的数据\n" # 使用换行符
+        except Exception as e:
+            logging.error(f"获取 {name} ({symbol}) 数据时出错 (尝试 {i+1}/{retries}): {e}")
+            if i < retries - 1:
+                time.sleep(2)  # 等待2秒后重试
+            else:
+                return f"⚠️ 获取 {escape_markdown(name)} 数据时出错\n" # 使用换行符
+    return f"⚠️ 获取 {escape_markdown(name)} 数据时出错\n"
 
 def send_to_telegram(message, retries=3):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -229,6 +235,7 @@ def main():
     message += get_price("000725.SZ", "京东方A")
     message += get_price("300065.SZ", "海兰信")
     message += get_price("300207.SZ", "欣旺达")
+    message += get_price("002594.SZ", "比亚迪")
 
     # ✅ 添加分割线
     message += "----------------------------\n\n" # 使用 Markdown 格式

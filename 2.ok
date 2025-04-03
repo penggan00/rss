@@ -3,6 +3,7 @@ import email
 from email.header import decode_header
 import os
 from dotenv import load_dotenv
+import html
 import re
 import google.generativeai as genai
 from telegram import Bot
@@ -13,15 +14,14 @@ import logging
 from telegram.helpers import escape_markdown
 import asyncio
 import tenacity
+import html2text
 from urllib.parse import urlparse
-from bs4 import BeautifulSoup  # 替换html2text
-import requests
 
 # 配置日志
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='email_to_telegram.log',
+    filename='emil.log',
     filemode='w'
 )
 
@@ -42,72 +42,53 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash-exp')
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-def extract_links_and_text(html_content):
-    """使用BeautifulSoup提取正文和链接"""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # 移除不需要的标签
-    for element in soup(['script', 'style', 'head', 'meta', 'link']):
-        element.decompose()
-    
-    # 处理超链接
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if not href.startswith(('http://', 'https://')):
-            continue
-            
-        # 保留原始链接结构
-        a.replace_with(f"[{a.get_text()}]({href})")
-    
-    # 获取处理后的文本
-    text = soup.get_text(separator='\n', strip=True)
-    
-    # 清理多余空行
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text
+# 初始化html2text转换器
+html_converter = html2text.HTML2Text()
+html_converter.ignore_links = False
+html_converter.ignore_images = True
+html_converter.body_width = 0
+html_converter.protect_links = True  # 保护已有链接格式
 
 def enhance_urls(text):
     """
-    增强处理纯文本中的URL：
-    1. 已经是Markdown链接的保持不变
-    2. 将裸URL转换为[描述](URL)格式
+    专业URL处理：
+    1. 保护现有的Markdown超链接
+    2. 将裸URL转换为专业超链接格式
+    3. 智能生成链接描述文本
     """
-    # 保护现有Markdown链接
-    protected = set(re.findall(r'$$.*?$$$https?://.*?$', text))
+    # 保护现有超链接
+    protected_links = set(re.findall(r'$$.*?$$$https?://.*?$', text))
+    protected_text = text
     
-    # URL正则（更精确的匹配）
+    # 处理裸URL
     url_pattern = re.compile(
-        r'(?<!\]$)https?://(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s<>]*)?'
+        r'(?<!\]$)https?://(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s]*)?'
     )
     
     def url_replacer(match):
         url = match.group(0)
-        if any(url in p for p in protected):
+        if any(url in link for link in protected_links):
             return url
             
-        try:
-            parsed = urlparse(url)
-            if not all([parsed.scheme, parsed.netloc]):
-                return url
-                
-            # 获取域名作为默认描述
-            domain = parsed.netloc.replace('www.', '')
-            path = parsed.path.strip('/')
-            
-            # 查找前文中的描述性文本
-            preceding = text[:match.start()].rsplit('\n', 1)[-1]
-            descriptors = re.findall(r'[\w\s-]+(?=\s*$)', preceding)
-            descriptor = descriptors[-1].strip() if descriptors else f"链接({domain})"
-            
-            # 验证描述有效性
-            if len(descriptor) > 30 or not descriptor.strip():
-                descriptor = f"链接({domain})"
-                
-            return f"[{descriptor}]({url})"
-        except:
-            return url
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace('www.', '')
+        
+        # 查找前文中的合适描述
+        preceding_text = text[:match.start()].strip()
+        if preceding_text:
+            # 提取最后一个有意义的短语
+            descriptor = re.split(r'[.!?]\s+|\n', preceding_text)[-1]
+            descriptor = re.sub(r'^\W+', '', descriptor)
+            if 3 < len(descriptor) < 30 and not descriptor.lower().startswith('http'):
+                return f"[{descriptor}]({url})"
+        
+        # 默认使用智能描述
+        path = parsed.path.strip('/')
+        if path and len(path) < 20:
+            return f"[{domain}/{path}]({url})"
+        return f"[{domain}]({url})"
     
-    return url_pattern.sub(url_replacer, text)
+    return url_pattern.sub(url_replacer, protected_text)
 
 def extract_email_body(msg):
     """专业邮件正文提取"""
@@ -125,9 +106,8 @@ def extract_email_body(msg):
                     part.get_content_charset('utf-8'),
                     'ignore'
                 )
-                processed_text = extract_links_and_text(html_content)
-                return enhance_urls(processed_text)
-    
+                markdown_text = html_converter.handle(html_content)
+                return enhance_urls(markdown_text)
     body = msg.get_payload(decode=True).decode('utf-8', 'ignore')
     return enhance_urls(body)
 
@@ -164,16 +144,13 @@ async def translate_to_chinese(text):
     """专业级AI翻译处理器"""
     try:
         prompt = (
-            "作为专业翻译引擎，请执行以下任务：\n"
-            "1. 将内容准确翻译为简体中文\n"
-            "2. 严格保留以下元素：\n"
-            "   - 所有技术术语/品牌名称/专有名词\n"
-            "   - Markdown链接格式 [描述](URL)\n"
-            "   - 数字/单位/代码/公式\n"
-            "3. 采用正式书面语体\n"
-            "4. 对文化专有内容添加简明注释[注]\n"
-            "5. 保持段落结构和标点规范\n\n"
-            f"待翻译内容：\n{text[:15000]}"
+            "作为专业翻译引擎，请将以下内容翻译为准确、流畅的中文：\n"
+            "1. 严格保留所有技术术语、专有名词和品牌名称的原貌\n"
+            "2. 保持Markdown超链接格式不变：[描述](URL)\n"
+            "3. 对金融/科技类内容保持数字和单位的精确性\n"
+            "4. 采用正式书面语体，避免口语化表达\n"
+            "5. 对文化特定内容添加必要注释[注]\n\n"
+            f"待翻译内容：\n{text[:15000]}"  # 安全长度限制
         )
         
         loop = asyncio.get_event_loop()
@@ -227,7 +204,7 @@ async def process_email(email_msg):
         translated = await translate_to_chinese(raw_body[:3500]) or f"⚠️ 翻译失败\n原始内容：\n{raw_body[:3500]}"
 
         message = (
-            f"📬 *邮件摘要*\n"
+            f"📬 *专业邮件摘要*\n"
             f"▌发件人：`{escape_markdown(from_, version=2)}`\n"
             f"▌主题：_{escape_markdown(subject, version=2)}_\n"
             f"▌时间：`{escape_markdown(date, version=2)}`\n\n"
@@ -238,10 +215,10 @@ async def process_email(email_msg):
         
     except Exception as e:
         logging.error(f"邮件处理异常: {str(e)}")
-        await send_telegram_message("⚠️ 邮件处理流程出错")
+        await send_telegram_message("⚠️ 专业邮件处理流程出错")
 
 async def email_fetcher():
-    """邮件获取引擎"""
+    """专业邮件获取引擎"""
     try:
         with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
             mail.login(EMAIL_USER, EMAIL_PASSWORD)
@@ -261,16 +238,16 @@ async def email_fetcher():
         logging.error(f"IMAP服务器异常: {str(e)}")
 
 async def main():
-    """执行入口"""
+    """专业执行入口"""
     if not await test_telegram_connection():
         return
     
     start_time = time.time()
     try:
         await email_fetcher()
-        await send_telegram_message(f"✅ 邮件处理完成 (耗时: {time.time() - start_time:.2f}秒)")
+        await send_telegram_message(f"✅ 专业邮件处理完成 (耗时: {time.time() - start_time:.2f}秒)")
     except Exception as e:
-        await send_telegram_message(f"❌ 处理失败: {escape_markdown(str(e), version=2)}")
+        await send_telegram_message(f"❌ 专业流程执行失败: {escape_markdown(str(e), version=2)}")
         raise
 
 if __name__ == "__main__":

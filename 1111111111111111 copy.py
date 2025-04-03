@@ -31,9 +31,9 @@ EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MAX_MESSAGE_LENGTH = 3800
+MAX_MESSAGE_LENGTH = 3900
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
-GEMINI_RETRY_DELAY = 5
+GEMINI_RETRY_DELAY = 2
 GEMINI_MAX_RETRIES = 3
 
 # 配置logging
@@ -93,17 +93,17 @@ class ContentProcessor:
         )
         urls = []
         seen = set()
-   #     exclude_domains = {'w3.org', 'schema.org', 'example.com'}
+        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
             clean_url = raw_url.split('"')[0]
 
-            if not (10 < len(clean_url) <= 200):
+            if not (10 < len(clean_url) <= 100):
                 continue
 
-    #        if any(d in clean_url for d in exclude_domains):
-    #            continue
+            if any(d in clean_url for d in exclude_domains):
+                continue
 
             if clean_url not in seen:
                 seen.add(clean_url)
@@ -179,7 +179,7 @@ class MessageFormatter:
         """生成未转义的原始头部（后续统一用 md2tgmd 转义）"""
         realname, email_address = parseaddr(sender)
         header = (
-            f"✉️ **{realname}** "  # 保留*不转义
+            f"✉️ **{realname}**\n"  # 保留*不转义
             f"`{email_address}`\n"  # 保留`不转义
             f"_{subject}_\n\n"     # 保留_不转义
         )
@@ -248,22 +248,20 @@ class GeminiAI:
         """
         生成邮件正文摘要（输出原始Markdown不转义）
         """
-        prompt = """Please process the email body (do not process sender or subject):
-1.Organize streamlining in Chinese while retaining technical terms
-Use telegram MarkdownV2 format:
-   - Bold: ​**important** 
-   - Italic: _note_
-   - Monospace: `code`
-2. Maintain line breaks and paragraphs
-3. Do not escape any characters (keep _* etc. as-is)
-4. For URLs, automatically find preceding or above-line phrases and convert to Markdown hyperlinks.
-5.Delete the picture link. If there is a duplicate link, only one should be kept,
-6.Strictly implement the prompt words urls
-"""
+        prompt = """请处理邮件正文（不要处理主题/发件人）：
+1. 总结内容并翻译为中文
+2. 使用标准MarkdownV2格式：
+   - 加粗：**重点** 
+   - 斜体：_备注_
+   - 等宽：`代码`
+3. 保持换行和段落
+4. 不要转义任何字符（保留_*等符号）
+
+正文："""
         try:
-            # processed_text = self._preprocess_text(text)  # Remove this line
+            processed_text = self._preprocess_text(text)
             response = self.model.generate_content(
-                prompt + text,  # Use text directly
+                prompt + processed_text,
                 generation_config={"temperature": 0.3}
             )
             return response.text if response.text else None
@@ -271,60 +269,39 @@ Use telegram MarkdownV2 format:
             logging.error(f"AI处理失败: {e}")
             return None
 
+    def _preprocess_text(self, text: str) -> str:
+        """文本预处理"""
+        text = self._card_regex.sub('****-****-****-\\1', text)
+        return self._base64_regex.sub('[DATA]', text)
 
 class TelegramBot:
     def __init__(self):
         self.bot = telegram.Bot(TELEGRAM_TOKEN)
 
-    async def send_message(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
-        """发送消息，失败时回退到未转义的原始文本"""
+    async def send_message(self, text, parse_mode='MarkdownV2'):
+        """发送消息（自动处理转义）"""
         try:
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=escaped_text or raw_text,  # 优先用转义后的
+                text=text,
                 parse_mode=parse_mode,
                 disable_web_page_preview=True
             )
         except telegram.error.BadRequest:
-            # 回退到未转义的原始文本
+            # 格式失败时回退纯文本
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=raw_text,  # 发送未转义的原始内容
-                parse_mode=None,
-                disable_web_page_preview=True
+                text=text,
+                parse_mode=None
             )
         except Exception as e:
             logging.error(f"消息发送失败: {e}")
 
 async def main():
-    # 初始化
+    # 初始化（改用更可靠的 md2tgmd 转义）
+    from md2tgmd import escape
     bot = TelegramBot()
     gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
-
-    def clean_ai_text(text: str) -> str:
-        """
-        清理AI处理后的文本：
-        1. 移除所有|符号
-        2. 移除仅含-或多于2个连续-的行
-        """
-        if not text:
-            return text
-        
-        # 1. 移除所有|符号
-        text = text.replace('|', ' ')
-        
-        # 2. 清理无效的-行
-        lines = text.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            stripped_line = line.strip()
-            # 跳过仅含-的行
-            if stripped_line.replace('-', '') == '' and len(stripped_line) >= 1:
-                continue
-            cleaned_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
 
     try:
         with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
@@ -345,41 +322,33 @@ async def main():
                     subject = EmailDecoder.decode_email_header(msg.get("Subject"))
                     raw_content = EmailHandler.get_email_content(msg)
 
-                    # 2. 生成未转义的头部和正文
+                    # 2. 生成未转义的头部和正文（保留*_`等符号）
                     header = (
-                        f"✉️ **{parseaddr(sender)[0]}** "
+                        f"✉️ **{parseaddr(sender)[0]}**\n"
                         f"`{parseaddr(sender)[1]}`\n"
                         f"_{subject}_\n\n"
                     )
                     body = raw_content
 
-                    # 3. AI处理并清理文本
+                    # 3. AI处理（不转义内部Markdown）
                     if gemini_ai:
                         body = gemini_ai.generate_summary(body) or body
-                        body = clean_ai_text(body)  # 清理|和-行
 
-                    # 4. 准备发送内容
-                    safe_message = escape(f"{header}{body}")  # 转义后的Markdown
-                    raw_message = f"{header}{body}"           # 原始未转义文本
+                    # 4. 关键步骤：用md2tgmd统一转义（仅此一次）
+                    safe_message = escape(f"{header}{body}")  # 所有符号一次性正确转义
 
-                    # 5. 分割内容
+                    # 5. 分割发送（确保每条消息独立转义）
                     chunks = MessageFormatter.split_content(safe_message, MAX_MESSAGE_LENGTH)
-                    raw_chunks = MessageFormatter.split_content(raw_message, MAX_MESSAGE_LENGTH)
-
-                    # 6. 发送消息
-                    for safe_chunk, raw_chunk in zip(chunks, raw_chunks):
+                    for chunk in chunks:
                         await bot.send_message(
-                            raw_text=raw_chunk,
-                            escaped_text=safe_chunk,
-                            parse_mode='MarkdownV2'
+                            text=chunk,
+                            parse_mode='MarkdownV2'  # 必须明确声明
                         )
 
-                    # 7. 标记为已读
                     mail.store(num, "+FLAGS", "\\Seen")
 
                 except Exception as e:
                     logging.error(f"邮件处理异常: {e}", exc_info=True)
-                    continue
 
     except Exception as e:
         logging.error(f"IMAP连接异常: {e}", exc_info=True)

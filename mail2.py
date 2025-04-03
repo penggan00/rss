@@ -93,7 +93,7 @@ class ContentProcessor:
         )
         urls = []
         seen = set()
-   #     exclude_domains = {'w3.org', 'schema.org', 'example.com'}
+        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
@@ -102,8 +102,8 @@ class ContentProcessor:
             if not (10 < len(clean_url) <= 200):
                 continue
 
-    #        if any(d in clean_url for d in exclude_domains):
-    #            continue
+            if any(d in clean_url for d in exclude_domains):
+                continue
 
             if clean_url not in seen:
                 seen.add(clean_url)
@@ -249,21 +249,19 @@ class GeminiAI:
         生成邮件正文摘要（输出原始Markdown不转义）
         """
         prompt = """Please process the email body (do not process sender or subject):
-1.Organize streamlining in Chinese while retaining technical terms
-Use telegram MarkdownV2 format:
+1. If content has no Chinese, translate to Chinese while preserving technical terms
+Use standard MarkdownV2 format:
    - Bold: ​**important** 
    - Italic: _note_
    - Monospace: `code`
 2. Maintain line breaks and paragraphs
 3. Do not escape any characters (keep _* etc. as-is)
 4. For URLs, automatically find preceding or above-line phrases and convert to Markdown hyperlinks.
-5.Delete the picture link. If there is a duplicate link, only one should be kept,
-6.Strictly implement the prompt words urls
 """
         try:
-            # processed_text = self._preprocess_text(text)  # Remove this line
+            processed_text = self._preprocess_text(text)
             response = self.model.generate_content(
-                prompt + text,  # Use text directly
+                prompt + processed_text,
                 generation_config={"temperature": 0.3}
             )
             return response.text if response.text else None
@@ -271,6 +269,10 @@ Use telegram MarkdownV2 format:
             logging.error(f"AI处理失败: {e}")
             return None
 
+    def _preprocess_text(self, text: str) -> str:
+        """文本预处理"""
+        text = self._card_regex.sub('****-****-****-\\1', text)
+        return self._base64_regex.sub('[DATA]', text)
 
 class TelegramBot:
     def __init__(self):
@@ -298,6 +300,7 @@ class TelegramBot:
 
 async def main():
     # 初始化
+    from md2tgmd import escape
     bot = TelegramBot()
     gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
 
@@ -311,7 +314,7 @@ async def main():
             return text
         
         # 1. 移除所有|符号
-        text = text.replace('|', ' ')
+        text = text.replace('|', '')
         
         # 2. 清理无效的-行
         lines = text.split('\n')

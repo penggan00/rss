@@ -52,36 +52,17 @@ RSS_FEEDS = [
   #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCupvZG-5ko_eiXAupbDfxWw', # cnn
   #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 ]
-#主题+内容
+#主题
 THIRD_RSS_FEEDS = [
     'https://rsshub.215155.xyz/guancha',
     'https://rsshub.215155.xyz/zaobao/znews/china',
     'https://rsshub.215155.xyz/guancha/headline',
     
 ]
- # 主题+预览
+ # 主题
 FOURTH_RSS_FEEDS = [
     'https://36kr.com/feed-newsflash',
     'https://rsshub.215155.xyz/10jqka/realtimenews',
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
 ]
 
 # 翻译主题+链接的
@@ -90,11 +71,33 @@ FIFTH_RSS_FEEDS = [
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 
 ]
-
+# 主题
 FIFTH_RSS_RSS_SAN = [
     'https://rss.nodeseek.com/',  # nodeseek
 ]
-
+# 10086
+YOUTUBE_RSSS_FEEDS = [
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
+]
+# youtube
 FIFTH_RSS_YOUTUBE = [
   #  'https://blog.090227.xyz/atom.xml',
   #  'https://www.freedidi.com/feed',
@@ -133,8 +136,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
 RSS_TWO = os.getenv("RSS_TWO")
 RSS_TOKEN = os.getenv("RSS_LINDA")    # RSS_LINDA
 RSSTWO_TOKEN = os.getenv("RSS_TWO")
-RSS_SAN = os.getenv("RSS_SAN")
-YOUTUBE_RSS = os.getenv("YOUTUBE_RSS")
+RSS_SANG = os.getenv("RSS_SAN")
+YOUTUBE_RSS_FEEDSS = os.getenv("RSS_LINDA_YOUTUBE")
+YOUTUBE_RSSS = os.getenv("YOUTUBE_RSS")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
@@ -769,6 +773,86 @@ async def process_san_feed(session, feed_url, status, bot):
     except Exception as e:
         logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
         return ""
+    
+async def process_you_feed(session, feed_url, status, bot):
+    logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
+    logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
+    try:
+        feed_data = await fetch_feed(session, feed_url)
+        if not feed_data or not feed_data.entries:
+            logger.info(f"源 {feed_url} 没有新条目")
+            return ""
+
+        last_status = status.get(feed_url, {})
+        last_identifier = last_status.get('identifier')
+        last_timestamp = last_status.get('timestamp')
+        last_timestamp_dt = datetime.fromisoformat(last_timestamp).astimezone(pytz.utc) if last_timestamp else None
+
+        new_entries = []
+        current_latest = None
+
+        for entry in feed_data.entries:
+            entry_time = get_entry_timestamp(entry)
+            identifier = get_entry_identifier(entry)
+
+            if last_identifier and identifier == last_identifier:
+                logger.info(f"找到精确匹配标识符，停止处理")
+                break
+
+            if last_timestamp_dt and entry_time <= last_timestamp_dt:
+                logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
+                break
+
+            new_entries.append(entry)
+            if not current_latest or entry_time > get_entry_timestamp(current_latest):
+                current_latest = entry
+
+        if not new_entries:
+            logger.info(f"没有新条目需要处理: {feed_url}")
+            return ""
+
+        merged_message = ""
+        source_name = feed_data.feed.get('title', feed_url)
+        # 遍历新条目，添加序号
+        for idx, entry in enumerate(new_entries, start=1):
+            # 内容处理
+            raw_subject = remove_html_tags(entry.title or "无标题")
+         #   raw_summary = remove_html_tags(getattr(entry, 'summary', "暂无简介"))
+            raw_url = entry.link
+
+            # Markdown转义
+            safe_subject = escape_markdown_v2(raw_subject)
+      #      safe_summary = escape_markdown_v2(raw_summary)
+            safe_source = escape_markdown_v2(source_name)
+            safe_url = escape_markdown_v2(raw_url)
+
+            # 消息构建
+      #      message_content = f"*{safe_subject}*\n{safe_summary}\n[{safe_source}]({safe_url})"
+            message_content = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+            message_bytes = message_content.encode('utf-8')
+
+            if len(message_bytes) <= 444:
+                merged_message += message_content + "\n\n"
+            else:
+                title_link = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+                merged_message += title_link + "\n\n"
+    #    merged_message += f"✅ 新增 {len(new_entries)} 条内容"
+
+        # 更新状态:
+        if current_latest:
+            current_latest_identifier = get_entry_identifier(current_latest)
+            current_latest_timestamp = get_entry_timestamp(current_latest).isoformat()
+
+            status[feed_url] = {
+                "identifier": current_latest_identifier,
+                "timestamp": current_latest_timestamp
+            }
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
+        return merged_message
+    except Exception as e:
+        logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
+        return ""
+    
 async def process_youtube_feed(session, feed_url, status, bot):
     logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
     logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
@@ -857,8 +941,9 @@ async def main():
         third_bot = Bot(token=RSS_TWO)
         fourth_bot = Bot(token=RSS_TOKEN)
         fifth_bot = Bot(token=RSSTWO_TOKEN)
-        rsssan_bot = Bot(token=RSS_SAN)
-        youtube_bot = Bot(token=YOUTUBE_RSS)
+        rsssan_bot = Bot(token=RSS_SANG)
+        youtube_bot = Bot(token=YOUTUBE_RSSS)
+        you_bot = Bot(token=YOUTUBE_RSS_FEEDSS)
         status = await load_status()  # 改为异步加载
 
         try:
@@ -893,6 +978,11 @@ async def main():
                 if message := await process_san_feed(session, url, status, rsssan_bot):
                     await send_single_message(rsssan_bot, TELEGRAM_CHAT_ID[0], message, True)  # 根据需要调整True不浏览
                     logger.info(f"成功处理第6类源 {idx + 1}/{len(FIFTH_RSS_RSS_SAN)}")
+
+            for idx, url in enumerate(YOUTUBE_RSSS_FEEDS):
+                if message := await process_you_feed(session, url, status, you_bot):
+                    await send_single_message(you_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
+                    logger.info(f"成功处理第6类源 {idx + 1}/{len(YOUTUBE_RSSS_FEEDS)}")
 
             # 处理 FIFTH_RSS_YOUTUBE
             last_fifth_rss_youtube_run = load_last_run_time() # 从 JSON 文件加载

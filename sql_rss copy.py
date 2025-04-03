@@ -15,12 +15,11 @@ from tencentcloud.common import credential
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
-from supabase import create_client, Client
 import pytz
-from tenacity import retry, wait_exponential, stop_after_attempt
-
-# 导入文件锁
 import fcntl
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, wait_random
+import sqlite3
+import time
 
 # 加载.env文件
 load_dotenv()
@@ -37,13 +36,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 初始化Supabase客户端
-def get_supabase() -> Client:
-    DB_URL = os.getenv("DB_URL")
-    DB_API_KEY = os.getenv("DB_API_KEY")
-    return create_client(DB_URL, DB_API_KEY)
-
-supabase = get_supabase()
+# 配置文件路径
+LAST_RUN_FILE = os.path.join(BASE_DIR, "youtube.json")
 
 #RSS 源列表 (保持不变)
 RSS_FEEDS = [
@@ -60,46 +54,87 @@ RSS_FEEDS = [
 ]
 #主题+内容
 THIRD_RSS_FEEDS = [
-    'https://36kr.com/feed-newsflash',
-    'https://rss.owo.nz/10jqka/realtimenews',
-
+    'https://rsshub.215155.xyz/guancha',
+    'https://rsshub.215155.xyz/zaobao/znews/china',
+    'https://rsshub.215155.xyz/guancha/headline',
+    
 ]
  # 主题+预览
 FOURTH_RSS_FEEDS = [
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
-    'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
+    'https://36kr.com/feed-newsflash',
+    'https://rsshub.215155.xyz/10jqka/realtimenews',
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
 ]
 
 # 翻译主题+链接的
 FIFTH_RSS_FEEDS = [
     'https://rsshub.app/twitter/media/elonmusk',  #elonmusk
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
-    'https://rrss.owo.nz/twitter/media/racknerd',  #racknerd
 
 ]
 
+FIFTH_RSS_RSS_SAN = [
+    'https://rss.nodeseek.com/',  # nodeseek
+]
+
+FIFTH_RSS_YOUTUBE = [
+  #  'https://blog.090227.xyz/atom.xml',
+  #  'https://www.freedidi.com/feed',
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCF-Q1Zwyn9681F7du8DMAWg', # 謝宗桓-老謝來了
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCOSmkVK2xsihzKXQgiXPS4w', # 历史哥
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCNiJNzSkfumLB7bYtXcIEmg', # 真的很博通
+ #   'https://www.youtube.com/feeds/videos.xml?channel_id=UCG_gH6S-2ZUOtEw27uIS_QA', # 7Car小七車觀點
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJ5rBA0z4WFGtUTS83sAb_A', # POP Radio聯播網
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCN0eCImZY6_OiJbo8cy5bLw', # 屈機TV
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
+
+# 影视
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCqWNOHjgfL8ADEdXGznzwUw', # 悦耳音乐酱
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
+   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCKyDmY3R_xGKz8IjvbijiHA', # 珊珊追剧社
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UClyVC2wh_2fQhU0hPdXA4rw', # 热门古风
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UC1ISajIKfRN359MMmtckUTg', # Taiwanese Pop Mix
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFyMGc6h30NMCd6HCk0ZPA', # 哔哩哔哩动画
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQatgKoA7lylp_UzvsLCgcw', # 腾讯视频
+  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCUhpu5MJQ_bjPkXO00jyxsw', # 爱奇艺
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
+]
+
 # Telegram配置 (保持不变)
-TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # bbc
+TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
 RSS_TWO = os.getenv("RSS_TWO")
-RSS_TOKEN = os.getenv("RSS_TOKEN")    # 10086
+RSS_TOKEN = os.getenv("RSS_LINDA")    # RSS_LINDA
 RSSTWO_TOKEN = os.getenv("RSS_TWO")
+RSS_SAN = os.getenv("RSS_SAN")
+YOUTUBE_RSS = os.getenv("YOUTUBE_RSS")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
@@ -107,13 +142,72 @@ TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
 MAX_CONCURRENT_REQUESTS = 5
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
+def load_last_run_time():
+    """从 JSON 文件加载上次运行时间"""
+    try:
+        with open(LAST_RUN_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("last_run_time", 0)  # 默认值为0
+    except FileNotFoundError:
+        return 0  # 文件不存在，表示从未运行过
+    except (ValueError, json.JSONDecodeError):
+        return 0 # 文件内容不是有效JSON或没有 last_run_time 字段，也当做从未运行过
+
+def save_last_run_time(last_run_time):
+    """将上次运行时间保存到 JSON 文件"""
+    data = {"last_run_time": last_run_time}
+    try:
+        with open(LAST_RUN_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"保存上次运行时间到 JSON 文件失败: {e}")
+
 # 创建锁文件
 LOCK_FILE = BASE_DIR / "rss.lock"
 
+# SQLite 数据库初始化
+DATABASE_FILE = BASE_DIR / "rss_status.db"
+
+def create_connection():
+    """创建 SQLite 数据库连接"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DATABASE_FILE)
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"连接数据库失败: {e}")
+    return conn
+
+def create_table():
+    """创建 rss_status 表"""
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rss_status (
+                    feed_url TEXT PRIMARY KEY,
+                    identifier TEXT,
+                    timestamp TEXT
+                )
+            """)
+            conn.commit()
+            logger.info("成功创建/连接到数据库和表")
+        except sqlite3.Error as e:
+            logger.error(f"创建表失败: {e}")
+        finally:
+            conn.close()
+    else:
+        logger.error("无法创建数据库连接")
+
+create_table()
+
+
 # 函数 (保持不变，除非另有说明)
 def remove_html_tags(text):
-    """彻底移除HTML标签"""
-    return re.sub(r'<[^>]*>', '', text)
+    """彻底移除HTML标签和hashtags"""
+    text = re.sub(r'#\w+', '', text)  # 移除hashtags
+    return text
 
 def escape_markdown_v2(text, exclude=None):
     """自定义MarkdownV2转义函数"""
@@ -157,7 +251,24 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
     except Exception as e:
         logging.error(f"消息发送失败: {e}")
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1))
+# 自定义重试条件
+def retry_if_transient_error(exception):
+    """
+    如果异常是瞬态错误（如连接错误、超时），则重试。
+    不重试 4xx 错误。
+    """
+    if isinstance(exception, aiohttp.ClientError):
+        return True
+    if isinstance(exception, aiohttp.ClientResponseError) and 400 <= exception.status < 500:
+        return False  # 不重试 4xx 错误
+    return False
+
+@retry(
+    stop=stop_after_attempt(5),  # 增加重试次数
+    wait=wait_exponential(multiplier=1, min=2, max=15) + wait_random(0, 2),  # 增加随机抖动
+    retry=retry_if_exception_type(aiohttp.ClientError),  # 仅重试 ClientError
+    before_sleep=lambda retry_state: logging.warning(f"重试中... (尝试次数: {retry_state.attempt_number})")
+)
 async def fetch_feed(session, feed_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
     try:
@@ -165,9 +276,12 @@ async def fetch_feed(session, feed_url):
             async with session.get(feed_url, headers=headers, timeout=40) as response:
                 response.raise_for_status()
                 return parse(await response.read())
+    except aiohttp.ClientResponseError as e:
+        logging.error(f"HTTP 错误 {e.status} 抓取失败 {feed_url}: {e}")
+        raise  # 重新抛出，让 tenacity 判断是否需要重试
     except Exception as e:
         logging.error(f"抓取失败 {feed_url}: {e}")
-        return None
+        raise  # 重新抛出，让 tenacity 判断是否需要重试
 
 async def auto_translate_text(text):
     try:
@@ -187,25 +301,40 @@ async def auto_translate_text(text):
         return text
 
 async def load_status():
-    """从Supabase加载状态"""
-    try:
-        response = supabase.table('rss_status').select('*').execute()
-        return {item['feed_url']: {'identifier': item['identifier'], 'timestamp': item['timestamp']}
-                for item in response.data}
-    except Exception as e:
-        logger.error(f"加载数据库状态失败: {e}")
-        return {}
+    """从 SQLite 加载状态"""
+    status = {}
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT feed_url, identifier, timestamp FROM rss_status")
+            rows = cursor.fetchall()
+            for row in rows:
+                status[row[0]] = {'identifier': row[1], 'timestamp': row[2]}
+            logger.info("从数据库加载状态成功")
+        except sqlite3.Error as e:
+            logger.error(f"从数据库加载状态失败: {e}")
+        finally:
+            conn.close()
+    return status
+
 
 async def save_single_status(feed_url, status_data):
-    """立即保存单个feed状态"""
-    try:
-        supabase.table('rss_status').upsert([{
-            'feed_url': feed_url,
-            'identifier': status_data['identifier'],
-            'timestamp': status_data['timestamp']
-        }], on_conflict="feed_url").execute()
-    except Exception as e:
-        logger.error(f"保存失败 {feed_url}: {e}")
+    """保存单个feed状态到 SQLite"""
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO rss_status (feed_url, identifier, timestamp)
+                VALUES (?, ?, ?)
+            """, (feed_url, status_data['identifier'], status_data['timestamp']))
+            conn.commit()
+            logger.info(f"保存状态 {feed_url} 到数据库成功")
+        except sqlite3.Error as e:
+            logger.error(f"保存状态 {feed_url} 到数据库失败: {e}")
+        finally:
+            conn.close()
 
 def get_entry_identifier(entry):
     """使用SHA256哈希生成稳定标识符"""
@@ -295,9 +424,9 @@ async def process_feed(session, feed_url, status, bot, translate=True):
           #     translated_summary = raw_summary
 
             # Markdown转义
-            safe_subject = escape_markdown_v2(translated_subject, exclude=['*'])
+            safe_subject = escape_markdown_v2(translated_subject)
       #      safe_summary = escape_markdown_v2(translated_summary)
-            safe_source = escape_markdown_v2(source_name, exclude=['[', ']'])
+            safe_source = escape_markdown_v2(source_name)
             safe_url = escape_markdown_v2(raw_url)
 
             # 构建消息
@@ -315,19 +444,8 @@ async def process_feed(session, feed_url, status, bot, translate=True):
                 "identifier": current_latest_identifier,
                 "timestamp": current_latest_timestamp
             }
-            try:
-                supabase.table('rss_status').upsert([{
-                    'feed_url': feed_url,
-                    'identifier': status[feed_url]['identifier'],
-                    'timestamp': status[feed_url]['timestamp']
-                }], on_conflict="feed_url").execute()  # 或 on_conflict="identifier"
-                logger.info(
-                    f"更新状态: {feed_url} - Identifier: {status[feed_url]['identifier'][:50]}... Timestamp: {status[feed_url]['timestamp']}")
 
-            except Exception as e:
-                logger.error(f"更新状态失败 {feed_url}: {e}")
-
-
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
         return merged_message
 
     except Exception as e:
@@ -381,9 +499,9 @@ async def process_third_feed(session, feed_url, status, bot):
             raw_url = entry.link
 
             # Markdown转义
-            safe_subject = escape_markdown_v2(raw_subject, exclude=['*'])
+            safe_subject = escape_markdown_v2(raw_subject)
       #      safe_summary = escape_markdown_v2(raw_summary)
-            safe_source = escape_markdown_v2(source_name, exclude=['[', ']'])
+            safe_source = escape_markdown_v2(source_name)
             safe_url = escape_markdown_v2(raw_url)
 
             # 消息构建
@@ -407,18 +525,7 @@ async def process_third_feed(session, feed_url, status, bot):
                 "identifier": current_latest_identifier,
                 "timestamp": current_latest_timestamp
             }
-            try:
-                supabase.table('rss_status').upsert([{
-                    'feed_url': feed_url,
-                    'identifier': status[feed_url]['identifier'],
-                    'timestamp': status[feed_url]['timestamp']
-                }], on_conflict="feed_url").execute()  # 或 on_conflict="identifier"
-                logger.info(
-                    f"更新状态: {feed_url} - Identifier: {status[feed_url]['identifier'][:50]}... Timestamp: {status[feed_url]['timestamp']}")
-
-            except Exception as e:
-                logger.error(f"更新状态失败 {feed_url}: {e}")
-
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
         return merged_message
     except Exception as e:
         logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
@@ -463,24 +570,29 @@ async def process_fourth_feed(session, feed_url, status, bot):
 
         merged_message = ""
         source_name = feed_data.feed.get('title', feed_url)
-        feed_title = f"**{escape_markdown_v2(source_name, exclude=['*'])}**"  # 转义并加粗标题
-
-        # 添加统计信息
-        merged_message += f"📢 *{feed_title}*\n\n"
-
         # 遍历新条目，添加序号
         for idx, entry in enumerate(new_entries, start=1):
             # 内容处理
             raw_subject = remove_html_tags(entry.title or "无标题")
+         #   raw_summary = remove_html_tags(getattr(entry, 'summary', "暂无简介"))
             raw_url = entry.link
 
-            clean_subject = re.sub(r'[^\w\s\u4e00-\u9fa5.,!?;:"\'()\-]+', '', raw_subject).strip()
             # Markdown转义
-            safe_subject = escape_markdown_v2(clean_subject, exclude=['*',',', '?', ':', ';'])
+            safe_subject = escape_markdown_v2(raw_subject)
+      #      safe_summary = escape_markdown_v2(raw_summary)
+            safe_source = escape_markdown_v2(source_name)
             safe_url = escape_markdown_v2(raw_url)
 
-            # 构建消息，添加序号
-            merged_message += f"*{safe_subject}*\n🔗 {safe_url}\n\n"
+            # 消息构建
+      #      message_content = f"*{safe_subject}*\n{safe_summary}\n[{safe_source}]({safe_url})"
+            message_content = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+            message_bytes = message_content.encode('utf-8')
+
+            if len(message_bytes) <= 444:
+                merged_message += message_content + "\n\n"
+            else:
+                title_link = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+                merged_message += title_link + "\n\n"
         merged_message += f"✅ 新增 {len(new_entries)} 条内容"
 
         # 更新状态:
@@ -492,18 +604,7 @@ async def process_fourth_feed(session, feed_url, status, bot):
                 "identifier": current_latest_identifier,
                 "timestamp": current_latest_timestamp
             }
-            try:
-                supabase.table('rss_status').upsert([{
-                    'feed_url': feed_url,
-                    'identifier': status[feed_url]['identifier'],
-                    'timestamp': status[feed_url]['timestamp']
-                }], on_conflict="feed_url").execute()  # 或 on_conflict="identifier"
-                logger.info(
-                    f"更新状态: {feed_url} - Identifier: {status[feed_url]['identifier'][:50]}... Timestamp: {status[feed_url]['timestamp']}")
-
-            except Exception as e:
-                logger.error(f"更新状态失败 {feed_url}: {e}")
-
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
         return merged_message
     except Exception as e:
         logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
@@ -550,7 +651,7 @@ async def process_fifth_feed(session, feed_url, status, bot, translate=True):
         # 处理消息
         merged_message = ""
         source_name = feed_data.feed.get('title', feed_url)
-        feed_title = f"**{escape_markdown_v2(source_name, exclude=['*'])}**"  # 转义并加粗标题
+        feed_title = escape_markdown_v2(source_name)
 
         # 添加统计信息
         merged_message += f"📢 *{feed_title}*\n\n"
@@ -566,8 +667,8 @@ async def process_fifth_feed(session, feed_url, status, bot, translate=True):
             else:
                 translated_subject = raw_subject
             # Markdown转义
-            safe_subject = escape_markdown_v2(translated_subject,exclude=['*'])
-            safe_source = escape_markdown_v2(source_name, exclude=['[', ']'])
+            safe_subject = escape_markdown_v2(translated_subject)
+        #    safe_source = escape_markdown_v2(source_name)
             safe_url = escape_markdown_v2(raw_url)
 
             # 构建消息, 只发送主题和链接
@@ -584,18 +685,158 @@ async def process_fifth_feed(session, feed_url, status, bot, translate=True):
                 "identifier": current_latest_identifier,
                 "timestamp": current_latest_timestamp
             }
-            try:
-                supabase.table('rss_status').upsert([{
-                    'feed_url': feed_url,
-                    'identifier': status[feed_url]['identifier'],
-                    'timestamp': status[feed_url]['timestamp']
-                }], on_conflict="feed_url").execute()  # 或 on_conflict="identifier"
-                logger.info(
-                    f"更新状态: {feed_url} - Identifier: {status[feed_url]['identifier'][:50]}... Timestamp: {status[feed_url]['timestamp']}")
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
+        return merged_message
+    except Exception as e:
+        logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
+        return ""
+    
+async def process_san_feed(session, feed_url, status, bot):
+    logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
+    logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
+    try:
+        feed_data = await fetch_feed(session, feed_url)
+        if not feed_data or not feed_data.entries:
+            logger.info(f"源 {feed_url} 没有新条目")
+            return ""
 
-            except Exception as e:
-                logger.error(f"更新状态失败 {feed_url}: {e}")
+        last_status = status.get(feed_url, {})
+        last_identifier = last_status.get('identifier')
+        last_timestamp = last_status.get('timestamp')
+        last_timestamp_dt = datetime.fromisoformat(last_timestamp).astimezone(pytz.utc) if last_timestamp else None
 
+        new_entries = []
+        current_latest = None
+
+        for entry in feed_data.entries:
+            entry_time = get_entry_timestamp(entry)
+            identifier = get_entry_identifier(entry)
+
+            if last_identifier and identifier == last_identifier:
+                logger.info(f"找到精确匹配标识符，停止处理")
+                break
+
+            if last_timestamp_dt and entry_time <= last_timestamp_dt:
+                logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
+                break
+
+            new_entries.append(entry)
+            if not current_latest or entry_time > get_entry_timestamp(current_latest):
+                current_latest = entry
+
+        if not new_entries:
+            logger.info(f"没有新条目需要处理: {feed_url}")
+            return ""
+
+        merged_message = ""
+        source_name = feed_data.feed.get('title', feed_url)
+        # 遍历新条目，添加序号
+        for idx, entry in enumerate(new_entries, start=1):
+            # 内容处理
+            raw_subject = remove_html_tags(entry.title or "无标题")
+         #   raw_summary = remove_html_tags(getattr(entry, 'summary', "暂无简介"))
+            raw_url = entry.link
+
+            # Markdown转义
+            safe_subject = escape_markdown_v2(raw_subject)
+      #      safe_summary = escape_markdown_v2(raw_summary)
+            safe_source = escape_markdown_v2(source_name)
+            safe_url = escape_markdown_v2(raw_url)
+
+            # 消息构建
+      #      message_content = f"*{safe_subject}*\n{safe_summary}\n[{safe_source}]({safe_url})"
+            message_content = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+            message_bytes = message_content.encode('utf-8')
+
+            if len(message_bytes) <= 444:
+                merged_message += message_content + "\n\n"
+            else:
+                title_link = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+                merged_message += title_link + "\n\n"
+        merged_message += f"✅ 新增 {len(new_entries)} 条内容"
+
+        # 更新状态:
+        if current_latest:
+            current_latest_identifier = get_entry_identifier(current_latest)
+            current_latest_timestamp = get_entry_timestamp(current_latest).isoformat()
+
+            status[feed_url] = {
+                "identifier": current_latest_identifier,
+                "timestamp": current_latest_timestamp
+            }
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
+        return merged_message
+    except Exception as e:
+        logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
+        return ""
+async def process_youtube_feed(session, feed_url, status, bot):
+    logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
+    logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
+    try:
+        feed_data = await fetch_feed(session, feed_url)
+        if not feed_data or not feed_data.entries:
+            logger.info(f"源 {feed_url} 没有新条目")
+            return ""
+
+        last_status = status.get(feed_url, {})
+        last_identifier = last_status.get('identifier')
+        last_timestamp = last_status.get('timestamp')
+        last_timestamp_dt = datetime.fromisoformat(last_timestamp).astimezone(pytz.utc) if last_timestamp else None
+
+        new_entries = []
+        current_latest = None
+
+        for entry in feed_data.entries:
+            entry_time = get_entry_timestamp(entry)
+            identifier = get_entry_identifier(entry)
+
+            if last_identifier and identifier == last_identifier:
+                logger.info(f"找到精确匹配标识符，停止处理")
+                break
+
+            if last_timestamp_dt and entry_time <= last_timestamp_dt:
+                logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
+                break
+
+            new_entries.append(entry)
+            if not current_latest or entry_time > get_entry_timestamp(current_latest):
+                current_latest = entry
+
+        if not new_entries:
+            logger.info(f"没有新条目需要处理: {feed_url}")
+            return ""
+
+        merged_message = ""
+        source_name = feed_data.feed.get('title', feed_url)
+        feed_title = escape_markdown_v2(source_name)
+
+        # 添加统计信息
+        merged_message += f"📢 *{feed_title}*\n\n"
+
+        # 遍历新条目，添加序号
+        for idx, entry in enumerate(new_entries, start=1):
+            # 内容处理
+            raw_subject = remove_html_tags(entry.title or "无标题")
+            raw_url = entry.link
+
+            # Markdown转义
+            safe_subject = escape_markdown_v2(raw_subject)
+            safe_url = escape_markdown_v2(raw_url)
+
+            # 构建消息，添加序号
+            merged_message += f"*{safe_subject}*\n🔗 {safe_url}\n\n"
+        merged_message += f"✅ 新增 {len(new_entries)} 条内容"
+
+        # 更新状态:
+        if current_latest:
+            current_latest_identifier = get_entry_identifier(current_latest)
+            current_latest_timestamp = get_entry_timestamp(current_latest).isoformat()
+
+            status[feed_url] = {
+                "identifier": current_latest_identifier,
+                "timestamp": current_latest_timestamp
+            }
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
         return merged_message
     except Exception as e:
         logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
@@ -616,6 +857,8 @@ async def main():
         third_bot = Bot(token=RSS_TWO)
         fourth_bot = Bot(token=RSS_TOKEN)
         fifth_bot = Bot(token=RSSTWO_TOKEN)
+        rsssan_bot = Bot(token=RSS_SAN)
+        youtube_bot = Bot(token=YOUTUBE_RSS)
         status = await load_status()  # 改为异步加载
 
         try:
@@ -636,7 +879,7 @@ async def main():
             # 处理第四类源
             for idx, url in enumerate(FOURTH_RSS_FEEDS):
                 if message := await process_fourth_feed(session, url, status, fourth_bot):
-                    await send_single_message(fourth_bot, TELEGRAM_CHAT_ID[0], message)
+                    await send_single_message(fourth_bot, TELEGRAM_CHAT_ID[0], message,True)
 
                     logger.info(f"成功处理第四类源 {idx + 1}/{len(FOURTH_RSS_FEEDS)}")
 
@@ -644,8 +887,32 @@ async def main():
             for idx, url in enumerate(FIFTH_RSS_FEEDS):
                 if message := await process_fifth_feed(session, url, status, fifth_bot):
                     await send_single_message(fifth_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
-
                     logger.info(f"成功处理第五类源 {idx + 1}/{len(FIFTH_RSS_FEEDS)}")
+
+            for idx, url in enumerate(FIFTH_RSS_RSS_SAN):
+                if message := await process_san_feed(session, url, status, rsssan_bot):
+                    await send_single_message(rsssan_bot, TELEGRAM_CHAT_ID[0], message, True)  # 根据需要调整True不浏览
+                    logger.info(f"成功处理第6类源 {idx + 1}/{len(FIFTH_RSS_RSS_SAN)}")
+
+            # 处理 FIFTH_RSS_YOUTUBE
+            last_fifth_rss_youtube_run = load_last_run_time() # 从 JSON 文件加载
+            now = time.time()
+            if now - last_fifth_rss_youtube_run >= 7300:  # 7200 秒 = 2 小时
+                logger.info("开始处理 FIFTH_RSS_YOUTUBE 源...") # 添加日志
+                for idx, url in enumerate(FIFTH_RSS_YOUTUBE):
+                    message = await process_youtube_feed(session, url, status, youtube_bot)
+                    if message:  # 只有当 process_youtube_feed 返回消息时才发送
+                        await send_single_message(youtube_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
+                        logger.info(f"成功处理 FIFTH_RSS_YOUTUBE 源 {idx + 1}/{len(FIFTH_RSS_YOUTUBE)}")
+                    else:
+                        logger.info(f"FIFTH_RSS_YOUTUBE 源 {idx + 1}/{len(FIFTH_RSS_YOUTUBE)} 没有新内容或处理失败")
+
+                last_fifth_rss_youtube_run = time.time()  # 更新上次运行时间
+                save_last_run_time(last_fifth_rss_youtube_run) # 保存到 JSON 文件
+                logger.info("FIFTH_RSS_YOUTUBE 源处理完成。") # 添加日志
+            else:
+                logger.info("距离上次运行 FIFTH_RSS_YOUTUBE 不足 2 小时，跳过所有处理。")
+
 
         except Exception as e:
             logger.critical(f"主循环发生致命错误: {str(e)}")
@@ -657,6 +924,7 @@ async def main():
                 logger.info("释放文件锁，程序运行完成，状态已保存")
             except Exception as e:
                 logger.error(f"释放文件锁失败: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

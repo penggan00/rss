@@ -33,7 +33,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MAX_MESSAGE_LENGTH = 3800
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
-GEMINI_RETRY_DELAY = 5
+GEMINI_RETRY_DELAY = 2
 GEMINI_MAX_RETRIES = 3
 
 # 配置logging
@@ -93,23 +93,23 @@ class ContentProcessor:
         )
         urls = []
         seen = set()
-   #     exclude_domains = {'w3.org', 'schema.org', 'example.com'}
+        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
             clean_url = raw_url.split('"')[0]
 
-            if not (10 < len(clean_url) <= 200):
+            if not (10 < len(clean_url) <= 100):
                 continue
 
-    #        if any(d in clean_url for d in exclude_domains):
-    #            continue
+            if any(d in clean_url for d in exclude_domains):
+                continue
 
             if clean_url not in seen:
                 seen.add(clean_url)
                 urls.append((raw_url, clean_url, match.start(), match.end()))
 
-        return urls[:5]
+        return urls[:10]
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -245,53 +245,66 @@ class GeminiAI:
         self._base64_regex = re.compile(r'[a-zA-Z0-9+/]{50,}')
 
     def generate_summary(self, text: str) -> Optional[str]:
-        """
-        生成邮件正文摘要（输出原始Markdown不转义）
-        """
-        prompt = """Please process the email body (do not process sender or subject):
-1.Organize streamlining in Chinese while retaining technical terms
-Use telegram MarkdownV2 format:
-   - Bold: ​**important** 
-   - Italic: _note_
-   - Monospace: `code`
-2. Maintain line breaks and paragraphs
-3. Do not escape any characters (keep _* etc. as-is)
-4. For URLs, automatically find preceding or above-line phrases and convert to Markdown hyperlinks.
-5.Delete the picture link. If there is a duplicate link, only one should be kept,
-6.Strictly implement the prompt words urls
-"""
+        prompt = """请处理邮件正文（不要处理发件人）：
+1. 总结内容并翻译为中文
+使用标准MarkdownV2格式：
+   - 加粗：**重点** 
+   - 斜体：_备注_
+   - 等宽：`代码`
+2. 保持换行和段落
+3. 不要转义任何字符（保留_*等符号）
+4. url自动寻找前面或上面词组，替换为md超链接。
+5.总结与翻译二选一项即可，优先翻译。（不要注释总结和翻译直接给内容）
+正文："""
         try:
-            # processed_text = self._preprocess_text(text)  # Remove this line
+            # 1. AI处理原始文本（不提前清理符号）
+            processed_text = self._preprocess_text(text)  # 仅脱敏敏感信息
             response = self.model.generate_content(
-                prompt + text,  # Use text directly
+                prompt + processed_text,
                 generation_config={"temperature": 0.3}
             )
-            return response.text if response.text else None
+        
+            # 2. AI返回后清理符号
+            if response.text:
+                cleaned_text = self._postprocess_text(response.text)  # 新增后处理
+                return cleaned_text
+            return None
         except Exception as e:
             logging.error(f"AI处理失败: {e}")
             return None
 
+def _postprocess_text(self, text: str) -> str:
+    """后处理：清理AI返回结果中的符号"""
+    # 1. 删除单独一行中的 - 或多个 -
+    text = re.sub(r'^[-]+$', '', text, flags=re.MULTILINE)
+    # 2. 删除 | 符号
+    text = text.replace("|", "")
+    return text.strip()
+
+    def _preprocess_text(self, text: str) -> str:
+        """文本预处理"""
+        text = self._card_regex.sub('****-****-****-\\1', text)
+        return self._base64_regex.sub('[DATA]', text)
 
 class TelegramBot:
     def __init__(self):
         self.bot = telegram.Bot(TELEGRAM_TOKEN)
 
-    async def send_message(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
-        """发送消息，失败时回退到未转义的原始文本"""
+    async def send_message(self, text, parse_mode='MarkdownV2'):
+        """异步发送消息（自动处理转义）"""
         try:
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=escaped_text or raw_text,  # 优先用转义后的
+                text=escape(text) if parse_mode == 'MarkdownV2' else text,
                 parse_mode=parse_mode,
                 disable_web_page_preview=True
             )
         except telegram.error.BadRequest:
-            # 回退到未转义的原始文本
+            # 回退到纯文本（不转义）
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=raw_text,  # 发送未转义的原始内容
-                parse_mode=None,
-                disable_web_page_preview=True
+                text=text,
+                parse_mode=None
             )
         except Exception as e:
             logging.error(f"消息发送失败: {e}")
@@ -300,31 +313,6 @@ async def main():
     # 初始化
     bot = TelegramBot()
     gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
-
-    def clean_ai_text(text: str) -> str:
-        """
-        清理AI处理后的文本：
-        1. 移除所有|符号
-        2. 移除仅含-或多于2个连续-的行
-        """
-        if not text:
-            return text
-        
-        # 1. 移除所有|符号
-        text = text.replace('|', ' ')
-        
-        # 2. 清理无效的-行
-        lines = text.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            stripped_line = line.strip()
-            # 跳过仅含-的行
-            if stripped_line.replace('-', '') == '' and len(stripped_line) >= 1:
-                continue
-            cleaned_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
 
     try:
         with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
@@ -342,47 +330,59 @@ async def main():
                     _, data = mail.fetch(num, "(RFC822)")
                     msg = email.message_from_bytes(data[0][1])
                     sender = EmailDecoder.decode_email_header(msg.get("From"))
-                    subject = EmailDecoder.decode_email_header(msg.get("Subject"))
+                    subject = EmailDecoder.decode_email_header(msg.get("Subject")) or parseaddr(sender)[1]  # 无主题时用邮箱地址替代
                     raw_content = EmailHandler.get_email_content(msg)
 
-                    # 2. 生成未转义的头部和正文
+                    # 2. 生成未转义的头部和正文（保留*_`等符号）
+                    realname, email_address = parseaddr(sender)
                     header = (
-                        f"✉️ **{parseaddr(sender)[0]}** "
-                        f"`{parseaddr(sender)[1]}`\n"
+                        f"✉️ ​**{realname}** "
+                        f"`{email_address}`\n"
                         f"_{subject}_\n\n"
                     )
                     body = raw_content
 
-                    # 3. AI处理并清理文本
+                    # 3. AI处理（不转义内部Markdown）
                     if gemini_ai:
                         body = gemini_ai.generate_summary(body) or body
-                        body = clean_ai_text(body)  # 清理|和-行
 
-                    # 4. 准备发送内容
-                    safe_message = escape(f"{header}{body}")  # 转义后的Markdown
-                    raw_message = f"{header}{body}"           # 原始未转义文本
+                    # 4. 合并消息（不立即转义）
+                    full_message = f"{header}{body}"
 
-                    # 5. 分割内容
-                    chunks = MessageFormatter.split_content(safe_message, MAX_MESSAGE_LENGTH)
-                    raw_chunks = MessageFormatter.split_content(raw_message, MAX_MESSAGE_LENGTH)
-
-                    # 6. 发送消息
-                    for safe_chunk, raw_chunk in zip(chunks, raw_chunks):
+                    # 5. 分割发送（由send_message内部处理转义）
+                    chunks = MessageFormatter.split_content(full_message, MAX_MESSAGE_LENGTH)
+                    for chunk in chunks:
                         await bot.send_message(
-                            raw_text=raw_chunk,
-                            escaped_text=safe_chunk,
-                            parse_mode='MarkdownV2'
+                            text=chunk,
+                            parse_mode='MarkdownV2'  # 在send_message内部处理转义
                         )
 
-                    # 7. 标记为已读
                     mail.store(num, "+FLAGS", "\\Seen")
 
                 except Exception as e:
                     logging.error(f"邮件处理异常: {e}", exc_info=True)
-                    continue
+                    # 尝试用纯文本发送原始内容（不含格式）
+                    try:
+                        plain_text = f"新邮件来自: {parseaddr(sender)[0]} <{parseaddr(sender)[1]}>\n"
+                        plain_text += f"主题: {subject}\n\n"
+                        plain_text += raw_content[:MAX_MESSAGE_LENGTH]
+                        await bot.send_message(
+                            text=plain_text,
+                            parse_mode=None
+                        )
+                    except Exception as fallback_error:
+                        logging.error(f"纯文本回退发送也失败: {fallback_error}")
 
     except Exception as e:
         logging.error(f"IMAP连接异常: {e}", exc_info=True)
+        # 尝试发送错误通知
+        try:
+            await bot.send_message(
+                text=f"⚠️ 邮件检查失败: {str(e)[:500]}",
+                parse_mode=None
+            )
+        except Exception as notify_error:
+            logging.error(f"错误通知发送失败: {notify_error}")
 
 if __name__ == "__main__":
     asyncio.run(main())

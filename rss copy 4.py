@@ -36,52 +36,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 配置文件路径
-LAST_RUN_FILE = os.path.join(BASE_DIR, "youtube.json")
-
 #RSS 源列表 (保持不变)
 RSS_FEEDS = [
     'https://feeds.bbci.co.uk/news/world/rss.xml', # bbc
     'https://www3.nhk.or.jp/rss/news/cat6.xml',  # nhk
-  #  'https://www.cnbc.com/id/100003114/device/rss/rss.html', # CNBC
-  #  'https://feeds.a.dj.com/rss/RSSWorldNews.xml', # 华尔街日报
-  #  'https://www.aljazeera.com/xml/rss/all.xml',# 半岛电视台
+    'https://www.cnbc.com/id/100003114/device/rss/rss.html', # CNBC
+    'https://feeds.a.dj.com/rss/RSSWorldNews.xml', # 华尔街日报
+    'https://www.aljazeera.com/xml/rss/all.xml',# 半岛电视台
   #  'https://www3.nhk.or.jp/rss/news/cat5.xml',# NHK 商业
-  #  'https://www.ft.com/?format=rss', # 金融时报
+    'https://www.ft.com/?format=rss', # 金融时报
   #  'http://rss.cnn.com/rss/edition.rss', # cnn
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCupvZG-5ko_eiXAupbDfxWw', # cnn
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 ]
-#主题+内容
+#主题
 THIRD_RSS_FEEDS = [
-    'https://rsshub.215155.xyz/guancha',
+    'https://36kr.com/feed-newsflash',
+   # 'https://rsshub.215155.xyz/guancha',
     'https://rsshub.215155.xyz/zaobao/znews/china',
     'https://rsshub.215155.xyz/guancha/headline',
     
 ]
- # 主题+预览
+ # 主题
 FOURTH_RSS_FEEDS = [
-    'https://36kr.com/feed-newsflash',
     'https://rsshub.215155.xyz/10jqka/realtimenews',
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
 ]
 
 # 翻译主题+链接的
@@ -90,81 +66,86 @@ FIFTH_RSS_FEEDS = [
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog', # Asmongold TV
 
 ]
-
+# 主题
 FIFTH_RSS_RSS_SAN = [
     'https://rss.nodeseek.com/',  # nodeseek
 ]
-
+# 10086
+YOUTUBE_RSSS_FEEDS = [
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
+    'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
+]
+# youtube
 FIFTH_RSS_YOUTUBE = [
-  #  'https://blog.090227.xyz/atom.xml',
-  #  'https://www.freedidi.com/feed',
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
     'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCF-Q1Zwyn9681F7du8DMAWg', # 謝宗桓-老謝來了
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCOSmkVK2xsihzKXQgiXPS4w', # 历史哥
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCNiJNzSkfumLB7bYtXcIEmg', # 真的很博通
- #   'https://www.youtube.com/feeds/videos.xml?channel_id=UCG_gH6S-2ZUOtEw27uIS_QA', # 7Car小七車觀點
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJ5rBA0z4WFGtUTS83sAb_A', # POP Radio聯播網
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCN0eCImZY6_OiJbo8cy5bLw', # 屈機TV
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
     'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
     'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
-
 # 影视
     'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCqWNOHjgfL8ADEdXGznzwUw', # 悦耳音乐酱
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
-   # 'https://www.youtube.com/feeds/videos.xml?channel_id=UCKyDmY3R_xGKz8IjvbijiHA', # 珊珊追剧社
     'https://www.youtube.com/feeds/videos.xml?channel_id=UClyVC2wh_2fQhU0hPdXA4rw', # 热门古风
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UC1ISajIKfRN359MMmtckUTg', # Taiwanese Pop Mix
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFyMGc6h30NMCd6HCk0ZPA', # 哔哩哔哩动画
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCQatgKoA7lylp_UzvsLCgcw', # 腾讯视频
-  #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCUhpu5MJQ_bjPkXO00jyxsw', # 爱奇艺
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
 ]
 
 # Telegram配置 (保持不变)
 TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
-RSS_TWO = os.getenv("RSS_TWO")
+RSS_TWO = os.getenv("RSS_TOKEN")
 RSS_TOKEN = os.getenv("RSS_LINDA")    # RSS_LINDA
 RSSTWO_TOKEN = os.getenv("RSS_TWO")
-RSS_SAN = os.getenv("RSS_SAN")
-YOUTUBE_RSS = os.getenv("YOUTUBE_RSS")
+RSS_SANG = os.getenv("RSS_SAN")
+YOUTUBE_RSS_FEEDSS = os.getenv("RSS_LINDA_YOUTUBE")
+YOUTUBE_RSSS = os.getenv("YOUTUBE_RSS")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
 
+# FIFTH_RSS_RSS_SAN添加：关键词列表和开关
+KEYWORDS = os.getenv("KEYWORDS", "").split(",")  # 从环境变量读取关键词，用逗号分隔
+KEYWORD_FILTER_ENABLED = os.getenv("KEYWORD_FILTER_ENABLED", "False").lower() == "true" # 从环境变量读取开关
+
 MAX_CONCURRENT_REQUESTS = 5
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-def load_last_run_time():
-    """从 JSON 文件加载上次运行时间"""
-    try:
-        with open(LAST_RUN_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("last_run_time", 0)  # 默认值为0
-    except FileNotFoundError:
-        return 0  # 文件不存在，表示从未运行过
-    except (ValueError, json.JSONDecodeError):
-        return 0 # 文件内容不是有效JSON或没有 last_run_time 字段，也当做从未运行过
+# 定义时间间隔 (秒)
+DEFAULT_INTERVAL = 3500  # 默认1小时
+RSSSS_FEEDS_INTERVAL = DEFAULT_INTERVAL     # BBC
+THIRD_RSS_FEEDS_INTERVAL = DEFAULT_INTERVAL     #36KR
+FOURTH_RSS_FEEDS_INTERVAL = 1700  # 10jqka
+FIFTH_RSS_FEEDS_INTERVAL = DEFAULT_INTERVAL    # Asmongold TV
+FIFTH_RSS_RSS_SAN_INTERVAL = 1700  # nodeseek
+YOUTUBE_RSSS_FEEDS_INTERVAL = DEFAULT_INTERVAL  # 10086 YOUTUBE
+FIFTH_RSS_YOUTUBE_INTERVAL = 7300  # FIFTH_RSS_YOUTUBE，2 小时1800
 
-def save_last_run_time(last_run_time):
-    """将上次运行时间保存到 JSON 文件"""
-    data = {"last_run_time": last_run_time}
-    try:
-        with open(LAST_RUN_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        logger.error(f"保存上次运行时间到 JSON 文件失败: {e}")
 
 # 创建锁文件
 LOCK_FILE = BASE_DIR / "rss.lock"
-
 # SQLite 数据库初始化
 DATABASE_FILE = BASE_DIR / "rss_status.db"
 
@@ -179,7 +160,7 @@ def create_connection():
     return conn
 
 def create_table():
-    """创建 rss_status 表"""
+    """创建 rss_status 和 timestamp 表"""
     conn = create_connection()
     if conn is not None:
         try:
@@ -189,6 +170,94 @@ def create_table():
                     feed_url TEXT PRIMARY KEY,
                     identifier TEXT,
                     timestamp TEXT
+                )
+            """)
+            # 添加 timestamp 表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timestamps (
+                    feed_group TEXT PRIMARY KEY,
+                    last_run_time REAL
+                )
+            """)
+            conn.commit()
+            logger.info("成功创建/连接到数据库和表")
+        except sqlite3.Error as e:
+            logger.error(f"创建表失败: {e}")
+        finally:
+            conn.close()
+    else:
+        logger.error("无法创建数据库连接")
+
+create_table()
+
+def load_last_run_time_from_db(feed_group):
+    """从数据库加载上次运行时间"""
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT last_run_time FROM timestamps WHERE feed_group = ?", (feed_group,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+            else:
+                return 0  # 默认值为 0
+        except sqlite3.Error as e:
+            logger.error(f"从数据库加载上次运行时间失败: {e}")
+            return 0
+        finally:
+            conn.close()
+    else:
+        logger.error("无法创建数据库连接")
+        return 0
+
+def save_last_run_time_to_db(feed_group, last_run_time):
+    """将上次运行时间保存到数据库"""
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO timestamps (feed_group, last_run_time)
+                VALUES (?, ?)
+            """, (feed_group, last_run_time))
+            conn.commit()
+            logger.info(f"保存上次运行时间到数据库成功 (feed_group: {feed_group})")
+        except sqlite3.Error as e:
+            logger.error(f"保存上次运行时间到数据库失败: {e}")
+        finally:
+            conn.close()
+    else:
+        logger.error("无法创建数据库连接")
+
+def create_connection():
+    """创建 SQLite 数据库连接"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DATABASE_FILE)
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"连接数据库失败: {e}")
+    return conn
+
+def create_table():
+    """创建 rss_status 和 timestamp 表"""
+    conn = create_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rss_status (
+                    feed_url TEXT PRIMARY KEY,
+                    identifier TEXT,
+                    timestamp TEXT
+                )
+            """)
+            # 添加 timestamp 表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timestamps (
+                    feed_group TEXT PRIMARY KEY,
+                    last_run_time REAL
                 )
             """)
             conn.commit()
@@ -205,8 +274,10 @@ create_table()
 
 # 函数 (保持不变，除非另有说明)
 def remove_html_tags(text):
-    """彻底移除HTML标签和hashtags"""
+    """彻底移除hashtags, @符号, 以及"【 】" 样式的符号"""
     text = re.sub(r'#\w+', '', text)  # 移除hashtags
+    text = re.sub(r'@[^\s]+', '', text).strip()  # 删除@后面的字符
+    text = re.sub(r'【\s*】', '', text)  # 移除"【 】" 样式的符号，包含中间的空格
     return text
 
 def escape_markdown_v2(text, exclude=None):
@@ -728,6 +799,101 @@ async def process_san_feed(session, feed_url, status, bot):
             logger.info(f"没有新条目需要处理: {feed_url}")
             return ""
 
+        # 关键词过滤
+        if KEYWORD_FILTER_ENABLED:
+            filtered_entries = []
+            for entry in new_entries:
+                raw_subject = remove_html_tags(entry.title or "无标题")
+                for keyword in KEYWORDS:
+                    if keyword.lower() in raw_subject.lower():
+                        filtered_entries.append(entry)
+                        break
+            new_entries = filtered_entries  # Use filtered entries from now on
+
+            if not new_entries:
+                logger.info(f"关键词过滤后没有新条目需要处理: {feed_url}")
+                return ""
+
+        merged_message = ""
+        source_name = feed_data.feed.get('title', feed_url)
+        # 遍历新条目，添加序号
+        for idx, entry in enumerate(new_entries, start=1):
+            # 内容处理
+            raw_subject = remove_html_tags(entry.title or "无标题")
+            # raw_summary = remove_html_tags(getattr(entry, 'summary', "暂无简介"))
+            raw_url = entry.link
+
+            # Markdown转义
+            safe_subject = escape_markdown_v2(raw_subject)
+            # safe_summary = escape_markdown_v2(raw_summary)
+            safe_source = escape_markdown_v2(source_name)
+            safe_url = escape_markdown_v2(raw_url)
+
+            # 消息构建
+            # message_content = f"*{safe_subject}*\n{safe_summary}\n[{safe_source}]({safe_url})"
+            message_content = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+            message_bytes = message_content.encode('utf-8')
+
+            if len(message_bytes) <= 444:
+                merged_message += message_content + "\n\n"
+            else:
+                title_link = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
+                merged_message += title_link + "\n\n"
+        merged_message += f"✅ 新增 {len(new_entries)} 条内容"
+
+        # 更新状态:
+        if current_latest:
+            current_latest_identifier = get_entry_identifier(current_latest)
+            current_latest_timestamp = get_entry_timestamp(current_latest).isoformat()
+
+            status[feed_url] = {
+                "identifier": current_latest_identifier,
+                "timestamp": current_latest_timestamp
+            }
+            await save_single_status(feed_url, status[feed_url])  #  <----  添加这行代码
+        return merged_message
+    except Exception as e:
+        logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
+        return ""
+
+    
+async def process_you_feed(session, feed_url, status, bot):
+    logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
+    logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
+    try:
+        feed_data = await fetch_feed(session, feed_url)
+        if not feed_data or not feed_data.entries:
+            logger.info(f"源 {feed_url} 没有新条目")
+            return ""
+
+        last_status = status.get(feed_url, {})
+        last_identifier = last_status.get('identifier')
+        last_timestamp = last_status.get('timestamp')
+        last_timestamp_dt = datetime.fromisoformat(last_timestamp).astimezone(pytz.utc) if last_timestamp else None
+
+        new_entries = []
+        current_latest = None
+
+        for entry in feed_data.entries:
+            entry_time = get_entry_timestamp(entry)
+            identifier = get_entry_identifier(entry)
+
+            if last_identifier and identifier == last_identifier:
+                logger.info(f"找到精确匹配标识符，停止处理")
+                break
+
+            if last_timestamp_dt and entry_time <= last_timestamp_dt:
+                logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
+                break
+
+            new_entries.append(entry)
+            if not current_latest or entry_time > get_entry_timestamp(current_latest):
+                current_latest = entry
+
+        if not new_entries:
+            logger.info(f"没有新条目需要处理: {feed_url}")
+            return ""
+
         merged_message = ""
         source_name = feed_data.feed.get('title', feed_url)
         # 遍历新条目，添加序号
@@ -753,7 +919,7 @@ async def process_san_feed(session, feed_url, status, bot):
             else:
                 title_link = f"*{safe_subject}*\n[{safe_source}]({safe_url})"
                 merged_message += title_link + "\n\n"
-        merged_message += f"✅ 新增 {len(new_entries)} 条内容"
+    #    merged_message += f"✅ 新增 {len(new_entries)} 条内容"
 
         # 更新状态:
         if current_latest:
@@ -769,6 +935,7 @@ async def process_san_feed(session, feed_url, status, bot):
     except Exception as e:
         logger.error(f"处理源 {feed_url} 时发生错误: {str(e)}")
         return ""
+    
 async def process_youtube_feed(session, feed_url, status, bot):
     logger.info(f"开始处理源: {feed_url}")  # 在处理开始时记录状态
     logger.info(f"当前状态: {json.dumps(status.get(feed_url, {}), default=str)}")
@@ -846,73 +1013,132 @@ async def main():
     # 尝试获取锁
     try:
         lock_file = open(LOCK_FILE, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB) # Non-blocking lock
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # Non-blocking lock
         logger.info("成功获取文件锁，程序开始运行...")
     except OSError:
         logger.warning("无法获取文件锁，另一个实例可能正在运行。程序退出。")
-        return # 直接退出
+        return  # 直接退出
 
     async with aiohttp.ClientSession() as session:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         third_bot = Bot(token=RSS_TWO)
         fourth_bot = Bot(token=RSS_TOKEN)
         fifth_bot = Bot(token=RSSTWO_TOKEN)
-        rsssan_bot = Bot(token=RSS_SAN)
-        youtube_bot = Bot(token=YOUTUBE_RSS)
+        rsssan_bot = Bot(token=RSS_SANG)
+        youtube_bot = Bot(token=YOUTUBE_RSSS)
+        you_bot = Bot(token=YOUTUBE_RSS_FEEDSS)
         status = await load_status()  # 改为异步加载
 
         try:
-            # 处理第一类源
-            for idx, url in enumerate(RSS_FEEDS):
-                if message := await process_feed(session, url, status, bot):
-                    await send_single_message(bot, TELEGRAM_CHAT_ID[0], message, True)
+            # 处理 RSS_FEEDS
+            last_rss_feeds_run = load_last_run_time_from_db("RSS_FEEDS")
+            now = time.time()
+            if now - last_rss_feeds_run >= RSSSS_FEEDS_INTERVAL:
+                logger.info("开始处理 RSS_FEEDS 源...")
+                for idx, url in enumerate(RSS_FEEDS):
+                    if message := await process_feed(session, url, status, bot):
+                        await send_single_message(bot, TELEGRAM_CHAT_ID[0], message, True)
+                        logger.info(f"成功处理 RSS_FEEDS 源 {idx + 1}/{len(RSS_FEEDS)}")
+                save_last_run_time_to_db("RSS_FEEDS", time.time())
+                logger.info("RSS_FEEDS 源处理完成。")
+            else:
+                logger.info(
+                    f"距离上次运行 RSS_FEEDS 不足 {RSSSS_FEEDS_INTERVAL / 3600} 小时，跳过 RSS_FEEDS 处理。")
 
-                    logger.info(f"成功处理第一类源 {idx+1}/{len(RSS_FEEDS)}")
+            # 处理 THIRD_RSS_FEEDS
+            last_third_rss_feeds_run = load_last_run_time_from_db("THIRD_RSS_FEEDS")
+            now = time.time()
+            if now - last_third_rss_feeds_run >= THIRD_RSS_FEEDS_INTERVAL:
+                logger.info("开始处理 THIRD_RSS_FEEDS 源...")
+                for idx, url in enumerate(THIRD_RSS_FEEDS):
+                    if message := await process_third_feed(session, url, status, third_bot):
+                        await send_single_message(third_bot, TELEGRAM_CHAT_ID[0], message, True)
+                        logger.info(
+                            f"成功处理 THIRD_RSS_FEEDS 源 {idx + 1}/{len(THIRD_RSS_FEEDS)}")
+                save_last_run_time_to_db("THIRD_RSS_FEEDS", time.time())
+                logger.info("THIRD_RSS_FEEDS 源处理完成。")
+            else:
+                logger.info(f"距离上次运行 THIRD_RSS_FEEDS 不足 {THIRD_RSS_FEEDS_INTERVAL / 3600} 小时，跳过 THIRD_RSS_FEEDS 处理。")
 
-            # 处理第三类源
-            for idx, url in enumerate(THIRD_RSS_FEEDS):
-                if message := await process_third_feed(session, url, status, third_bot):
-                    await send_single_message(third_bot, TELEGRAM_CHAT_ID[0], message, True)
 
-                    logger.info(f"成功处理第三类源 {idx + 1}/{len(THIRD_RSS_FEEDS)}")
+            # 处理 FOURTH_RSS_FEEDS
+            last_fourth_rss_feeds_run = load_last_run_time_from_db("FOURTH_RSS_FEEDS")
+            now = time.time()
+            if now - last_fourth_rss_feeds_run >= FOURTH_RSS_FEEDS_INTERVAL:
+                logger.info("开始处理 FOURTH_RSS_FEEDS 源...")
+                for idx, url in enumerate(FOURTH_RSS_FEEDS):
+                    if message := await process_fourth_feed(session, url, status, fourth_bot):
+                        await send_single_message(fourth_bot, TELEGRAM_CHAT_ID[0], message, True)
+                        logger.info(
+                            f"成功处理 FOURTH_RSS_FEEDS 源 {idx + 1}/{len(FOURTH_RSS_FEEDS)}")
+                save_last_run_time_to_db("FOURTH_RSS_FEEDS", time.time())
+                logger.info("FOURTH_RSS_FEEDS 源处理完成。")
+            else:
+                logger.info(f"距离上次运行 FOURTH_RSS_FEEDS 不足 {FOURTH_RSS_FEEDS_INTERVAL / 3600} 小时，跳过 FOURTH_RSS_FEEDS 处理。")
 
-            # 处理第四类源
-            for idx, url in enumerate(FOURTH_RSS_FEEDS):
-                if message := await process_fourth_feed(session, url, status, fourth_bot):
-                    await send_single_message(fourth_bot, TELEGRAM_CHAT_ID[0], message,True)
+            # 处理 FIFTH_RSS_FEEDS
+            last_fifth_rss_feeds_run = load_last_run_time_from_db("FIFTH_RSS_FEEDS")
+            now = time.time()
+            if now - last_fifth_rss_feeds_run >= FIFTH_RSS_FEEDS_INTERVAL:
+                logger.info("开始处理 FIFTH_RSS_FEEDS 源...")
+                for idx, url in enumerate(FIFTH_RSS_FEEDS):
+                    if message := await process_fifth_feed(session, url, status, fifth_bot):
+                        await send_single_message(fifth_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
+                        logger.info(
+                            f"成功处理 FIFTH_RSS_FEEDS 源 {idx + 1}/{len(FIFTH_RSS_FEEDS)}")
+                save_last_run_time_to_db("FIFTH_RSS_FEEDS", time.time())
+                logger.info("FIFTH_RSS_FEEDS 源处理完成。")
+            else:
+                logger.info(f"距离上次运行 FIFTH_RSS_FEEDS 不足 {FIFTH_RSS_FEEDS_INTERVAL / 3600} 小时，跳过 FIFTH_RSS_FEEDS 处理。")
 
-                    logger.info(f"成功处理第四类源 {idx + 1}/{len(FOURTH_RSS_FEEDS)}")
+            # 处理 FIFTH_RSS_RSS_SAN
+            last_fifth_rss_rss_san_run = load_last_run_time_from_db("FIFTH_RSS_RSS_SAN")
+            now = time.time()
+            if now - last_fifth_rss_rss_san_run >= FIFTH_RSS_RSS_SAN_INTERVAL:
+                logger.info("开始处理 FIFTH_RSS_RSS_SAN 源...")
+                for idx, url in enumerate(FIFTH_RSS_RSS_SAN):
+                    if message := await process_san_feed(session, url, status, rsssan_bot):
+                        await send_single_message(rsssan_bot, TELEGRAM_CHAT_ID[0], message, True)  # 根据需要调整True不浏览
+                        logger.info(
+                            f"成功处理 FIFTH_RSS_RSS_SAN 源 {idx + 1}/{len(FIFTH_RSS_RSS_SAN)}")
+                save_last_run_time_to_db("FIFTH_RSS_RSS_SAN", time.time())
+                logger.info("FIFTH_RSS_RSS_SAN 源处理完成。")
+            else:
+                logger.info(f"距离上次运行 FIFTH_RSS_RSS_SAN 不足 {FIFTH_RSS_RSS_SAN_INTERVAL / 3600} 小时，跳过 FIFTH_RSS_RSS_SAN 处理。")
 
-            # 处理第五类源
-            for idx, url in enumerate(FIFTH_RSS_FEEDS):
-                if message := await process_fifth_feed(session, url, status, fifth_bot):
-                    await send_single_message(fifth_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
-                    logger.info(f"成功处理第五类源 {idx + 1}/{len(FIFTH_RSS_FEEDS)}")
-
-            for idx, url in enumerate(FIFTH_RSS_RSS_SAN):
-                if message := await process_san_feed(session, url, status, rsssan_bot):
-                    await send_single_message(rsssan_bot, TELEGRAM_CHAT_ID[0], message, True)  # 根据需要调整True不浏览
-                    logger.info(f"成功处理第6类源 {idx + 1}/{len(FIFTH_RSS_RSS_SAN)}")
+            # 处理 YOUTUBE_RSSS_FEEDS
+            last_youtube_rsss_feeds_run = load_last_run_time_from_db("YOUTUBE_RSSS_FEEDS")
+            now = time.time()
+            if now - last_youtube_rsss_feeds_run >= YOUTUBE_RSSS_FEEDS_INTERVAL:
+                logger.info("开始处理 YOUTUBE_RSSS_FEEDS 源...")
+                for idx, url in enumerate(YOUTUBE_RSSS_FEEDS):
+                    if message := await process_you_feed(session, url, status, you_bot):
+                        await send_single_message(you_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
+                        logger.info(
+                            f"成功处理 YOUTUBE_RSSS_FEEDS 源 {idx + 1}/{len(YOUTUBE_RSSS_FEEDS)}")
+                save_last_run_time_to_db("YOUTUBE_RSSS_FEEDS", time.time())
+                logger.info("YOUTUBE_RSSS_FEEDS 源处理完成。")
+            else:
+                logger.info(f"距离上次运行 YOUTUBE_RSSS_FEEDS 不足 {YOUTUBE_RSSS_FEEDS_INTERVAL / 3600} 小时，跳过 YOUTUBE_RSSS_FEEDS 处理。")
 
             # 处理 FIFTH_RSS_YOUTUBE
-            last_fifth_rss_youtube_run = load_last_run_time() # 从 JSON 文件加载
+            last_fifth_rss_youtube_run = load_last_run_time_from_db("FIFTH_RSS_YOUTUBE")
             now = time.time()
-            if now - last_fifth_rss_youtube_run >= 7300:  # 7200 秒 = 2 小时
-                logger.info("开始处理 FIFTH_RSS_YOUTUBE 源...") # 添加日志
+            if now - last_fifth_rss_youtube_run >= FIFTH_RSS_YOUTUBE_INTERVAL:
+                logger.info("开始处理 FIFTH_RSS_YOUTUBE 源...")
                 for idx, url in enumerate(FIFTH_RSS_YOUTUBE):
                     message = await process_youtube_feed(session, url, status, youtube_bot)
                     if message:  # 只有当 process_youtube_feed 返回消息时才发送
                         await send_single_message(youtube_bot, TELEGRAM_CHAT_ID[0], message, False)  # 根据需要调整True不浏览
-                        logger.info(f"成功处理 FIFTH_RSS_YOUTUBE 源 {idx + 1}/{len(FIFTH_RSS_YOUTUBE)}")
+                        logger.info(
+                            f"成功处理 FIFTH_RSS_YOUTUBE 源 {idx + 1}/{len(FIFTH_RSS_YOUTUBE)}")
                     else:
                         logger.info(f"FIFTH_RSS_YOUTUBE 源 {idx + 1}/{len(FIFTH_RSS_YOUTUBE)} 没有新内容或处理失败")
 
-                last_fifth_rss_youtube_run = time.time()  # 更新上次运行时间
-                save_last_run_time(last_fifth_rss_youtube_run) # 保存到 JSON 文件
-                logger.info("FIFTH_RSS_YOUTUBE 源处理完成。") # 添加日志
+                save_last_run_time_to_db("FIFTH_RSS_YOUTUBE", time.time())
+                logger.info("FIFTH_RSS_YOUTUBE 源处理完成。")
             else:
-                logger.info("距离上次运行 FIFTH_RSS_YOUTUBE 不足 2 小时，跳过所有处理。")
-
+                logger.info(f"距离上次运行 FIFTH_RSS_YOUTUBE 不足 {FIFTH_RSS_YOUTUBE_INTERVAL / 3600} 小时，跳过 FIFTH_RSS_YOUTUBE 处理。")
 
         except Exception as e:
             logger.critical(f"主循环发生致命错误: {str(e)}")
@@ -924,6 +1150,7 @@ async def main():
                 logger.info("释放文件锁，程序运行完成，状态已保存")
             except Exception as e:
                 logger.error(f"释放文件锁失败: {e}")
+
 
 
 if __name__ == "__main__":

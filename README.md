@@ -26,6 +26,7 @@ crontab -e
 rss.py
 # 24小时youtube
 rss2.py
+pip3 show pyTelegramBotAPI google-generativeai aiohttp md2tgmd Pillow
 
 pip install supabase aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python supabase
 pip install lunarcalendar
@@ -34,10 +35,10 @@ pip install --upgrade yfinance
 
 pip install tenacity
 
-
-apt install python3.12-venv
+pip install tushare pandas
+apt install python3.10-venv
 # 创建虚拟环境
-python3 -m venv rss_venv
+python3 -m venv gpt_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
 python3 rss.py
