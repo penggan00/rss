@@ -1,5 +1,9 @@
 git clone https://github.com/penggan00/rss.git  
-docker pull penggan0/rss-full-latest:latest
+docker pull penggan0/rss-full:latest
+
+sudo docker-compose down
+# sudo docker-compose pull
+sudo docker-compose up -d
 
 chmod +x ~/rss/rss.sh  
 chmod +x ~/rss/rss2.sh  
@@ -10,29 +14,11 @@ chmod +x ~/rss/usd.sh
 # 安装
 /bin/bash ~/rss/setup.sh
 
-
-30 */1 * * * /bin/bash ~/rss/rss.sh
-0 */3 * * * /bin/bash ~/rss/rss2.sh
-
-
-pip install tencentcloud feedparser dotenv asyncio aiohttp feedparser python-telegram-bot python-dotenv tencentcloud-sdk-python aiomysql imaplib email html2text chardet
-pip uninstall dotenv
-
-
-30 */1 * * * /bin/bash ~/rss/rss.sh
-使用  python-telegram-bot  库的  escape_markdown  函数自动转义：保留去除html标签，用库自动转义替换其他处理方式和链接。删除def format_link_markdown_v2(text, url):
-pip install google-generativeai requests python-dotenv urllib3
 crontab -e
 # 无链接
 rss.py
 # 24小时youtube
 rss2.py
-pip3 show pyTelegramBotAPI google-generativeai aiohttp md2tgmd Pillow
-
-apt install python3-venv
-pip install lunarcalendar yfinance aiohttp feedparser python-dotenv python-telegram-bot tencentcloud-sdk-python pytz tenacity
-pip install --upgrade email html2text telegram python-dotenv chardet google-generativeai md2tgmd typing-extensions
-
 
 pip install tushare pandas
 apt install python3-venv

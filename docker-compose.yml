@@ -1,30 +1,36 @@
-version: "3.8"
+version: '3.8'  # 建议使用 3.8 或更高版本
 
 services:
   gemini-gpt:
     image: penggan0/rss-full:latest
     restart: unless-stopped
     volumes:
-      - ./gpt.py:/app/gpt.py       # 挂载 Python 脚本
-      - ./.env:/app/.env           # 挂载环境变量
-      - ./chats.db:/app/chats.db   # 挂载数据库
-    command: python gpt.py         # 运行脚本
+      - ./gpt.py:/app/gpt.py
+      - ./.env:/app/.env
+      - ./chats.db:/app/chats.db
+    command: ["gpt.py"]
     deploy:
       resources:
         limits:
-          memory: 112M
-          cpus: "0.5"
+          cpus: '0.5'   # 限制使用 0.5 个 CPU 核心（50%）
+          memory: 256M  # 限制内存为 256MB
+        reservations:
+          cpus: '0.1'   # 保证至少 0.1 个 CPU 核心
+          memory: 128M  # 保证至少 128MB 内存
 
   qq:
-    image: penggan0/rss-full:latest  # 使用同一个镜像
+    image: penggan0/rss-full:latest
     restart: unless-stopped
     volumes:
-      - ./qq.py:/app/qq.py          # 挂载 Python 脚本
-      - ./.env:/app/.env            # 挂载环境变量
-      - ./translator.db:/app/translator.db  # 挂载数据库
-    command: python qq.py           # 运行脚本
+      - ./qq.py:/app/qq.py
+      - ./.env:/app/.env
+      - ./translator.db:/app/translator.db
+    command: ["qq.py"]
     deploy:
       resources:
         limits:
-          memory: 106M
-          cpus: "0.3"
+          cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
+          memory: 128M  # 限制内存为 128MB
+        reservations:
+          cpus: '0.05'  # 保证至少 0.05 个 CPU 核心
+          memory: 64M   # 保证至少 64MB 内存

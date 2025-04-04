@@ -28,3 +28,5 @@ usd.sh
 usd2.py
 Dockerfile copy
 rss copy.py
+Dockerfile slim
+Dockerfile alpine

@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: penggan0/rss-full-alpine
+  IMAGE_NAME: penggan0/rss-full
 
 jobs:
   build-and-push:
