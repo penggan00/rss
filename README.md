@@ -1,4 +1,5 @@
 git clone https://github.com/penggan00/rss.git  
+docker pull penggan0/rss-full-latest:latest
 
 chmod +x ~/rss/rss.sh  
 chmod +x ~/rss/rss2.sh  

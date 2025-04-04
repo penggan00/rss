@@ -1,24 +1,30 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  rss:
-    build: .
-    platform: linux/amd64  # 可以根据需要更改
+  gemini-gpt:
+    image: penggan0/rss-full:latest
     restart: unless-stopped
     volumes:
-      - ./:/app  # 挂载整个rss目录
-    environment:
-      - ENV_FILE=/app/.env
-    command: python rss.py  # 默认运行rss.py，可以根据需要修改
+      - ./gpt.py:/app/gpt.py       # 挂载 Python 脚本
+      - ./.env:/app/.env           # 挂载环境变量
+      - ./chats.db:/app/chats.db   # 挂载数据库
+    command: python gpt.py         # 运行脚本
+    deploy:
+      resources:
+        limits:
+          memory: 112M
+          cpus: "0.5"
 
-  # 可以添加其他服务，如mail、gemini等
-  mail:
-    build: .
+  qq:
+    image: penggan0/rss-full:latest  # 使用同一个镜像
     restart: unless-stopped
     volumes:
-      - ./:/app
-    environment:
-      - ENV_FILE=/app/.env
-    command: python mail.py
-
-  # 其他服务类似配置...
+      - ./qq.py:/app/qq.py          # 挂载 Python 脚本
+      - ./.env:/app/.env            # 挂载环境变量
+      - ./translator.db:/app/translator.db  # 挂载数据库
+    command: python qq.py           # 运行脚本
+    deploy:
+      resources:
+        limits:
+          memory: 106M
+          cpus: "0.3"
