@@ -39,7 +39,7 @@ GEMINI_RETRY_DELAY = 5
 GEMINI_MAX_RETRIES = 3
 IMAP_TIMEOUT = 30  # IMAP连接超时时间(秒)
 TELEGRAM_RATE_LIMIT = 1.0  # 每条消息之间的最小间隔(秒)
-RUN_INTERVAL = 300  # 每5分钟运行一次(秒)
+# RUN_INTERVAL = 300  # 每5分钟运行一次(秒)
 
 # 配置logging
 logging.basicConfig(
@@ -453,15 +453,5 @@ async def check_emails():
     except Exception as e:
         logging.error(f"IMAP连接异常: {e}", exc_info=True)
 
-async def main():
-    """主循环，每5分钟运行一次检查"""
-    while True:
-        try:
-            await check_emails()
-        except Exception as e:
-            logging.error(f"主循环异常: {e}", exc_info=True)
-        
-        await asyncio.sleep(RUN_INTERVAL)
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(check_emails())  # ✅ 只运行一次（需配合cron）

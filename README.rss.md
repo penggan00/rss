@@ -50,14 +50,14 @@ RSS_FEEDS = [
 #主题
 THIRD_RSS_FEEDS = [
     'https://36kr.com/feed-newsflash',
-   # 'https://rsshub.215155.xyz/guancha',
-    'https://rsshub.215155.xyz/zaobao/znews/china',
-    'https://rsshub.215155.xyz/guancha/headline',
+   # 'https://rsshub.app/guancha',
+    'https://rsshub.app/zaobao/znews/china',
+    'https://rsshub.app/guancha/headline',
     
 ]
  # 主题
 FOURTH_RSS_FEEDS = [
-    'https://rsshub.215155.xyz/10jqka/realtimenews',
+    'https://rsshub.app/10jqka/realtimenews',
 ]
 
 # 翻译主题+链接的

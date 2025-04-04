@@ -1,27 +1,24 @@
 version: '3.8'
 
 services:
-  rss-bot:
-    image: yourusername/rss-bot-deps:latest
-    container_name: rss-bot
+  rss:
+    build: .
+    platform: linux/amd64  # 可以根据需要更改
     restart: unless-stopped
     volumes:
-      - ./rss.py:/app/rss.py:ro            # 只读挂载脚本
-      - ./.env:/app/.env:ro                 # 只读挂载环境文件
-      - rss_data:/app/data                  # 使用命名卷持久化数据
+      - ./:/app  # 挂载整个rss目录
     environment:
-      - TZ=Asia/Shanghai
-      - PYTHONUNBUFFERED=1
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
-    healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep [p]ython || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ENV_FILE=/app/.env
+    command: python rss.py  # 默认运行rss.py，可以根据需要修改
 
-volumes:
-  rss_data:
+  # 可以添加其他服务，如mail、gemini等
+  mail:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+    environment:
+      - ENV_FILE=/app/.env
+    command: python mail.py
+
+  # 其他服务类似配置...

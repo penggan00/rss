@@ -30,6 +30,7 @@ pip3 show pyTelegramBotAPI google-generativeai aiohttp md2tgmd Pillow
 
 apt install python3-venv
 pip install lunarcalendar yfinance aiohttp feedparser python-dotenv python-telegram-bot tencentcloud-sdk-python pytz tenacity
+pip install --upgrade email html2text telegram python-dotenv chardet google-generativeai md2tgmd typing-extensions
 
 
 pip install tushare pandas
@@ -38,7 +39,7 @@ apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 usd.py
+python3 mail.py
 pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 # 生成依赖
@@ -54,12 +55,12 @@ postgresql://postgres:[YOUR-PASSWORD]@db.vdwdwogthfmvszqnqums.supabase.co:5432/p
 RSS_FEEDS = [
   #  'https://blog.090227.xyz/atom.xml',  # CM
    # 'https://www.freedidi.com/feed', # 零度解说
-   # 'https://rsshub.215155.xyz/bilibili/hot-search', # bilibili
+   # 'https://rsshub.app/bilibili/hot-search', # bilibili
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5c91d2e23882afa09dff4901', # 36氪 - 24小时热榜
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18', # 微博热搜
    # 'https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608', # 百度热搜榜
-   # 'https://rsshub.215155.xyz/guancha/headline', # 观察网
-   # 'https://rsshub.215155.xyz/zaobao/znews/china', # 联合早报
+   # 'https://rsshub.app/guancha/headline', # 观察网
+   # 'https://rsshub.app/zaobao/znews/china', # 联合早报
    # 'https://36kr.com/feed',    # 36氪 
     # 添加更多 RSS 源
 ]
@@ -98,19 +99,19 @@ SECOND_RSS_FEEDS = [
     'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFyMGc6h30NMCd6HCk0ZPA', # 哔哩哔哩动画
 ]
 36氪:https://36kr.com/feed
-《联合早报》:中国:新闻:https://rsshub.215155.xyz/zaobao/znews/china
-观察者网 : 头条:https://rsshub.215155.xyz/guancha/headline
-观察者网 : 全部:https://rsshub.215155.xyz/guancha
+《联合早报》:中国:新闻:https://rsshub.app/zaobao/znews/china
+观察者网 : 头条:https://rsshub.app/guancha/headline
+观察者网 : 全部:https://rsshub.app/guancha
 百度热搜榜:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608
 bilibili : 综合热门:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6
 微博热搜:https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
 /sub https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
-/sub https://rsshub.215155.xyz/guancha https://rsshub.215155.xyz/zaobao/znews/china https://rsshub.215155.xyz/guancha/headline
+/sub https://rsshub.app/guancha https://rsshub.app/zaobao/znews/china https://rsshub.app/guancha/headline
 
 
-/sub https://rsshub.215155.xyz/zaobao/znews/china https://rsshub.215155.xyz/guancha/headline https://rsshub.215155.xyz/guancha https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
+/sub https://rsshub.app/zaobao/znews/china https://rsshub.app/guancha/headline https://rsshub.app/guancha https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cf92d7f0cc93bc69d082608 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5ca0144af6f83a0a176acfd6 https://rss.mifaw.com/articles/5c8bb11a3c41f61efd36683e/5cac99a7f5648c90ed310e18
 
 
 
