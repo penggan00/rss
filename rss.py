@@ -6,7 +6,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from feedparser import parse
 from telegram import Bot
@@ -36,6 +36,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 清理超过7天的日志文件
+def clean_old_logs():
+    log_file = BASE_DIR / "rss.log"
+    if log_file.exists():
+        log_modified_time = datetime.fromtimestamp(log_file.stat().st_mtime)
+        if datetime.now() - log_modified_time > timedelta(days=7):
+            try:
+                log_file.unlink()
+                logger.info("已清理超过7天的日志文件")
+            except Exception as e:
+                logger.error(f"清理日志文件失败: {e}")
+
+# 在程序启动时执行日志清理
+clean_old_logs()
+
+# 在程序启动时执行日志清理
+clean_old_logs()
 #RSS 源列表 (保持不变)
 RSS_FEEDS = [
     'https://feeds.bbci.co.uk/news/world/rss.xml', # bbc
@@ -116,12 +133,12 @@ FIFTH_RSS_YOUTUBE = [
 
 # Telegram配置 (保持不变)
 TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
-RSS_TWO = os.getenv("RSS_LINDA_YOUTUBE")
-RSS_TOKEN = os.getenv("RSS_LINDA")    # RSS_LINDA
+RSS_STWO = os.getenv("RSS_LINDA_YOUTUBE")
+RSS_RSSSSS = os.getenv("RSS_LINDA")    # RSS_LINDA
 RSSTWO_TOKEN = os.getenv("RSS_TWO")
 RSS_SANG = os.getenv("RSS_SAN")
 YOUTUBE_RSS_FEEDSS = os.getenv("RSS_TOKEN")
-YOUTUBE_RSSS = os.getenv("YOUTUBE_RSS")
+YOUTUBE_RSSSS = os.getenv("YOUTUBE_RSS")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
@@ -1069,11 +1086,11 @@ async def main():
 
     async with aiohttp.ClientSession() as session:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        third_bot = Bot(token=RSS_TWO)
-        fourth_bot = Bot(token=RSS_TOKEN)
+        third_bot = Bot(token=RSS_STWO)
+        fourth_bot = Bot(token=RSS_RSSSSS)
         fifth_bot = Bot(token=RSSTWO_TOKEN)
         rsssan_bot = Bot(token=RSS_SANG)
-        youtube_bot = Bot(token=YOUTUBE_RSSS)
+        youtube_bot = Bot(token=YOUTUBE_RSSSS)
         you_bot = Bot(token=YOUTUBE_RSS_FEEDSS)
         status = await load_status()  # 改为异步加载
 
