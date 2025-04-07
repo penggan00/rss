@@ -41,13 +41,7 @@ def check_rain_tomorrow(forecast_data):
 def send_telegram_alert(city, weather_data):
     """发送Telegram提醒"""
     message = (
-        f"🌧️ **天气预报提醒** 🌧️\n"
         f"**{city}** 明天有雨！\n\n"
-        f"📅 日期: {weather_data['fxDate']}\n"
-        f"☀️ 白天: {weather_data['textDay']}\n"
-        f"🌙 夜间: {weather_data['textNight']}\n"
-        f"🌡️ 温度: {weather_data['tempMin']}~{weather_data['tempMax']}°C\n"
-        f"💧 降水概率: {weather_data['precip']}mm"
     )
     
     url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_API_KEY')}/sendMessage"

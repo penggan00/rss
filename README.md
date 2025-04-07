@@ -9,6 +9,7 @@ chmod +x ~/rss/usd.sh
 
 # 安装
 /bin/bash ~/rss/setup.sh
+
 docker pull penggan0/rss-full:latest
 nano docker-compose.yml
 docker pull penggan0/rss-full-alpine:latest
@@ -30,7 +31,7 @@ apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 rss.py
+python3 usd.py
 
 python3 -m pip install -r requirements.txt
 # 生成依赖

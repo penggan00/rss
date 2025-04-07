@@ -66,7 +66,6 @@ add_cron_job "mail.sh" "*/5 * * * *"
 add_cron_job "rss.sh" "30 */1 * * *"
 add_cron_job "call.sh" "20 10 * * *"
 add_cron_job "usd.sh" "0 11,15 * * 1-5"
-add_cron_job "tt.sh" "0 15 * * *"
 
 echo -e "\n当前定时任务列表:"
 crontab -l

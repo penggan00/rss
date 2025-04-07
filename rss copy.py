@@ -6,7 +6,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from feedparser import parse
 from telegram import Bot
@@ -36,23 +36,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 清理超过7天的日志文件
-def clean_old_logs():
-    log_file = BASE_DIR / "rss.log"
-    if log_file.exists():
-        log_modified_time = datetime.fromtimestamp(log_file.stat().st_mtime)
-        if datetime.now() - log_modified_time > timedelta(days=7):
-            try:
-                log_file.unlink()
-                logger.info("已清理超过7天的日志文件")
-            except Exception as e:
-                logger.error(f"清理日志文件失败: {e}")
-
-# 在程序启动时执行日志清理
-clean_old_logs()
-
-# 在程序启动时执行日志清理
-clean_old_logs()
 #RSS 源列表 (保持不变)
 RSS_FEEDS = [
     'https://feeds.bbci.co.uk/news/world/rss.xml', # bbc
@@ -66,15 +49,15 @@ RSS_FEEDS = [
 ]
 #主题
 THIRD_RSS_FEEDS = [
-    'https://rsshub.215155.xyz/guancha',
-    'https://rsshub.215155.xyz/zaobao/znews/china',
-    'https://rsshub.215155.xyz/guancha/headline',
+    'https://36kr.com/feed-newsflash',
+   # 'https://rsshub.app/guancha',
+    'https://rsshub.app/zaobao/znews/china',
+    'https://rsshub.app/guancha/headline',
     
 ]
  # 主题
 FOURTH_RSS_FEEDS = [
- #   'https://rsshub.app/10jqka/realtimenews',
-     'https://36kr.com/feed-newsflash',
+    'https://rsshub.app/10jqka/realtimenews',
 ]
 
 # 翻译主题+链接的
@@ -133,12 +116,12 @@ FIFTH_RSS_YOUTUBE = [
 
 # Telegram配置 (保持不变)
 TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
-RSS_STWO = os.getenv("RSS_LINDA_YOUTUBE")   
-RSS_RSSSSS = os.getenv("RSS_LINDA")    # RSS_LINDA
-RSSTWO_TOKEN = os.getenv("RSS_TOKEN")
+RSS_TWO = os.getenv("RSS_LINDA_YOUTUBE")
+RSS_TOKEN = os.getenv("RSS_LINDA")    # RSS_LINDA
+RSSTWO_TOKEN = os.getenv("RSS_TWO")
 RSS_SANG = os.getenv("RSS_SAN")
 YOUTUBE_RSS_FEEDSS = os.getenv("RSS_TOKEN")
-YOUTUBE_RSSSS = os.getenv("YOUTUBE_RSS")
+YOUTUBE_RSSS = os.getenv("YOUTUBE_RSS")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
@@ -150,15 +133,15 @@ KEYWORD_FILTER_ENABLED = os.getenv("KEYWORD_FILTER_ENABLED", "False").lower() ==
 MAX_CONCURRENT_REQUESTS = 5
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-# 定义时间间隔 (秒)  600秒 = 10分钟    1200秒 = 20分钟   1800秒 = 30分钟  3600秒 = 1小时   7200秒 = 2小时   10800秒 = 3小时
+# 定义时间间隔 (秒)
 DEFAULT_INTERVAL = 3500  # 默认1小时
-RSSSS_FEEDS_INTERVAL = DEFAULT_INTERVAL     # BBC   
-THIRD_RSS_FEEDS_INTERVAL = DEFAULT_INTERVAL   # zaobao
-FOURTH_RSS_FEEDS_INTERVAL = 1000   #36KR
+RSSSS_FEEDS_INTERVAL = DEFAULT_INTERVAL     # BBC
+THIRD_RSS_FEEDS_INTERVAL = DEFAULT_INTERVAL     #36KR
+FOURTH_RSS_FEEDS_INTERVAL = 1700  # 10jqka
 FIFTH_RSS_FEEDS_INTERVAL = DEFAULT_INTERVAL    # Asmongold TV
-FIFTH_RSS_RSS_SAN_INTERVAL = 1000   # nodeseek
+FIFTH_RSS_RSS_SAN_INTERVAL = 1700  # nodeseek
 YOUTUBE_RSSS_FEEDS_INTERVAL = DEFAULT_INTERVAL  # 10086 YOUTUBE
-FIFTH_RSS_YOUTUBE_INTERVAL = 10000  # FIFTH_RSS_YOUTUBE，2 小时1800
+FIFTH_RSS_YOUTUBE_INTERVAL = 7300  # FIFTH_RSS_YOUTUBE，2 小时1800
 
 
 # 创建锁文件
@@ -466,7 +449,6 @@ async def process_feed(session, feed_url, status, bot, translate=True):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         # 修改条目处理顺序为正向时间顺序
         for entry in feed_data.entries:
@@ -482,13 +464,6 @@ async def process_feed(session, feed_url, status, bot, translate=True):
                 if last_timestamp_dt and entry_time <= last_timestamp_dt:
                     logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                     break
-
-                # URL去重检查
-                entry_url = entry.link
-                if entry_url in seen_urls:
-                    logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                    continue
-                seen_urls.add(entry_url)
 
                 new_entries.append(entry)
                 if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -564,7 +539,6 @@ async def process_third_feed(session, feed_url, status, bot):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
@@ -577,12 +551,6 @@ async def process_third_feed(session, feed_url, status, bot):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -650,7 +618,6 @@ async def process_fourth_feed(session, feed_url, status, bot):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
@@ -663,12 +630,6 @@ async def process_fourth_feed(session, feed_url, status, bot):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue  
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -737,7 +698,6 @@ async def process_fifth_feed(session, feed_url, status, bot, translate=True):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
@@ -750,12 +710,6 @@ async def process_fifth_feed(session, feed_url, status, bot, translate=True):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue  
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -824,7 +778,6 @@ async def process_san_feed(session, feed_url, status, bot):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
@@ -837,12 +790,6 @@ async def process_san_feed(session, feed_url, status, bot):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue  
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -926,7 +873,7 @@ async def process_you_feed(session, feed_url, status, bot):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
+
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
             identifier = get_entry_identifier(entry)
@@ -938,12 +885,6 @@ async def process_you_feed(session, feed_url, status, bot):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue  
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -1011,7 +952,6 @@ async def process_youtube_feed(session, feed_url, status, bot):
 
         new_entries = []
         current_latest = None
-        seen_urls = set()  # 用于URL去重的集合
 
         for entry in feed_data.entries:
             entry_time = get_entry_timestamp(entry)
@@ -1024,11 +964,6 @@ async def process_youtube_feed(session, feed_url, status, bot):
             if last_timestamp_dt and entry_time <= last_timestamp_dt:
                 logger.info(f"时间 {entry_time} <= 上次时间 {last_timestamp_dt}，停止处理")
                 break
-            entry_url = entry.link
-            if entry_url in seen_urls:
-                logger.info(f"发现重复URL条目，跳过: {entry_url[:50]}...")
-                continue  
-            seen_urls.add(entry_url)
 
             new_entries.append(entry)
             if not current_latest or entry_time > get_entry_timestamp(current_latest):
@@ -1086,11 +1021,11 @@ async def main():
 
     async with aiohttp.ClientSession() as session:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        third_bot = Bot(token=RSS_STWO)
-        fourth_bot = Bot(token=RSS_RSSSSS)
+        third_bot = Bot(token=RSS_TWO)
+        fourth_bot = Bot(token=RSS_TOKEN)
         fifth_bot = Bot(token=RSSTWO_TOKEN)
         rsssan_bot = Bot(token=RSS_SANG)
-        youtube_bot = Bot(token=YOUTUBE_RSSSS)
+        youtube_bot = Bot(token=YOUTUBE_RSSS)
         you_bot = Bot(token=YOUTUBE_RSS_FEEDSS)
         status = await load_status()  # 改为异步加载
 

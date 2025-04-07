@@ -1,4 +1,4 @@
-0 11,15 * * 1-5 /bin/bash ~/rss/usd.sh
+0 11,16 * * * /bin/bash ~/rss/usd.sh
 chmod +x ~/rss/usd.sh
 
 crontab -e

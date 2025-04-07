@@ -34,3 +34,4 @@ docker-compose alpine.yml
 tt.py
 tt.md
 tt.sh
+sql_rss.py
