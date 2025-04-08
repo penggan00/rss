@@ -6,7 +6,7 @@ chmod +x ~/rss/setup.sh
 chmod +x ~/rss/mail.sh
 chmod +x ~/rss/call.sh
 chmod +x ~/rss/usd.sh
-
+chmod +x /root/rss/{rss.sh,call.sh,usd.sh}
 # 安装
 /bin/bash ~/rss/setup.sh
 

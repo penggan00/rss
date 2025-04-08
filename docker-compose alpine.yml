@@ -16,11 +16,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'   # 限制使用 0.5 个 CPU 核心（50%）
-          memory: 256M  # 限制内存为 256MB
-        reservations:
-          cpus: '0.1'   # 保证至少 0.1 个 CPU 核心
-          memory: 128M  # 保证至少 128MB 内存
+          cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
+          memory: '200M' # 限制内存为 500MB
 
   qq:
     image: penggan0/rss-full-alpine:latest
@@ -33,11 +30,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
-          memory: 128M  # 限制内存为 128MB
-        reservations:
-          cpus: '0.05'  # 保证至少 0.05 个 CPU 核心
-          memory: 64M   # 保证至少 64MB 内存
+          cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
+          memory: '200M' # 限制内存为 500MB
 
  # mail:
   #  image: penggan0/rss-full-alpine:latest
