@@ -71,7 +71,7 @@ def get_reminders():
     messages = []
 
     # 1. 日常用药提醒
-    messages.append('🕗 时间到，降压！')
+    messages.append('🕗 时间到，降压...')
 
     # 2. 每10天通行证续签
     days_since_base = (now - BASE_DATE).days
