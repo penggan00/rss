@@ -1,26 +1,15 @@
 #!/bin/bash
 
-# 设置环境变量 (如果需要)
-# export VARIABLE_NAME="value"
-
-# 进入脚本所在目录
-cd /root/rss
-
-# 激活虚拟环境
-source rss_venv/bin/activate
-
-# 定义日志文件路径
-LOG_FILE="rss_error.log"
-
-# 执行 Python 脚本，并将标准错误输出重定向到日志文件
-python3 rss2.py 2>> "$LOG_FILE"
-
-# 检查 Python 脚本的退出状态码
-if [ $? -ne 0 ]; then
-  echo "$(date) - 脚本执行失败，请查看错误日志: $LOG_FILE" >> rss.log
-else
-  echo "$(date) - 脚本执行完毕" >> rss.log
+# 检查rss2.py进程是否在运行
+if pgrep -f "rss2.py" > /dev/null; then
+    echo "检测到rss2.py正在运行，正在停止该进程..."
+    # 终止rss2.py进程
+    pkill -f "rss2.py"
 fi
+# 等待1秒确保进程完全终止
+sleep 1
+# 启动rss2.py脚本
+source ~/rss/rss_venv/bin/activate
+nohup python3 ~/rss/rss2.py > /dev/null 2>&1 &
 
-# 退出虚拟环境 (可选)
-deactivate
+echo "脚本执行成功"

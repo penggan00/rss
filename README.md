@@ -6,12 +6,12 @@ chmod +x ~/rss/setup.sh
 chmod +x ~/rss/mail.sh
 chmod +x ~/rss/call.sh
 chmod +x ~/rss/usd.sh
-chmod +x /root/rss/{rss.sh,call.sh,usd.sh}
+chmod +x /root/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 # 安装
 /bin/bash ~/rss/setup.sh
 
-docker pull penggan0/rss-full:latest
-nano docker-compose.yml
+# docker pull penggan0/rss-full:latest
+# nano docker-compose.yml
 docker pull penggan0/rss-full-alpine:latest
 nano docker-compose.yml
 
@@ -31,7 +31,7 @@ apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 usd.py
+python3 qq.py
 
 python3 -m pip install -r requirements.txt
 # 生成依赖

@@ -1,4 +1,4 @@
-# docker pull penggan0/rss-full-alpine:latest
+# docker pull penggan0/rss-full:latest
 # sudo docker-compose down
 # sudo docker-compose pull
 # sudo docker-compose up -d
@@ -6,7 +6,8 @@ version: '3.8'  # 建议使用 3.8 或更高版本
 
 services:
   gemini-gpt:
-    image: penggan0/rss-full-alpine:latest
+    image: penggan0/rss-full:latest
+    container_name: gemini_gpt
     restart: unless-stopped
     volumes:
       - ./gpt.py:/app/gpt.py
@@ -17,10 +18,11 @@ services:
       resources:
         limits:
           cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '150M' # 限制内存为 500MB
+          memory: '200M' # 限制内存为 500MB
 
   qq:
-    image: penggan0/rss-full-alpine:latest
+    image: penggan0/rss-full:latest
+    container_name: qq_translator
     restart: unless-stopped
     volumes:
       - ./qq.py:/app/qq.py
@@ -31,7 +33,7 @@ services:
       resources:
         limits:
           cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '150M' # 限制内存为 500MB
+          memory: '200M' # 限制内存为 500MB
 
   # mail:
   #   image: penggan0/rss-full:latest

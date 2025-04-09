@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+import pytz
+from lunarcalendar import Converter, Solar, Lunar
 
 # 加载环境变量
 load_dotenv()
@@ -37,6 +39,10 @@ class Config:
 
 config = Config()
 
+# 设置香港时区
+hongkong = pytz.timezone('Asia/Hong_Kong')
+BASE_DATE = datetime(2024, 12, 6, tzinfo=hongkong)
+
 # Markdown转义
 def escape_markdown(text):
     for char in ['_', '*', '[', '`']:
@@ -46,7 +52,88 @@ def escape_markdown(text):
 def format_price(price, is_etf=False):
     return f"{price:.3f}" if is_etf else f"{price:.2f}"
 
-# 获取明天有雨的城市信息
+def send_to_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except:
+        pass
+
+def get_reminders():
+    now = datetime.now(hongkong)
+    solar_today = Solar(now.year, now.month, now.day)
+    messages = []
+
+    # 1. 日常用药提醒
+    messages.append('🕗 时间到，降压！')
+
+    # 2. 每10天通行证续签
+    days_since_base = (now - BASE_DATE).days
+    if days_since_base % 10 == 0:
+        messages.append('🔄 续签通行证！')
+
+    # 3. 固定日期年提醒
+    annual_reminders = {
+        (3, 1): "🚗 小车打腊",
+        (5, 1): "📝 从业资格证年审",
+        (10, 5): "💍 结婚周年",
+        (11, 26): "✈️ 离开,彭昊一",
+        (12, 1): "📋 小车年检保险"
+    }
+    for (month, day), msg in annual_reminders.items():
+        if now.month == month and now.day == day:
+            messages.append(msg)
+
+    # 4. 特定年份提醒
+    specific_year_reminders = {
+        (2025, 4, 5): "🔄 建行银行卡",
+        (2026, 10, 5): "💎 结婚20周年",
+        (2027, 5, 1): "🔄 女儿医保卡",
+        (2027, 5, 11): "🔄 爸爸换身份证",
+        (2028, 6, 1): "🔄 招商银行卡",
+        (2030, 11, 1): "🔄 中国信用卡",
+        (2037, 3, 22): "🆔 换身份证"
+    }
+    for (y, m, d), msg in specific_year_reminders.items():
+        if now.year == y and now.month == m and now.day == d:
+            messages.append(msg)
+
+    # 5. 每月云闪付提醒
+    if now.day == 1:
+        messages.append('1号提醒，拍照')
+
+    # 6. 农历生日处理
+    lunar_today = Converter.Solar2Lunar(solar_today)
+    lunar_birthdays = {
+        (2, 1): "🎂 杜根华，生日",
+        (2, 28): "🎂 彭佳文，生日",
+        (3, 11): "🎂 刘裕萍，生日",
+        (4, 12): "🎂 彭绍莲，生日",
+        (4, 20): "🎂 邬思，生日",
+        (4, 27): "🎂 彭博，生日",
+        (5, 5): "🎂 周子君，生日",
+        (5, 17): "🎂 杜俊豪，生日",
+        (8, 19): "🎂 奶奶，生日",       
+        (8, 17): "🎂 邬启元，生日",
+        (10, 9): "🎂 彭付生，生日",
+        (10, 18): "🎂 彭贝娜，生日",
+        (11, 12): "🎂 彭辉，生日",
+        (11, 22): "🎂 彭干，生日",
+        (12, 1): "🎂 彭昊一，生日",
+        (12, 29): "🎂 彭世庆，生日"
+    }
+    for (month, day), msg in lunar_birthdays.items():
+        if lunar_today.month == month and lunar_today.day == day:
+            messages.append(msg)
+
+    return messages
+
 def get_tomorrow_rain_info():
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     rainy_cities = []
@@ -72,10 +159,9 @@ def get_tomorrow_rain_info():
             continue
     
     if rainy_cities:
-        return "\n".join(rainy_cities) + "\n\n"
+        return "\n".join(rainy_cities) + "\n"
     return ""
 
-# 获取美股指数（使用yfinance）
 def get_us_index(symbol, name):
     try:
         ticker = yf.Ticker(symbol)
@@ -93,7 +179,6 @@ def get_us_index(symbol, name):
         pass
     return f"⚠️ 获取 {escape_markdown(name)} 数据失败\n"
 
-# 获取A股数据（使用聚合数据）
 def get_cn_stock(gid, name):
     params = {"key": JUHE_STOCK_KEY, "gid": gid}
     if gid not in ['sh000001', 'sz399001']:
@@ -122,7 +207,6 @@ def get_cn_stock(gid, name):
         pass
     return f"⚠️ 获取 {escape_markdown(name)} 数据失败\n"
 
-# 获取ETF/股票数据（使用yfinance）
 def get_yfinance_data(symbol, name):
     time.sleep(config.YFINANCE_MIN_INTERVAL)
     try:
@@ -142,47 +226,31 @@ def get_yfinance_data(symbol, name):
         pass
     return f"⚠️ 获取 {escape_markdown(name)} 数据失败\n"
 
-# 发送到Telegram
-def send_to_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except:
-        pass
-
 def main():
-    # 检查明天有雨的城市
-    rain_info = get_tomorrow_rain_info()
-    
-    # 构建消息
     message_parts = []
     
-    # 如果有雨，添加天气信息
+    # 1. 添加提醒事项
+    reminders = get_reminders()
+    if reminders:
+        message_parts.extend([f"• *{reminder}*\n" for reminder in reminders])    
+    # 2. 添加天气信息
+    rain_info = get_tomorrow_rain_info()
     if rain_info:
         message_parts.append(rain_info)
-    
-    # 添加市场数据标题
-    message_parts.append("*📊 市场数据更新：*\n\n")
-    
-    # 获取指数数据（确保顺序：上证 > 深证 > 道琼斯 > 纳斯达克）
+    message_parts.append("--------------------------------------\n")
+    # 获取指数数据
     sh_index = get_cn_stock('sh000001', '上证指数')
     sz_index = get_cn_stock('sz399001', '深证成指')
-    dow_index = get_us_index('^DJI', '道琼斯')
     nasdaq_index = get_us_index('^IXIC', '纳斯达克')
+    dow_index = get_us_index('^DJI', '道琼斯')
     
     message_parts.append(sh_index if sh_index else "⚠️ 获取 上证指数 数据失败\n")
     message_parts.append(sz_index if sz_index else "⚠️ 获取 深证成指 数据失败\n")
-    message_parts.append(dow_index if dow_index else "⚠️ 获取 道琼斯 数据失败\n")
     message_parts.append(nasdaq_index if nasdaq_index else "⚠️ 获取 纳斯达克 数据失败\n")
+    message_parts.append(dow_index if dow_index else "⚠️ 获取 道琼斯 数据失败\n")
     
     # 股票数据
-    message_parts.append("\n----------------------------\n")
+    message_parts.append("--------------------------------------\n")
     stock_symbols = [
         ("510300.SS", "沪深300"),
         ("512660.SS", "军工ETF"),
@@ -199,7 +267,7 @@ def main():
         message_parts.append(get_yfinance_data(symbol, name))
     
     # 商品和汇率
-    message_parts.append("----------------------------\n\n")
+    message_parts.append("--------------------------------------\n")
     commodities = [
         ("GC=F", "黄金"),
         ("BZ=F", "原油"),

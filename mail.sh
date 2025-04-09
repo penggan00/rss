@@ -1,16 +1,15 @@
 #!/bin/bash
 
-# 检查 mail.py 是否在运行
+# 检查mail.py进程是否在运行
 if pgrep -f "mail.py" > /dev/null; then
-    echo "mail.py is running. Stopping it..."
-    # 停止 mail.py 进程
+    echo "检测到mail.py正在运行，正在停止该进程..."
+    # 终止mail.py进程
     pkill -f "mail.py"
-else
-    echo "mail.py is not running."
 fi
-# 等待2秒
+# 等待1秒确保进程完全终止
 sleep 1
-# 运行 MAIL 脚本
+# 启动mail.py脚本
 source ~/rss/rss_venv/bin/activate
-python3 ~/rss/mail.py &
-deactivate
+nohup python3 ~/rss/mail.py > /dev/null 2>&1 &
+
+echo "脚本执行成功"

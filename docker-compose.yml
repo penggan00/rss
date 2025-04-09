@@ -1,4 +1,4 @@
-# docker pull penggan0/rss-full:latest
+# docker pull penggan0/rss-full-alpine:latest
 # sudo docker-compose down
 # sudo docker-compose pull
 # sudo docker-compose up -d
@@ -6,8 +6,7 @@ version: '3.8'  # 建议使用 3.8 或更高版本
 
 services:
   gemini-gpt:
-    image: penggan0/rss-full:latest
-    container_name:gemini_gpt
+    image: penggan0/rss-full-alpine:latest
     restart: unless-stopped
     volumes:
       - ./gpt.py:/app/gpt.py
@@ -18,70 +17,48 @@ services:
       resources:
         limits:
           cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '200M' # 限制内存为 500MB
+          memory: '150M' # 限制内存为 500MB
 
-  qq:
-    image: penggan0/rss-full:latest
-    container_name:qq_translator
-    restart: unless-stopped
-    volumes:
-      - ./qq.py:/app/qq.py
-      - ./.env:/app/.env
-      - ./translator.db:/app/translator.db
-    command: ["qq.py"]
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '200M' # 限制内存为 500MB
-
-  mail:
-    image: penggan0/rss-full:latest
-    container_name:mail_telegram
-    restart: unless-stopped
-    volumes:
-      - ./mail.py:/app/mail.py
-      - ./.env:/app/.env
-    command: ["mail.py"]
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '200M' # 限制内存为 500MB
-
-
-
- # mail:
-  #  image: penggan0/rss-full:latest
-  #  container_name:qq_mail
-  #  restart: unless-stopped
-  #  volumes:
-  #    - ./mail.py:/app/mail.py
+ # qq:
+ #   image: penggan0/rss-full-alpine:latest
+ #   restart: unless-stopped
+ #   volumes:
+ #     - ./qq.py:/app/qq.py
  #     - ./.env:/app/.env
- #   command: ["mail.py"]
+ #     - ./translator.db:/app/translator.db
+ #   command: ["qq.py"]
  #   deploy:
  #     resources:
-  #      limits:
-  #        cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
-  #        memory: 128M  # 限制内存为 128MB
-   #     reservations:
-  #        cpus: '0.05'  # 保证至少 0.05 个 CPU 核心
-  #        memory: 64M   # 保证至少 64MB 内存
+ #       limits:
+ #         cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
+ #         memory: '150M' # 限制内存为 500MB
 
- # rss:
-  #  image: penggan0/rss-full:latest
-  #  container_name:rss_telegram
-  #  restart: unless-stopped
-  #  volumes:
- #     - ./rss.py:/app/rss.py
- #     - ./.env:/app/.env
-#      - ./rss.log:/app/rss.log
- #   command: ["rss.py"]
- #   deploy:
- #     resources:
-   #     limits:
-  #        cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
-  #        memory: 128M  # 限制内存为 128MB
-  #      reservations:
-  #        cpus: '0.05'  # 保证至少 0.05 个 CPU 核心
-  #        memory: 64M   # 保证至少 64MB 内存
+  # mail:
+  #   image: penggan0/rss-full:latest
+  #   container_name: qq_mail
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./mail.py:/app/mail.py
+  #     - ./.env:/app/.env
+  #   command: ["mail.py"]
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
+  #         memory: 128M  # 限制内存为 128MB
+
+
+  # rss:
+  #   image: penggan0/rss-full:latest
+  #   container_name: rss_telegram
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./rss.py:/app/rss.py
+  #     - ./.env:/app/.env
+  #     - ./rss.log:/app/rss.log
+  #   command: ["rss.py"]
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
+  #         memory: 128M  # 限制内存为 128MB

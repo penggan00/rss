@@ -33,7 +33,7 @@ EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MAX_MESSAGE_LENGTH = 3800
+MAX_MESSAGE_LENGTH = 3500
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true" # 
 GEMINI_RETRY_DELAY = 5
 GEMINI_MAX_RETRIES = 3
@@ -268,7 +268,7 @@ class GeminiAI:
 
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
-        prompt = """Please process the following message body content (only the processed information will be returned):
+        prompt = """Handle message content strictly according to prompt words (only the processed information will be returned):
 1. The content is not in Chinese, please translate it into Chinese while retaining technical terms
 2. Use the standard Markdown format:
    - Bold: ** Important content **
@@ -278,7 +278,7 @@ class GeminiAI:
 4. For URLs:
    - Automatically find previous descriptions
    - Convert to Markdown hyperlink format: [Description](URL)
-5. If the content is too long, extract key information and summarize it
+5. If the content is too long, please extract the core information (including complete transaction data) and compress the reply to within 30% of the original text
 6. Do not include any instructions on the processing process in the output
 7. Ensure that the output can be sent directly as a Telegram markdown message and do not escape any characters"""  # 保持原有prompt不变
         try:
@@ -287,7 +287,7 @@ class GeminiAI:
                 prompt + processed_text,
                 generation_config={
                     "temperature": 0.3,
-                    "max_output_tokens": 2000
+                    "max_output_tokens": 6000
                 }
             )
             return response.text if response.text else None

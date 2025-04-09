@@ -41,7 +41,7 @@ def clean_old_logs():
     log_file = BASE_DIR / "rss.log"
     if log_file.exists():
         log_modified_time = datetime.fromtimestamp(log_file.stat().st_mtime)
-        if datetime.now() - log_modified_time > timedelta(days=7):
+        if datetime.now() - log_modified_time > timedelta(days=3):
             try:
                 log_file.unlink()
                 logger.info("已清理超过7天的日志文件")
@@ -135,7 +135,7 @@ FIFTH_RSS_YOUTUBE = [
 TELEGRAM_BOT_TOKEN = os.getenv("RSS_TWO")  # 10086 bbc
 RSS_STWO = os.getenv("RSS_LINDA_YOUTUBE")   
 RSS_RSSSSS = os.getenv("RSS_LINDA")    # RSS_LINDA
-RSSTWO_TOKEN = os.getenv("RSS_TOKEN")
+RSSTWO_TOKEN = os.getenv("YOUTUBE_RSS")
 RSS_SANG = os.getenv("RSS_SAN")
 YOUTUBE_RSS_FEEDSS = os.getenv("RSS_TOKEN")
 YOUTUBE_RSSSS = os.getenv("YOUTUBE_RSS")

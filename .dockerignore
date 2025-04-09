@@ -35,3 +35,6 @@ tt.py
 tt.md
 tt.sh
 sql_rss.py
+docker-compose alpine.yml
+qq.py
+gpt.py
