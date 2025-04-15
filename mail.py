@@ -184,7 +184,7 @@ class MessageFormatter:
         """生成未转义的原始头部（后续统一用 md2tgmd 转义）"""
         realname, email_address = parseaddr(sender)
         header = (
-            f"✉️ **{realname}** "  # 保留*不转义
+            f"**✉️ {realname}** "  # 保留*不转义
             f"`{email_address}`\n"  # 保留`不转义
             f"_{subject}_\n\n"     # 保留_不转义
         )
@@ -418,7 +418,7 @@ async def check_emails():
 
                     # 2. 生成未转义的头部和正文
                     header = (
-                        f"✉️ **{parseaddr(sender)[0]}** "
+                        f"**✉️ {parseaddr(sender)[0]}** "
                         f"`{parseaddr(sender)[1]}`\n"
                         f"_{subject}_\n\n"
                     )

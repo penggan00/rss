@@ -31,7 +31,7 @@ apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 qq.py
+python3 rss.py
 
 python3 -m pip install -r requirements.txt
 # 生成依赖
@@ -39,10 +39,21 @@ pip freeze > requirements.txt
 # 退出虚拟环境
 deactivate
 
-postgresql://postgres:yufJkqcqSyrNerCliBCSiMJBvmURuiyF@caboose.proxy.rlwy.net:36030/railway
-postgresql://rss_owner:npg_ca0ShRoWi2qK@ep-old-poetry-a6vtxsbv-pooler.us-west-2.aws.neon.tech/rss?sslmode=require
 
-postgresql://postgres:[YOUR-PASSWORD]@db.vdwdwogthfmvszqnqums.supabase.co:5432/postgres
+create table rss_status (
+  feed_group text,
+  feed_url text,
+  entry_url text,
+  entry_timestamp real,        
+  primary key (feed_group, feed_url, entry_url)
+);
+
+create table timestamps (
+  feed_group text primary key,
+  last_run_time double precision 
+);
+
+
 # RSS 源列表
 RSS_FEEDS = [
   #  'https://blog.090227.xyz/atom.xml',  # CM
