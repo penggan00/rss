@@ -3,7 +3,6 @@ import email
 from email.header import decode_header
 import html2text
 import telegram
-from telegram.helpers import escape_markdown
 import os
 import asyncio
 import re
@@ -16,14 +15,6 @@ from typing import Optional
 from md2tgmd import escape
 import time
 from collections import deque
-
-# 版本检查
-from telegram import __version__ as TG_VER
-if int(TG_VER.split('.')[0]) < 20:
-    raise RuntimeError(
-        f"此代码需要python-telegram-bot>=20.0，当前版本是{TG_VER}。\n"
-        "请执行: pip install --upgrade python-telegram-bot"
-    )
 
 load_dotenv()
 
@@ -180,19 +171,34 @@ class EmailHandler:
 
 class MessageFormatter:
     @staticmethod
+    def escape_markdown_v2(text, exclude=None):
+        """自定义MarkdownV2转义函数"""
+        if exclude is None:
+            exclude = []
+        chars = '_*[]()~`>#+-=|{}.!'
+        chars_to_escape = [c for c in chars if c not in exclude]
+        pattern = re.compile(f'([{"".join(map(re.escape, chars_to_escape))}])')
+        return pattern.sub(r'\\\1', text)
+
+    @staticmethod
     def format_message(sender, subject, content):
-        """生成未转义的原始头部（后续统一用 md2tgmd 转义）"""
+        """生成已转义的头部和未转义的正文"""
         realname, email_address = parseaddr(sender)
+        
+        # 只在这里用escape_markdown_v2转义一次
+        escaped_realname = MessageFormatter.escape_markdown_v2(realname)
+        escaped_email = MessageFormatter.escape_markdown_v2(email_address)
+        escaped_subject = MessageFormatter.escape_markdown_v2(subject)
+        
         header = (
-            f"**✉️ {realname}** "  # 保留*不转义
-            f"`{email_address}`\n"  # 保留`不转义
-            f"_{subject}_\n\n"     # 保留_不转义
+            f"​**✉️ {escaped_realname}​**​ "
+            f"`{escaped_email}`\n"
+            f"_{escaped_subject}_\n\n"
         )
-        return header, content
+        return header, content  # header已转义，content未转义
 
     @staticmethod
     def split_content(text, max_length):
-        """智能分割优化（返回分割后的块列表）"""
         chunks = []
         current_chunk = []
         current_length = 0
@@ -243,11 +249,6 @@ class MessageFormatter:
 
 class GeminiAI:
     def __init__(self, api_key):
-        """初始化Gemini模型（增强媒体URL处理版）
-        
-        Args:
-            api_key: Gemini API密钥
-        """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
@@ -268,7 +269,7 @@ class GeminiAI:
 
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
-        prompt = """Handle message content strictly according to prompt words (only the processed information will be returned):
+        prompt = """Handle message content strictly in accordance with the prompt words (only send processed information):
 1. The content is not in Chinese, please translate it into Chinese while retaining technical terms
 2. Use the standard Markdown format:
    - Bold: ** Important content **
@@ -278,6 +279,7 @@ class GeminiAI:
 4. For URLs:
    - Automatically find previous descriptions
    - Convert to Markdown hyperlink format: [Description](URL)
+   - Make sure that URLs are hyperlinks
 5. If the content is too long, please extract the core information (including complete transaction data) and compress the reply to within 30% of the original text
 6. Do not include any instructions on the processing process in the output
 7. Ensure that the output can be sent directly as a Telegram markdown message and do not escape any characters"""  # 保持原有prompt不变
@@ -296,19 +298,8 @@ class GeminiAI:
             return None
 
     def _preprocess_text(self, text: str) -> str:
-        """
-        文本预处理增强版：
-        1. 过滤所有媒体URL（图片/视频/音频）
-        2. 智能URL去重（忽略http/https协议差异）
-        
-        Args:
-            text: 原始文本
-            
-        Returns:
-            str: 处理后的文本
-        """
         # 1. 过滤媒体URL（保留原始协议）
-        text = self._media_url_regex.sub('[MEDIA]', text)
+        text = self._media_url_regex.sub('', text)
         
         # 2. URL去重处理
         seen_urls = set()
@@ -344,6 +335,7 @@ class TelegramBot:
                 disable_web_page_preview=True
             )
             self.last_message_time = time.time()
+            await asyncio.sleep(6)   #每发送一次延迟6秒
         except telegram.error.BadRequest:
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
@@ -352,6 +344,7 @@ class TelegramBot:
                 disable_web_page_preview=True
             )
             self.last_message_time = time.time()
+            await asyncio.sleep(6)  #每发送一次延迟6秒
         except Exception as e:
             logging.error(f"消息发送失败: {e}")
 
@@ -367,11 +360,6 @@ class TelegramBot:
             await self._rate_limited_send(raw_text, escaped_text, parse_mode)
 
 def clean_ai_text(text: str) -> str:
-    """
-    清理AI处理后的文本：
-    1. 移除所有|符号
-    2. 移除仅含-或多于2个连续-的行
-    """
     if not text:
         return text
     
@@ -382,10 +370,15 @@ def clean_ai_text(text: str) -> str:
     lines = text.split('\n')
     cleaned_lines = []
     
+    # 匹配两种模式：
+    # ^-+$：行首至行尾全是减号
+    # -{3,}：包含3个及以上连续减号
+    pattern = re.compile(r'^-+$|.*-{3,}.*')
+    
     for line in lines:
         stripped_line = line.strip()
-        # 跳过仅含-的行
-        if stripped_line.replace('-', '') == '' and len(stripped_line) >= 1:
+        # 跳过匹配模式的行
+        if pattern.fullmatch(stripped_line):
             continue
         cleaned_lines.append(line)
     
@@ -417,12 +410,7 @@ async def check_emails():
                     raw_content = EmailHandler.get_email_content(msg)
 
                     # 2. 生成未转义的头部和正文
-                    header = (
-                        f"**✉️ {parseaddr(sender)[0]}** "
-                        f"`{parseaddr(sender)[1]}`\n"
-                        f"_{subject}_\n\n"
-                    )
-                    body = raw_content
+                    header, body = MessageFormatter.format_message(sender, subject, raw_content)
 
                     # 3. AI处理并清理文本
                     if gemini_ai:
@@ -430,8 +418,9 @@ async def check_emails():
                         body = clean_ai_text(body)
 
                     # 4. 准备发送内容
-                    safe_message = escape(f"{header}{body}")
-                    raw_message = f"{header}{body}"
+                    escaped_body = escape(body)
+                    safe_message = f"{header}{escaped_body}"  # header已转义，body刚转义
+                    raw_message = f"{header}{body}"  # 原始消息（用于fallback）
 
                     # 5. 分割内容
                     chunks = MessageFormatter.split_content(safe_message, MAX_MESSAGE_LENGTH)
@@ -454,4 +443,4 @@ async def check_emails():
         logging.error(f"IMAP连接异常: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    asyncio.run(check_emails())  # ✅ 只运行一次（需配合cron）
+    asyncio.run(check_emails())

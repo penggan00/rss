@@ -18,11 +18,12 @@ pip install -r ~/rss/requirements.txt
 echo "设置定时任务crontab -e"
 # 检查是否已存在对应的 crontab 任务
 # (crontab -l | grep -q '~/rss/mail.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
-(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "*/20 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "*/10 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 #(crontab -l | grep -q '~/rss/call.py') || (crontab -l; echo "20 10 * * * /bin/bash ~/rss/call.sh") | crontab -
 (crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "0 11,16,23 * * * /bin/bash ~/rss/usd.sh") | crontab -
 
 echo "增加.env"
 nano ~/rss/.env
-
+sleep 1
+nano ~/rss/usd.py
 echo "设置完成！"

@@ -12,6 +12,7 @@ import time
 from typing import Dict, Tuple, List, Optional
 import sqlite3
 import re
+from pathlib import Path
 
 # 加载环境变量
 load_dotenv()
@@ -45,8 +46,10 @@ print("Telegram bot initialized.")
 # 会话管理
 user_chats: Dict[int, Tuple[genai.ChatSession, float]] = {}
 
-# 数据库初始化
-conn = sqlite3.connect('/app/chats.db')  # 使用容器内绝对路径
+# 自动获取脚本所在目录的绝对路径
+BASE_DIR = Path(__file__).parent.absolute()
+DB_PATH = BASE_DIR / 'chats.db'
+conn = sqlite3.connect(str(DB_PATH))  # 转换为字符串
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS chats
              (user_id INTEGER, timestamp REAL, role TEXT, content TEXT)''')

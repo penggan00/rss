@@ -209,18 +209,98 @@ async def usd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         
         output = result.stdout or "Script executed successfully with no output"
-        await update.message.reply_text(f"USD script output:\n{output}")
+        await update.message.reply_text(f"{output}")
     
     except subprocess.CalledProcessError as e:
         error_msg = f"Script failed with return code {e.returncode}:\n{e.stderr}"
         await update.message.reply_text(error_msg)
     except Exception as e:
         await update.message.reply_text(f"Error executing script: {str(e)}")
-
+async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """终极优化版命令执行函数，完美处理交互式命令"""
+    if update.message.chat.id not in config.AUTHORIZED_CHAT_IDS:
+        return
+    
+    if not context.args:
+        await update.message.reply_text("请提供要执行的命令，例如: /cmd ls -l")
+        return
+    
+    command = ' '.join(context.args)
+    base_cmd = command.strip().split()[0] if command.strip().split() else ""
+    
+    try:
+        # 定义命令特殊处理方式
+        command_handlers = {
+            'ps': lambda: subprocess.run(['ps', '-ef'], capture_output=True, text=True, timeout=10),
+            'top': lambda: subprocess.run(['top', '-b', '-n', '1'], capture_output=True, text=True, timeout=10),
+            'htop': lambda: subprocess.run(
+                ['bash', '-c', 'TERM=xterm-256color htop --no-color --delay=1'],
+                capture_output=True, text=True, timeout=15, shell=True
+            ),
+            'reboot': lambda: subprocess.run(
+                ['sudo', '-S', 'reboot'],
+                input='NOPASSWD\n',  # 替换为实际密码或使用NOPASSWD
+                capture_output=True, text=True, timeout=10
+            ),
+            'nano': lambda: subprocess.run(
+                ['bash', '-c', 'echo "无法在非交互式终端中运行nano编辑器"'],
+                capture_output=True, text=True, timeout=5
+            ),
+            'vim': lambda: subprocess.run(
+                ['bash', '-c', 'echo "无法在非交互式终端中运行vim编辑器"'],
+                capture_output=True, text=True, timeout=5
+            )
+        }
+        
+        # 执行命令
+        if base_cmd in command_handlers:
+            result = command_handlers[base_cmd]()
+        else:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+        
+        # 处理输出
+        output = result.stdout.strip() or "命令执行成功，无输出"
+        error_output = result.stderr.strip()
+        
+        # 特殊输出处理
+        special_outputs = {
+            'htop': "Htop需要真实终端环境才能运行\n建议使用SSH连接直接查看",
+            'nano': "Nano编辑器需要真实终端环境\n请使用SSH连接进行编辑",
+            'vim': "Vim编辑器需要真实终端环境\n请使用SSH连接进行编辑"
+        }
+        
+        if base_cmd in special_outputs and not output:
+            output = special_outputs[base_cmd]
+        
+        # 格式化输出
+        max_length = 3000
+        if len(output) > max_length:
+            output = output[:max_length] + "\n... (输出被截断)"
+        
+        reply_msg = f"🖥️ 命令: {command}\n📋 输出:\n{output}"
+        
+        if error_output:
+            if len(error_output) > max_length:
+                error_output = error_output[:max_length] + "\n... (错误输出被截断)"
+            reply_msg += f"\n\n❌ 错误:\n{error_output}"
+        
+        await update.message.reply_text(reply_msg)
+    
+    except subprocess.TimeoutExpired:
+        await update.message.reply_text(f"⏳ 命令执行超时: {command}")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ 执行命令时出错: {str(e)}")
 def main() -> None:
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CommandHandler("usd", usd_command))
+    app.add_handler(CommandHandler("cmd", execute_command)) 
     app.run_polling()
 
 if __name__ == "__main__":

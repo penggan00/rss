@@ -16,8 +16,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '150M' # 限制内存为 500MB
+          cpus: '0.2'   # 限制最多使用 0.5 个 CPU 核心
+          memory: '128M' # 限制内存为 500MB
 
  # qq:
  #   image: penggan0/rss-full-alpine:latest
@@ -30,8 +30,8 @@ services:
  #   deploy:
  #     resources:
  #       limits:
- #         cpus: '0.5'   # 限制最多使用 0.5 个 CPU 核心
- #         memory: '150M' # 限制内存为 500MB
+ #         cpus: '0.2'   # 限制最多使用 0.5 个 CPU 核心
+ #         memory: '128M' # 限制内存为 500MB
 
   # mail:
   #   image: penggan0/rss-full:latest
@@ -44,7 +44,7 @@ services:
   #   deploy:
   #     resources:
   #       limits:
-  #         cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
+  #         cpus: '0.2'   # 限制使用 0.3 个 CPU 核心（30%）
   #         memory: 128M  # 限制内存为 128MB
 
 
@@ -60,5 +60,5 @@ services:
   #   deploy:
   #     resources:
   #       limits:
-  #         cpus: '0.3'   # 限制使用 0.3 个 CPU 核心（30%）
+  #         cpus: '0.2'   # 限制使用 0.3 个 CPU 核心（30%）
   #         memory: 128M  # 限制内存为 128MB
