@@ -17,7 +17,7 @@ services:
       resources:
         limits:
           cpus: '0.2'   # 限制最多使用 0.5 个 CPU 核心
-          memory: '128M' # 限制内存为 500MB
+          memory: '256M' # 限制内存为 500MB
 
  # qq:
  #   image: penggan0/rss-full-alpine:latest
