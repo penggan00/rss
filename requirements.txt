@@ -66,7 +66,6 @@ uritemplate==4.1.1
 urllib3==2.3.0
 yarl==1.18.3
 yfinance==0.2.55
-
 #qq
 # anyio==4.9.0
 # certifi==2025.1.31
