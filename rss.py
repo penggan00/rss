@@ -229,9 +229,9 @@ RSS_GROUPS = [
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub-zixmldzk.ap-southeast-1.clawcloudrun.com/guancha',
-            'https://rsshub-zixmldzk.ap-southeast-1.clawcloudrun.com/zaobao/znews/china',
-            'https://rsshub-zixmldzk.ap-southeast-1.clawcloudrun.com/guancha/headline',
+            'https://rsshub.app/guancha',
+            'https://rsshub.app/zaobao/znews/china',
+            'https://rsshub.app/guancha/headline',
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 7000,      # 1小时56分钟 (原THIRD_RSS_FEEDS_INTERVAL)
