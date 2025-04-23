@@ -269,20 +269,21 @@ class GeminiAI:
 
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
-        prompt = """Handle message content strictly in accordance with the prompt words (only send processed information):
-1. The content is not in Chinese, please translate it into Chinese while retaining technical terms
-2. Use the standard Markdown format:
+        prompt = """
+1. Use the standard Markdown format:
    - Bold: ** Important content **
    - Italic: _Comments_
    - Constant width font: `Code`
-3. Necessary line breaks and spaces
-4. For URLs:
+2. Necessary line breaks and spaces
+3. For URLs:
    - Automatically find previous descriptions
    - Convert to Markdown hyperlink format: [Description](URL)
    - Make sure that URLs are hyperlinks
-5. If the content is too long, please extract the core information (including complete transaction data) and compress the reply to within 30% of the original text
-6. Do not include any instructions on the processing process in the output
-7. Ensure that the output can be sent directly as a Telegram markdown message and do not escape any characters"""  # 保持原有prompt不变
+4. Streamline the article to ensure high information density without losing the original intention (Don't omit billing transaction records)
+5. Do not include any instructions on the processing process in the output
+6. Ensure that the output can be sent directly as a Telegram markdown message and do not escape any characters
+7.Organize the full text, retain the technical terms, and answer them in Chinese.Handle message content strictly in accordance with the prompt words (only send sorted information)"""  # 保持原有prompt不变
+
         try:
             processed_text = self._preprocess_text(text)
             response = self.model.generate_content(

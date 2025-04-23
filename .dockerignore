@@ -39,3 +39,4 @@ docker-compose alpine.yml
 qq.py
 gpt.py
 rss代理.py
+ss.sh
