@@ -1,1 +1,0 @@
-30 10 * * * /bin/bash ~/rss/call.sh
