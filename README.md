@@ -29,7 +29,26 @@ pip freeze > requirements.txt
 # 退出虚拟环境
 deactivate
 
-# ````````````````````````
+# 远程数据库````````````````````````````````````
+-- 创建表结构
+CREATE TABLE public.rss_status (
+    feed_group TEXT,
+    feed_url TEXT,
+    entry_url TEXT,
+    entry_timestamp BIGINT,
+    PRIMARY KEY (feed_group, feed_url, entry_url)
+);
+
+CREATE TABLE public.timestamps (
+    feed_group TEXT PRIMARY KEY,
+    last_run_time BIGINT
+);
+
+-- 创建索引
+CREATE INDEX idx_entry_timestamp ON public.rss_status (entry_timestamp);
+CREATE INDEX idx_feed_group ON public.rss_status (feed_group);
+CREATE INDEX idx_feed_url ON public.rss_status (feed_url);
+# ``````````````````````````````````````
 create table rss_status (
   feed_group text,
   feed_url text,
