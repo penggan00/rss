@@ -6,8 +6,8 @@ import os
 import hashlib
 import pytz
 import fcntl
-import sqlite3
 import time
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -20,30 +20,18 @@ from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from supabase.client import Client, create_client
+from supabase import create_client, Client
 
 # 加载.env文件
 load_dotenv()
-
-# Supabase 配置
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-USE_SUPABASE = SUPABASE_URL and SUPABASE_KEY
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
-TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
-TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
-MAX_CONCURRENT_REQUESTS = 2      #并发控制
-semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # 配置绝对路径
 BASE_DIR = Path(__file__).resolve().parent
 
 # 创建锁文件
 LOCK_FILE = BASE_DIR / "rss.lock"
-
-# SQLite 数据库初始化
-DATABASE_FILE = BASE_DIR / "rss_status.db"
-
+# 在配置部分添加
+TIMESTAMPS_FILE = BASE_DIR / "rss.json"
 # 增强日志配置
 logging.basicConfig(
     filename=BASE_DIR / "rss.log",
@@ -53,31 +41,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 初始化全局客户端
-supabase: Client = None
-
-def init_supabase():
-    global supabase
-    if not USE_SUPABASE:
-        return
-    
-    try:
-        # 使用正确的异步初始化方式
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        
-        # 验证连接
-        test = supabase.table('rss_status').select("count", count="estimated").execute()
-        logger.info(f"✅ Supabase连接成功 | 测试响应: {test}")
-    except Exception as e:
-        logger.critical(f"‼️ Supabase连接失败: {str(e)}")
-        exit(1)
-
 # 清理超过7天的日志文件
 def clean_old_logs():
     log_file = BASE_DIR / "rss.log"
     if log_file.exists():
         log_modified_time = datetime.fromtimestamp(log_file.stat().st_mtime)
-        if datetime.now() - log_modified_time > timedelta(days=3):
+        if datetime.now() - log_modified_time > timedelta(days=2):
             try:
                 log_file.unlink()
              #   logger.info("已清理超过7天的日志文件")
@@ -86,6 +55,17 @@ def clean_old_logs():
 
 # 在程序启动时执行日志清理
 clean_old_logs()
+
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
+TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+# Supabase 配置
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+MAX_CONCURRENT_REQUESTS = 2      #并发控制
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # 定义时间间隔 (秒)  600秒 = 10分钟    1200秒 = 20分钟   1800秒 = 30分钟  3600秒 = 1小时   7200秒 = 2小时   10800秒 = 3小时
 RSS_GROUPS = [
@@ -96,9 +76,9 @@ RSS_GROUPS = [
             'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
-       #     'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
+         #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
             'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
-       #     'https://www.ft.com/?format=rss',                 # 金融时报
+        #    'https://www.ft.com/?format=rss',                 # 金融时报
        #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
        #     'http://rss.cnn.com/rss/cnn_topstories.rss',   # cnn
        #     'https://www.theguardian.com/world/rss',     # 卫报
@@ -109,7 +89,8 @@ RSS_GROUPS = [
         "bot_token": os.getenv("RSS_TWO"), 
         "processor": {
             "translate": True,       #翻译开
-            "template": "*{subject}*\n[{source}]({url})",
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增
         }
@@ -127,7 +108,8 @@ RSS_GROUPS = [
         "bot_token": os.getenv("RSS_LINDA"),  
         "processor": {
             "translate": False,     #翻译开关
-            "template": "*{subject}*\n[{source}]({url})",
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
             "preview": False,            # 预览
             "show_count": False          #计数
         }
@@ -144,12 +126,13 @@ RSS_GROUPS = [
         ],
         "group_key": "FIFTH_RSS_FEEDS",
         "interval": 7000,      # 1小时56分钟
-        "bot_token": os.getenv("YOUTUBE_RSS"), 
+        "bot_token": os.getenv("RSS_LINDA"), 
         "processor": {
             "translate": True,
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n🔗 {url}",
-            "preview": True,        # 预览
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,        # 预览
             "show_count": False     #计数
         }
     },
@@ -165,7 +148,8 @@ RSS_GROUPS = [
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,                  #翻译开关
-            "template": "*{subject}*\n[{source}]({url})",
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
             "filter": {
                 "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
@@ -180,6 +164,8 @@ RSS_GROUPS = [
     {
         "name": "YouTube频道",
         "urls": [
+            'https://blog.090227.xyz/atom.xml',
+         #   'https://www.freedidi.com/feed',
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
@@ -206,7 +192,8 @@ RSS_GROUPS = [
         "bot_token": os.getenv("RSS_TOKEN"),
         "processor": {
             "translate": False,
-            "template": "*{subject}*\n[{source}]({url})",
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
             "preview": True,                # 预览
             "show_count": False               #计数
         }
@@ -216,8 +203,6 @@ RSS_GROUPS = [
     {
         "name": "中文YouTube",
         "urls": [
-            'https://blog.090227.xyz/atom.xml',
-        #    'https://www.freedidi.com/feed',
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點
@@ -243,7 +228,8 @@ RSS_GROUPS = [
         "processor": {
         "translate": False,                    #翻译开关
         "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-        "template": "*{subject}*\n🔗 {url}",  # 条目模板
+    #   "template": "*{subject}*\n🔗 {url}",
+        "template": "*{subject}*\n[more]({url})",
         "preview": True,                       # 预览
         "show_count": False                    #计数
     }
@@ -253,16 +239,17 @@ RSS_GROUPS = [
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub.app/guancha',
-            'https://rsshub.app/china',
-            'https://rsshub.app/guancha/headline',
+            'https://rsshub.215155.xyz/guancha/headline',
+            'https://rsshub.215155.xyz/guancha',
+            'https://rsshub.app/zaobao/znews/china',
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 7000,      # 1小时56分钟 (原THIRD_RSS_FEEDS_INTERVAL)
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
         "processor": {
             "translate": False,                        #翻译开关
-            "template": "*{subject}*\n[{source}]({url})",
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
             "preview": False,                              # 预览
             "show_count": False                       #计数
         }
@@ -420,125 +407,57 @@ async def generate_group_message(feed_data, entries, processor):
         logger.error(f"生成消息失败: {str(e)}")
         return ""
 
-def create_connection():
-    """创建 SQLite 数据库连接"""
-    conn = None
-    try:
-        conn = sqlite3.connect(DATABASE_FILE)
-        return conn
-    except sqlite3.Error as e:
-        logger.error(f"连接数据库失败: {e}")
-    return conn
 
-# 修改后的数据库初始化函数
-def create_table():
-    """仅验证表结构存在"""
-    global USE_SUPABASE
-    
-    # 强制重新加载环境变量
-    load_dotenv(override=True)
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-    USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
-    
-  #  logger.info(f"🛢️ 当前使用数据库类型: {'Supabase' if USE_SUPABASE else 'SQLite'}")
-    
-    if USE_SUPABASE:
-        init_supabase()  # 调用初始化函数
-        try:
-            # 简单查询验证表存在
-            supabase.table("rss_status").select("*").limit(1).execute()
-            supabase.table("timestamps").select("*").limit(1).execute()
-       #     logger.info("✅ Supabase表结构验证通过")
-        except Exception as e:
-            logger.critical(f"‼️ 表结构验证失败: {str(e)}")
-            logger.critical("请先在Supabase控制台手动创建表结构")
-            exit(1)
-    else:
-        try:
-            conn = sqlite3.connect(DATABASE_FILE)
-            cursor = conn.cursor()
-            
-            # SQLite表结构
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS rss_status (
-                    feed_group TEXT,
-                    feed_url TEXT,
-                    entry_url TEXT,
-                    entry_timestamp REAL,
-                    PRIMARY KEY (feed_group, feed_url, entry_url)
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_run_time REAL
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_entry_timestamp 
-                ON rss_status (entry_timestamp)
-            """)
-            
-            conn.commit()
-       #     logger.info("✅ SQLite表结构验证完成")
-        except sqlite3.Error as e:
-            logger.critical(f"‼️ SQLite初始化失败: {str(e)}")
-            exit(1)
-        finally:
-            conn.close()
 
 async def load_last_run_time_from_db(feed_group):
-    """加载最后运行时间"""
-    if USE_SUPABASE:
-        try:
-            data = supabase.table('timestamps')\
-                .select('last_run_time')\
-                .eq('feed_group', feed_group)\
-                .execute()
-            return data.data[0]['last_run_time'] if data.data else 0
-        except Exception as e:
-            logger.error(f"Supabase时间加载失败: {e}")
+    """从本地JSON文件加载时间戳"""
+    try:
+        if not TIMESTAMPS_FILE.exists():
             return 0
-    else:
-        conn = sqlite3.connect(DATABASE_FILE)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT last_run_time FROM timestamps WHERE feed_group = ?", (feed_group,))
-            result = cursor.fetchone()
-            return result[0] if result else 0
-        except sqlite3.Error as e:
-            logger.error(f"SQLite时间加载失败: {e}")
-            return 0
-        finally:
-            conn.close()
+        
+        with open(TIMESTAMPS_FILE, 'r') as f:
+            data = json.load(f)
+            return data.get(feed_group, 0)
+    except Exception as e:
+        logger.error(f"加载时间戳失败: {e}")
+        return 0
 
 async def save_last_run_time_to_db(feed_group, last_run_time):
-    """保存最后运行时间"""
-    last_run_time = int(last_run_time)  # 转换为整数
-    if USE_SUPABASE:
-        try:
-            supabase.table('timestamps').upsert({
-                'feed_group': feed_group,
-                'last_run_time': last_run_time
-            }).execute()
-        except Exception as e:
-            logger.error(f"Supabase时间保存失败: {e}")
-    else:
-        conn = sqlite3.connect(DATABASE_FILE)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO timestamps 
-                VALUES (?, ?)
-            """, (feed_group, last_run_time))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"SQLite时间保存失败: {e}")
-        finally:
-            conn.close()
+    """保存时间戳到本地JSON文件"""
+    try:
+        # 读取现有数据
+        data = {}
+        if TIMESTAMPS_FILE.exists():
+            with open(TIMESTAMPS_FILE, 'r') as f:
+                data = json.load(f)
+        
+        # 更新数据
+        data[feed_group] = last_run_time
+        
+        # 原子化写入（先写临时文件再重命名）
+        temp_file = TIMESTAMPS_FILE.with_suffix('.tmp')
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        temp_file.replace(TIMESTAMPS_FILE)
+    except Exception as e:
+        logger.error(f"保存时间戳失败: {e}")
+
+async def load_status():
+    """从Supabase加载处理状态"""
+    status = {}
+    try:
+        res = supabase.table('rss_status')\
+            .select('feed_url, entry_url')\
+            .execute()
+        for item in res.data:
+            if item['feed_url'] not in status:
+                status[item['feed_url']] = set()
+            status[item['feed_url']].add(item['entry_url'])
+        logger.info("Supabase状态加载成功")
+    except Exception as e:
+        logger.error(f"Supabase状态加载失败: {e}")
+    return status
 
 # 函数 (保持不变，除非另有说明)
 def remove_html_tags(text):
@@ -549,12 +468,17 @@ def remove_html_tags(text):
     return text
 
 def escape_markdown_v2(text, exclude=None):
-    """自定义MarkdownV2转义函数"""
     if exclude is None:
         exclude = []
-    chars = '_*[]()~`>#+-=|{}.!'
-    chars_to_escape = [c for c in chars if c not in exclude]
-    pattern = re.compile(f'([{"".join(map(re.escape, chars_to_escape))}])')
+        
+    # 1. 先转义已有的反斜杠（避免后续转义干扰）
+    text = text.replace('\\', '\\\\')
+        
+    # 2. 转义其他 MarkdownV2 特殊符号
+    chars_to_escape = {'_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'}
+    chars_to_escape -= set(exclude)
+        
+    pattern = re.compile(f'([{"".join(re.escape(c) for c in chars_to_escape)}])')
     return pattern.sub(r'\\\1', text)
 
 @retry(
@@ -642,85 +566,23 @@ async def auto_translate_text(text):
         logging.error(f"翻译错误: {e}")
         return text
 
-async def load_status():
-    """加载处理状态"""
-    status = {}
-    if USE_SUPABASE:
-        try:
-            data = supabase.table('rss_status')\
-                .select('feed_url, entry_url')\
-                .execute()
-            for item in data.data:
-                if item['feed_url'] not in status:
-                    status[item['feed_url']] = set()
-                status[item['feed_url']].add(item['entry_url'])
-        except Exception as e:
-            logger.error(f"Supabase状态加载失败: {e}")
-    else:
-        conn = sqlite3.connect(DATABASE_FILE)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT feed_url, entry_url FROM rss_status")
-            for feed_url, entry_url in cursor.fetchall():
-                if feed_url not in status:
-                    status[feed_url] = set()
-                status[feed_url].add(entry_url)
-        except sqlite3.Error as e:
-            logger.error(f"SQLite状态加载失败: {e}")
-        finally:
-            conn.close()
-    return status
-
 async def save_single_status(feed_group, feed_url, entry_url):
-    """保存单条状态"""
-    timestamp = int(time.time())  # 强制转换为整数
-    if USE_SUPABASE:
+    """保存单条状态到Supabase（带重试）"""
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
             supabase.table('rss_status').upsert({
                 'feed_group': feed_group,
                 'feed_url': feed_url,
                 'entry_url': entry_url,
-                'entry_timestamp': timestamp  # 确保是整数
+                'entry_timestamp': time.time()
             }).execute()
+            return
         except Exception as e:
-            logger.error(f"Supabase状态保存失败: {e}")
-    else:
-        conn = sqlite3.connect(DATABASE_FILE)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR IGNORE INTO rss_status 
-                VALUES (?, ?, ?, ?)
-            """, (feed_group, feed_url, entry_url, timestamp))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"SQLite状态保存失败: {e}")
-        finally:
-            conn.close()
-
-async def clean_old_entries(feed_group, max_age_days=30):
-    """清理旧记录"""
-    cutoff_time = int(time.time() - max_age_days * 24 * 3600)  # 强制转换为整数
-    if USE_SUPABASE:
-        try:
-            supabase.table('rss_status')\
-                .delete()\
-                .lt('entry_timestamp', cutoff_time)\
-                .eq('feed_group', feed_group)\
-                .execute()
-        except Exception as e:
-            logger.error(f"Supabase清理失败: {e}")
-    else:
-        conn = sqlite3.connect(DATABASE_FILE)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM rss_status WHERE feed_group = ? AND entry_timestamp < ?", 
-                         (feed_group, cutoff_time))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"SQLite清理失败: {e}")
-        finally:
-            conn.close()
+            if attempt < max_retries - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error(f"Supabase保存失败（尝试{attempt+1}次）: {e}")
 
 def get_entry_identifier(entry):
     # 优先使用guid
@@ -782,9 +644,6 @@ async def process_feed_common(session, feed_group, feed_url, status):
         return None
 
 async def main():
-    # 在程序开始时强制重新加载.env文件
-    from dotenv import load_dotenv
-    load_dotenv(override=True)  # 添加override参数
     """主处理函数"""
     # ================== 1. 文件锁处理 ==================
     lock_file = None
@@ -799,18 +658,6 @@ async def main():
         logger.critical(f"‼️ 文件锁异常: {str(e)}")
         return
 
-    # ================== 2. 数据库初始化 ==================
-    global supabase
-    if USE_SUPABASE:
-        try:
-            supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
-            # 验证连接有效性
-            supabase.table("rss_status").select("count", count="exact").execute()
-            logger.info("🔌 Supabase连接验证成功")
-        except Exception as e:
-            logger.critical(f"‼️ Supabase连接失败: {str(e)}")
-            exit(1)
-
     # ================== 3. 旧日志清理 ==================
     try:
         clean_old_logs()
@@ -824,27 +671,7 @@ async def main():
             # ===== 4.1 加载处理状态 =====
             status = await load_status()
      #       logger.info("📂 加载历史状态完成")
-
-            # ===== 4.2 清理旧记录 =====
-            retention_config = {
-                "RSS_FEEDS": 30,
-                "THIRD_RSS_FEEDS": 30,
-                "FOURTH_RSS_FEEDS": 7,
-                "FIFTH_RSS_FEEDS": 30,
-                "FIFTH_RSS_RSS_SAN": 7,
-                "YOUTUBE_RSSS_FEEDS": 600,
-                "FIFTH_RSS_YOUTUBE": 600
-            }
-            
-            for group in RSS_GROUPS:
-                try:
-                    await clean_old_entries(
-                        group["group_key"], 
-                        retention_config.get(group["group_key"], 30)
-                    )
-                except Exception as e:
-                    logger.error(f"⚠️ 清理旧记录失败 [{group['name']}]: {str(e)}")
-
+     
             # ===== 4.3 创建处理任务 =====
             tasks = []
             for group in RSS_GROUPS:
@@ -885,5 +712,4 @@ async def main():
  #   logger.info("🏁 程序运行结束\n" + "="*50 + "\n")
 
 if __name__ == "__main__":
-    create_table()
     asyncio.run(main())

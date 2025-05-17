@@ -95,7 +95,7 @@ class ContentProcessor:
             raw_url = match.group(1)
             clean_url = raw_url.split('"')[0]
 
-            if not (10 < len(clean_url) <= 800):
+            if not (10 < len(clean_url) <= 600):
                 continue
 
             if any(d in clean_url for d in exclude_domains):

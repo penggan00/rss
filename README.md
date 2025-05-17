@@ -4,6 +4,8 @@ chmod +x /root/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 # 安装
 /bin/bash ~/rss/setup.sh
 
+0 6 * * 1 /usr/bin/docker restart xiaoya
+
 # docker pull penggan0/rss-full:latest
 # nano docker-compose.yml
 docker pull penggan0/rss-full-alpine:latest
@@ -14,7 +16,8 @@ sudo docker-compose down
 sudo docker-compose up -d
 
 crontab -e
-
+# 升级到最新supabase客户端
+pip install --upgrade supabase
 pip install tushare pandas
 apt install python3-venv
 # 创建虚拟环境
@@ -23,6 +26,12 @@ python3 -m venv rss_venv
 source rss_venv/bin/activate
 python3 rss.py
 
+
+pip install --supafunc
+pip install --upgrade pip
+
+supabase-2.15.1
+pip freeze
 python3 -m pip install -r requirements.txt
 # 生成依赖
 pip freeze > requirements.txt
@@ -30,36 +39,19 @@ pip freeze > requirements.txt
 deactivate
 
 # 远程数据库````````````````````````````````````
--- 创建表结构
-CREATE TABLE public.rss_status (
-    feed_group TEXT,
-    feed_url TEXT,
-    entry_url TEXT,
-    entry_timestamp BIGINT,
+CREATE TABLE IF NOT EXISTS rss_status (
+    feed_group TEXT NOT NULL,
+    feed_url TEXT NOT NULL,
+    entry_url TEXT NOT NULL,
+    entry_timestamp DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
     PRIMARY KEY (feed_group, feed_url, entry_url)
 );
+CREATE INDEX idx_group_timestamp ON rss_status (feed_group, entry_timestamp);
 
-CREATE TABLE public.timestamps (
-    feed_group TEXT PRIMARY KEY,
-    last_run_time BIGINT
-);
+CREATE UNIQUE INDEX idx_rss_status_unique_entry ON rss_status (feed_url, entry_url);
 
--- 创建索引
-CREATE INDEX idx_entry_timestamp ON public.rss_status (entry_timestamp);
-CREATE INDEX idx_feed_group ON public.rss_status (feed_group);
-CREATE INDEX idx_feed_url ON public.rss_status (feed_url);
-# ``````````````````````````````````````
-create table rss_status (
-  feed_group text,
-  feed_url text,
-  entry_url text,
-  entry_timestamp real,        
-  primary key (feed_group, feed_url, entry_url)
-);
-
-create table timestamps (
-  feed_group text primary key,
-  last_run_time double precision 
-);
-# `````````````````
+# ​定期清理旧数据​
+DELETE FROM rss_status 
+WHERE entry_timestamp < EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days');
+# ``````````````````````````````````````````````````
 /sub https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA

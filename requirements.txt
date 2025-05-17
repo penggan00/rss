@@ -23,9 +23,9 @@ google-generativeai==0.8.4
 googleapis-common-protos==1.69.2
 grpcio==1.71.0
 grpcio-status==1.71.0
-h11==0.14.0
+h11==0.16.0
 html2text==2024.2.26
-httpcore==1.0.7
+httpcore==1.0.9
 httplib2==0.22.0
 httpx==0.28.1
 idna==3.10
@@ -66,6 +66,12 @@ uritemplate==4.1.1
 urllib3==2.3.0
 yarl==1.18.3
 yfinance==0.2.55
+h2==4.2.0
+hpack==4.1.0
+hyperframe==6.1.0
+StrEnum==0.4.15
+supafunc==0.9.4
+
 #qq
 # anyio==4.9.0
 # certifi==2025.1.31

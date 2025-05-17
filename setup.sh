@@ -20,7 +20,8 @@ echo "设置定时任务crontab -e"
 # (crontab -l | grep -q '~/rss/mail.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
 (crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "*/10 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 #(crontab -l | grep -q '~/rss/call.py') || (crontab -l; echo "20 10 * * * /bin/bash ~/rss/call.sh") | crontab -
-(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "0 11,16,23 * * * /bin/bash ~/rss/usd.sh") | crontab -
+(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
+(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
 
 echo "增加.env"
 nano ~/rss/.env

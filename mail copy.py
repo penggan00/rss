@@ -89,13 +89,13 @@ class ContentProcessor:
         )
         urls = []
         seen = set()
-        exclude_domains = {'w3.org', 'example.com'}
+        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
             clean_url = raw_url.split('"')[0]
 
-            if not (10 < len(clean_url) <= 800):
+            if not (10 < len(clean_url) <= 500):
                 continue
 
             if any(d in clean_url for d in exclude_domains):
@@ -105,7 +105,7 @@ class ContentProcessor:
                 seen.add(clean_url)
                 urls.append((raw_url, clean_url, match.start(), match.end()))
 
-        return urls[:5]
+        return urls[:10]
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -171,10 +171,16 @@ class EmailHandler:
         
 class MessageFormatter:
     @staticmethod
-    def escape_markdown_v2(text):
-        """统一使用此函数进行MarkdownV2转义"""
-        chars_to_escape = r'_*[]()~`>#+-=|{}.!\\'
-        return re.sub(r'([{}])'.format(re.escape(chars_to_escape)), r'\\\1', text)
+    def escape_markdown_v2(text, exclude=None):
+        if exclude is None:
+            exclude = []
+        # 1. 先转义已有的反斜杠（避免后续转义干扰）
+        text = text.replace('\\', '\\\\')
+        # 2. 转义其他 MarkdownV2 特殊符号
+        chars_to_escape = {'_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'}
+        chars_to_escape -= set(exclude)
+        pattern = re.compile(f'([{"".join(re.escape(c) for c in chars_to_escape)}])')
+        return pattern.sub(r'\\\1', text)
     
     @staticmethod
     def format_message(sender, subject, content):
@@ -182,13 +188,13 @@ class MessageFormatter:
         realname, email_address = parseaddr(sender)
         
         # 只在这里用escape_markdown_v2转义一次
-        escaped_realname = escape(realname)
-     #   escaped_email = MessageFormatter.escape_markdown_v2(email_address)
-        escaped_subject = escape(subject)
+        escaped_realname = MessageFormatter.escape_markdown_v2(realname)
+        escaped_email = MessageFormatter.escape_markdown_v2(email_address)
+        escaped_subject = MessageFormatter.escape_markdown_v2(subject)
         
         header = (
-            f"​*✉️ {escaped_realname}​*​ "
-            f"`{email_address}`\n"
+            f"​**✉️ {escaped_realname}​**​ "
+            f"`{escaped_email}`\n"
             f"_{escaped_subject}_\n\n"
         )
         return header, content  # header已转义，content未转义
@@ -266,20 +272,10 @@ class GeminiAI:
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
         prompt = """
-For content
-For URLs:
-1. Detect all URLs and their nearest preceding text description (≤20 chars).  
-2. Strictly deduplicate:  
-   - Keep only the first occurrence of each unique URL.  
-   - Format it as [Description](URL) (using the first description found).  
-3. Remove all other instances of duplicate URLs from the entire text (including plain-text URLs).
-3. Condense lengthy content non-destructively, but:  
-   - Preserve billing/transaction records verbatim.  
-   - Keep technical terms unchanged.  
-4. ​Language: Output exclusively in Chinese, regardless of input language.​​
-5. Output only the final result (no processing notes).  
-6. Use plain Markdown (no code blocks).Intelligent typesetting.
-"""  # 保持原有prompt不变
+1. Format all URLs as Markdown links: Contextual Desc. Max 20 chars, use existing phrases.
+2. Reduce the article with necessary disconnection and space to ensure high information density without sacrificing willingness (don't omit billing transaction records) 
+3. Organize it in Markdown format,do not use Block Code, retain technical terms, and answer in Chinese. Handle the message content strictly in accordance with the prompt words (only reply to the sorted information, and do not include any related processing procedures in the output)"""  # 保持原有prompt不变
+
         try:
             processed_text = self._preprocess_text(text)
             response = self.model.generate_content(
