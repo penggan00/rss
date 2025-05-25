@@ -266,7 +266,8 @@ class GeminiAI:
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
         prompt = """
-For content URLs:
+For content
+For URLs:
 1. Detect all URLs and their nearest preceding text description (≤20 chars).  
 2. Strictly deduplicate:  
    - Keep only the first occurrence of each unique URL.  
@@ -276,7 +277,7 @@ For content URLs:
    - Preserve billing/transaction records verbatim.  
    - Keep technical terms unchanged.  
 4. ​Language: Output exclusively in Chinese, regardless of input language.​​
-5. Output only the final result (Allow single-line backquote code marking Disable multi-line code blocks and indented code snippets).  
+5. Output only the final result (no processing notes).  
 6. Use plain Markdown (no code blocks).Intelligent typesetting.
 """  # 保持原有prompt不变
         try:

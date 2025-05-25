@@ -1,6 +1,6 @@
 git clone https://github.com/penggan00/rss.git
 
-chmod +x /root/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
+chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 # 安装
 /bin/bash ~/rss/setup.sh
 
@@ -14,6 +14,7 @@ nano docker-compose.yml
 # sudo docker-compose pull
 sudo docker-compose down
 sudo docker-compose up -d
+pip3 install md2tgmd
 
 crontab -e
 # 升级到最新supabase客户端
@@ -24,7 +25,7 @@ apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 rss.py
+python3 mail.py
 
 
 pip install --supafunc

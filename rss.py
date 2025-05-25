@@ -20,7 +20,7 @@ from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from md2tgmd import escape
+#from md2tgmd import escape
 
 # 加载.env文件
 load_dotenv()
@@ -59,6 +59,8 @@ RSS_GROUPS = [
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
+            'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
+            'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
             'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
         #    'https://www.ft.com/?format=rss',                 # 金融时报
        #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
@@ -84,6 +86,8 @@ RSS_GROUPS = [
         "urls": [
     #        'https://rsshub.app/10jqka/realtimenews',
             'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 11分钟 
@@ -135,7 +139,7 @@ RSS_GROUPS = [
             "filter": {
                 "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["免", "c", "黑", "活", "出", "福", "低", "香", "永", "收", "小", "卡", "年", "优", "bug", "值", "白","折"]  # 本组关键词列表
+                "keywords": ["免", "c", "黑", "活", "出", "福", "低", "香", "永", "收", "小", "卡", "年", "优", "bug", "值", "白",  "github", "折"]  # 本组关键词列表
             },
             "preview": False,               # 预览
             "show_count": False               #计数
@@ -255,7 +259,7 @@ async def process_group(session, group_config, global_status):
 
         # ========== 1. 检查时间间隔 ==========
         last_run = await load_last_run_time_from_db(group_key)
-        now = time.time()
+        now = datetime.now(pytz.utc).timestamp()
         if (now - last_run) < group_config["interval"]:
             return  # 未到间隔时间，跳过处理
 
@@ -350,7 +354,7 @@ async def generate_group_message(feed_data, entries, processor):
     try:
         # ===== 1. 基础信息处理 =====
         source_name = feed_data.feed.get('title', "未知来源")
-        safe_source = escape(source_name)
+        safe_source = escape_markdown_v2(source_name)
         
         # ===== 新增：标题处理 =====
         header = ""
@@ -367,11 +371,11 @@ async def generate_group_message(feed_data, entries, processor):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
-            safe_subject = escape(translated_subject)
+            safe_subject = escape_markdown_v2(translated_subject)
 
             # -- 2.2 链接处理 --
             raw_url = entry.link
-            safe_url = escape(raw_url)
+            safe_url = escape_markdown_v2(raw_url)
 
             # -- 2.3 构建消息 --
             message = processor["template"].format(

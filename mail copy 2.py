@@ -182,14 +182,14 @@ class MessageFormatter:
         realname, email_address = parseaddr(sender)
         
         # 只在这里用escape_markdown_v2转义一次
-        escaped_realname = MessageFormatter.escape_markdown_v2(realname)
+     #   escaped_realname = MessageFormatter.escape_markdown_v2(realname)
      #   escaped_email = MessageFormatter.escape_markdown_v2(email_address)
-        escaped_subject = MessageFormatter.escape_markdown_v2(subject)
+    #    escaped_subject = MessageFormatter.escape_markdown_v2(subject)
         
         header = (
-            f"​*✉️ {escaped_realname}​*​ "
+            f"​**✉️ {realname}​**​ "
             f"`{email_address}`\n"
-            f"_{escaped_subject}_\n\n"
+            f"_{subject}_\n\n"
         )
         return header, content  # header已转义，content未转义
 
@@ -266,18 +266,11 @@ class GeminiAI:
     def generate_summary(self, text: str) -> Optional[str]:
         """生成邮件正文摘要"""
         prompt = """
-For content URLs:
-1. Detect all URLs and their nearest preceding text description (≤20 chars).  
-2. Strictly deduplicate:  
-   - Keep only the first occurrence of each unique URL.  
-   - Format it as [Description](URL) (using the first description found).  
-3. Remove all other instances of duplicate URLs from the entire text (including plain-text URLs).
-3. Condense lengthy content non-destructively, but:  
-   - Preserve billing/transaction records verbatim.  
-   - Keep technical terms unchanged.  
-4. ​Language: Output exclusively in Chinese, regardless of input language.​​
-5. Output only the final result (Allow single-line backquote code marking Disable multi-line code blocks and indented code snippets).  
-6. Use plain Markdown (no code blocks).Intelligent typesetting.
+Please generate a summary based on the following contents, and the requirements are as follows:
+1. Detect all URLs and use their immediately preceding text (≤20 characters) as the description.Keep only the first occurrence of each unique URL.Format it as [Description](URL) (using the first description found,).Remove duplicate urls.
+2. Compress content by up to 30%, prioritizing non-critical/redundant segments while strictly preserving billing/transaction records and technical terminology verbatim.
+3. Format output in Markdown (excluding multi-line code blocks while preserving single-line code) with intelligent organization.
+4. Provide the final output exclusively in Chinese with no processing notes, regardless of input language. 
 """  # 保持原有prompt不变
         try:
             processed_text = self._preprocess_text(text)
@@ -415,7 +408,8 @@ async def check_emails():
 
                     # 4. 准备发送内容
                     escaped_body = escape(body)
-                    safe_message = f"{header}{escaped_body}"  # header已转义，body刚转义
+                    escaped_header = escape(header)
+                    safe_message = f"{escaped_header}{escaped_body}"  # header已转义，body刚转义
                     raw_message = f"{header}{body}"  # 原始消息（用于fallback）
 
                     # 5. 分割内容
