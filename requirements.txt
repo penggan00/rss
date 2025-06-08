@@ -87,6 +87,7 @@ supafunc==0.9.4
 #tencentcloud-sdk-python==3.0.1354
 #typing_extensions==4.13.0
 #urllib3==2.3.0
+
 # gpt
 telebot==0.0.5
 aiosqlite==0.21.0

@@ -35,23 +35,25 @@ DATABASE_FILE = BASE_DIR / "rss_status.db"
 # 增强日志配置
 logging.basicConfig(
     filename=BASE_DIR / "rss.log",
-    level=logging.INFO,
+    level=logging.WARNING,  # 只记录 WARNING/ERROR/CRITICAL
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
 )
+
 logger = logging.getLogger(__name__)
 
-
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
+# 在环境变量加载后添加备用密钥配置
+TENCENT_BACKUP_SECRET_ID = os.getenv("TENCENT_SECRET_ID")
+TENCENT_BACKUP_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
+semaphore = asyncio.Semaphore(2)  # 并发控制，限制同时最多2个请求
 
-MAX_CONCURRENT_REQUESTS = 2      #并发控制
-semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-# 定义时间间隔 (秒)  600秒 = 10分钟    1200秒 = 20分钟   1800秒 = 30分钟  3600秒 = 1小时   7200秒 = 2小时   10800秒 = 3小时
+# 定义时间间隔 (秒)  600秒 = 10分钟   1200秒 = 20分钟   1800秒 = 30分钟  3600秒 = 1小时   7200秒 = 2小时   10800秒 = 3小时
 RSS_GROUPS = [
-    # ================== 国际新闻组 (原RSS_FEEDS) ==================
+    # ================== 国际新闻组 ==================False: 关闭 / True: 开启
     {
         "name": "国际新闻",
         "urls": [
@@ -59,8 +61,8 @@ RSS_GROUPS = [
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
-            'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
-            'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
+        #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
+        #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
             'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
         #    'https://www.ft.com/?format=rss',                 # 金融时报
        #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
@@ -70,7 +72,8 @@ RSS_GROUPS = [
         ],
         "group_key": "RSS_FEEDS",
         "interval": 3300,      # 55分钟 
-        "bot_token": os.getenv("RSS_TWO"), 
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
@@ -80,7 +83,7 @@ RSS_GROUPS = [
         }
     },
 
-    # ================== 快讯组 (原FOURTH_RSS_FEEDS) ==================
+    # ================== 快讯组 ==================
     {
         "name": "快讯",
         "urls": [
@@ -91,6 +94,7 @@ RSS_GROUPS = [
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 11分钟 
+        "history_days": 5,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA"),  
         "processor": {
             "translate": False,     #翻译开关
@@ -101,17 +105,18 @@ RSS_GROUPS = [
         }
     },
 
-    # ================== 社交媒体组 (原FIFTH_RSS_FEEDS) ==================
+    # ================== 社交媒体组 ==================
     {
         "name": "社交媒体",
         "urls": [
         #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
-            'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
+         #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
         #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
         ],
         "group_key": "FIFTH_RSS_FEEDS",
         "interval": 7000,      # 1小时56分钟
+        "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA"), 
         "processor": {
             "translate": True,
@@ -123,7 +128,7 @@ RSS_GROUPS = [
         }
     },
 
-    # ================== 技术论坛组 (原FIFTH_RSS_RSS_SAN) ==================
+    # ================== 技术论坛组 ==================
     {
         "name": "技术论坛",
         "urls": [
@@ -131,22 +136,42 @@ RSS_GROUPS = [
         ],
         "group_key": "FIFTH_RSS_RSS_SAN",
         "interval": 240,       # 4分钟 
+        "history_days": 2,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,                  #翻译开关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "filter": {
-                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["免", "c", "黑", "活", "出", "福", "低", "香", "永", "收", "小", "卡", "年", "优", "bug", "值", "白",  "github", "折"]  # 本组关键词列表
+                "keywords": ["免", "cf", "cl", "黑", "活", "出", "利", "低", "香", "永", "小", "卡", "年", "优", "bug", "值", "白",  "github",  "节",  "新",  "hk",  "sg",  "jp", "r", "折"]  # 本组关键词列表
             },
             "preview": False,               # 预览
             "show_count": False               #计数
         }
     },
-
-    # ================== YouTube频道组 (原YOUTUBE_RSSS_FEEDS) ==================
+    {
+        "name": "社交媒体",
+        "urls": [
+            'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+            'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
+     
+        ],
+        "group_key": "FIFTHHHH_RSSS_FEEDS",
+        "interval": 12000,      # 1小时56分钟
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_SAN"), 
+        "processor": {
+            "translate": True,
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,        # 预览
+            "show_count": False     #计数
+        }
+    },
+    # ================== YouTube频道组 ==================
     {
         "name": "YouTube频道",
         "urls": [
@@ -175,6 +200,7 @@ RSS_GROUPS = [
         ],
         "group_key": "YOUTUBE_RSSS_FEEDS",
         "interval": 3300,      # 55分钟
+        "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TOKEN"),
         "processor": {
             "translate": False,
@@ -185,7 +211,7 @@ RSS_GROUPS = [
         }
     },
 
-    # ================== 中文YouTube组 (原FIFTH_RSS_YOUTUBE) ==================
+    # ================== 中文YouTube组 ==================
     {
         "name": "中文YouTube",
         "urls": [
@@ -196,22 +222,24 @@ RSS_GROUPS = [
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCNiJNzSkfumLB7bYtXcIEmg', # 真的很博通
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCN0eCImZY6_OiJbo8cy5bLw', # 屈機TV
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
+         #   'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
+       #     'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
             'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
+          #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
         # 影视
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCi2GvcaxZCN-61a0co8Smnw', # 館長
 
         ],
         "group_key": "FIFTH_RSS_YOUTUBE",
-        "interval": 10400,     # 2小时53分钟
+        "interval": 18000,     # 5小时
+        "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"),
         "processor": {
         "translate": False,                    #翻译开关
@@ -223,17 +251,18 @@ RSS_GROUPS = [
     }
     },
 
-    # ================== 中文媒体组 (原THIRD_RSS_FEEDS) ==================
+    # ================== 中文媒体组 ==================
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub.215155.xyz/guancha/headline',
-            'https://rsshub.215155.xyz/guancha',
-            'https://rsshub.app/zaobao/znews/china',
+            'https://rss.owo.nz/guancha/headline',
+            'https://rss.owo.nz/guancha',
+            'https://rsshub.asailor.org/zaobao/znews/china',
 
         ],
         "group_key": "THIRD_RSS_FEEDS",
-        "interval": 7000,      # 1小时56分钟 (原THIRD_RSS_FEEDS_INTERVAL)
+        "interval": 7000,      # 1小时56分钟
+        "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
         "processor": {
             "translate": False,                        #翻译开关
@@ -263,7 +292,6 @@ async def process_group(session, group_config, global_status):
         if (now - last_run) < group_config["interval"]:
             return  # 未到间隔时间，跳过处理
 
-  #      logger.info(f"🚀 开始处理 [{group_name}] 源...")
         bot = Bot(token=bot_token)
 
         # ========== 2. 处理每个URL源 ==========
@@ -276,7 +304,6 @@ async def process_group(session, group_config, global_status):
                 # ------ 2.1 获取Feed数据 ------
                 feed_data = await fetch_feed(session, feed_url)
                 if not feed_data or not feed_data.entries:
-             #       logger.warning(f"⚠️ 空数据源 [{feed_url}]")
                     continue
 
                 # ------ 2.2 加载处理状态 & 收集新条目 ------
@@ -321,7 +348,6 @@ async def process_group(session, group_config, global_status):
                                 feed_message,
                                 disable_web_page_preview=not processor.get("preview", True)
                             )
-                 #           logger.info(f"📤 已发送 {len(new_entries)} 条内容 [{feed_url}]")
 
                             # 发送成功，保存所有条目状态
                             for entry_id in pending_entry_ids:
@@ -342,12 +368,9 @@ async def process_group(session, group_config, global_status):
         await save_last_run_time_to_db(group_key, now)
 
         # ========== 4. 最终延迟 ==========
-        await asyncio.sleep(1)  # 组处理完成后延迟3秒
-
+        await asyncio.sleep(1)
     except Exception as e:
-        logger.critical(f"‼️ 处理组失败 [{feed_url}]")
-   # finally:
-    #    logger.info(f"🏁 完成处理 [{group_name}]")
+        logger.critical(f"‼️ 处理组失败 [{group_key}]")
 
 async def generate_group_message(feed_data, entries, processor):
     """生成标准化消息内容"""
@@ -427,6 +450,12 @@ def create_table():
                     last_run_time REAL
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cleanup_timestamps (
+                    feed_group TEXT PRIMARY KEY,
+                    last_cleanup_time REAL
+                )
+            """)
             conn.commit()
        #     logger.info("成功创建/连接到本地 SQLite 数据库和表")
         except sqlite3.Error as e:
@@ -469,10 +498,15 @@ async def save_last_run_time_to_db(feed_group, last_run_time):
 
 # 函数 (保持不变，除非另有说明)
 def remove_html_tags(text):
-    """彻底移除hashtags, @符号, 以及"【 】" 样式的符号"""
-    text = re.sub(r'#\w+', '', text)  # 移除hashtags
-    text = re.sub(r'@[^\s]+', '', text).strip()  # 删除@后面的字符
-    text = re.sub(r'【\s*】', '', text)  # 移除"【 】" 样式的符号，包含中间的空格
+    text = re.sub(r'#\w+', '', text)    # 移除 hashtags
+    text = re.sub(r'@[^\s]+', '', text).strip()     # 移除 @提及
+    text = re.sub(r'【\s*】', '', text)    # 移除 【】符号（含中间空格）
+    # 仅替换 英文单词.英文单词 的情况（如 example.com → example．com）
+    text = re.sub(
+        r'\.([a-zA-Z])',  # 匹配 `.` 后接一个字母（不关心前面是什么）
+        lambda m: f'．{m.group(1)}',  # 替换 `.` 为 `．`，并保留后面的字母
+        text
+    )
     return text
 
 def escape_markdown_v2(text):
@@ -548,27 +582,62 @@ async def fetch_feed(session, feed_url):
      #   logging.error(f"抓取失败 {feed_url}: {e}")
         raise
 
+# 修改 auto_translate_text 函数
 @retry(
     stop=stop_after_attempt(1),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+    wait=wait_exponential(multiplier=1, min=2, max=5),
 )
 async def auto_translate_text(text):
+    """翻译文本，失败时返回清理后的原始文本"""
     try:
-        cred = credential.Credential(TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY)
-        clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
-        client = tmt_client.TmtClient(cred, "na-siliconvalley", clientProfile)
-
-        req = models.TextTranslateRequest()
-        req.SourceText = remove_html_tags(text)  # 翻译前先移除HTML
-        req.Source = "auto"
-        req.Target = "zh"
-        req.ProjectId = 0
-
-        return client.TextTranslate(req).TargetText
+        # 文本长度处理
+        max_length = 2000
+        if len(text) > max_length:
+            logger.warning(f"⚠️ 文本过长({len(text)}字符)，截断处理")
+            text = text[:max_length]
+        
+        # 第一组密钥尝试
+        try:
+            return await translate_with_credentials(
+                TENCENTCLOUD_SECRET_ID, 
+                TENCENTCLOUD_SECRET_KEY,
+                text
+            )
+        except Exception as first_error:
+            # 第一组失败且存在备用密钥时尝试第二组
+            if TENCENT_BACKUP_SECRET_ID and TENCENT_BACKUP_SECRET_KEY:
+                logger.warning("⚠️ 主翻译密钥失败，尝试备用密钥...")
+                try:
+                    return await translate_with_credentials(
+                        TENCENT_BACKUP_SECRET_ID,
+                        TENCENT_BACKUP_SECRET_KEY,
+                        text
+                    )
+                except Exception as second_error:
+                    logger.error(f"备用密钥翻译失败: {second_error}")
+            
+            # 所有尝试失败时返回清理后的原始文本
+            logger.error(f"所有翻译尝试均失败，返回原始文本")
+            return remove_html_tags(text)
+            
     except Exception as e:
-        logging.error(f"翻译错误: {e}")
-        raise  # 必须重新抛出异常才能触发重试
+        logging.error(f"翻译过程异常: {e}")
+        return remove_html_tags(text)  # 确保返回可用的文本
+
+# 新增辅助翻译函数
+async def translate_with_credentials(secret_id, secret_key, text):
+    """使用指定凭证进行翻译"""
+    cred = credential.Credential(secret_id, secret_key)
+    clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
+    client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
+
+    req = models.TextTranslateRequest()
+    req.SourceText = remove_html_tags(text)  # 确保文本已清理
+    req.Source = "auto"
+    req.Target = "zh"
+    req.ProjectId = 0
+
+    return client.TextTranslate(req).TargetText
 
 async def load_status():
     """仅从SQLite加载状态"""
@@ -673,6 +742,46 @@ async def process_feed_common(session, feed_group, feed_url, status):
     except Exception as e:
       #  logger.error(f"处理源异常 {feed_url}")
         return None
+    
+def cleanup_history(days, feed_group):
+    """仅在超过24小时时执行清理"""
+    conn = create_connection()
+    if conn:
+        try:
+            # 检查上次清理时间
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group = ?", 
+                (feed_group,)
+            )
+            result = cursor.fetchone()
+            last_cleanup = result[0] if result else 0
+            
+            now = time.time()
+            # 24小时内不清理 (86400秒 = 24小时)
+            if now - last_cleanup < 86400:
+                return
+                
+            # 执行清理
+            cutoff_ts = now - days * 86400
+            cursor.execute(
+                "DELETE FROM rss_status WHERE feed_group=? AND entry_timestamp < ?",
+                (feed_group, cutoff_ts)
+            )
+            affected_rows = cursor.rowcount
+            
+            # 更新清理时间
+            cursor.execute("""
+                INSERT OR REPLACE INTO cleanup_timestamps (feed_group, last_cleanup_time)
+                VALUES (?, ?)
+            """, (feed_group, now))
+            
+            conn.commit()
+     #       logger.info(f"✅ 日志清理: 组={feed_group}, 保留天数={days}, 删除条数={affected_rows}")
+        except sqlite3.Error as e:
+            logger.error(f"❌ 日志清理失败: 组={feed_group}, 错误={e}")
+        finally:
+            conn.close()
 
 async def main():
     """主处理函数"""
@@ -696,7 +805,13 @@ async def main():
     except Exception as e:
         logger.critical(f"‼️ 数据库初始化失败: {str(e)}")
         return
-
+    # ================== 3. 清理历史记录 ==================
+    for group in RSS_GROUPS:
+        days = group.get("history_days", 30)  # 默认30天
+        try:
+            cleanup_history(days, group["group_key"])
+        except Exception as e:
+            logger.error(f"清理历史记录异常: 组={group['group_key']}, 错误={e}")
     # ================== 4. 主处理流程 ==================
     async with aiohttp.ClientSession() as session:
         try:

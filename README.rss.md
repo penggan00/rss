@@ -20,6 +20,7 @@ from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+#from md2tgmd import escape
 
 # 加载.env文件
 load_dotenv()
@@ -40,20 +41,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 清理超过7天的日志文件
-def clean_old_logs():
-    log_file = BASE_DIR / "rss.log"
-    if log_file.exists():
-        log_modified_time = datetime.fromtimestamp(log_file.stat().st_mtime)
-        if datetime.now() - log_modified_time > timedelta(days=2):
-            try:
-                log_file.unlink()
-             #   logger.info("已清理超过7天的日志文件")
-            except Exception as e:
-                logger.error(f"清理日志文件失败: {e}")
-
-# 在程序启动时执行日志清理
-clean_old_logs()
 
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
@@ -72,6 +59,8 @@ RSS_GROUPS = [
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
+            'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
+            'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
             'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
         #    'https://www.ft.com/?format=rss',                 # 金融时报
        #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
@@ -97,6 +86,8 @@ RSS_GROUPS = [
         "urls": [
     #        'https://rsshub.app/10jqka/realtimenews',
             'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 11分钟 
@@ -148,7 +139,7 @@ RSS_GROUPS = [
             "filter": {
                 "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["免", "c", "黑", "活", "出", "福", "低", "香", "永", "收", "小", "卡", "年", "优", "bug", "值", "白","折"]  # 本组关键词列表
+                "keywords": ["免", "c", "黑", "活", "出", "福", "低", "香", "永", "收", "小", "卡", "年", "优", "bug", "值", "白",  "github", "折"]  # 本组关键词列表
             },
             "preview": False,               # 预览
             "show_count": False               #计数
@@ -210,6 +201,8 @@ RSS_GROUPS = [
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
             'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
         # 影视
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
@@ -237,6 +230,7 @@ RSS_GROUPS = [
             'https://rsshub.215155.xyz/guancha/headline',
             'https://rsshub.215155.xyz/guancha',
             'https://rsshub.app/zaobao/znews/china',
+
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 7000,      # 1小时56分钟 (原THIRD_RSS_FEEDS_INTERVAL)
@@ -265,7 +259,7 @@ async def process_group(session, group_config, global_status):
 
         # ========== 1. 检查时间间隔 ==========
         last_run = await load_last_run_time_from_db(group_key)
-        now = time.time()
+        now = datetime.now(pytz.utc).timestamp()
         if (now - last_run) < group_config["interval"]:
             return  # 未到间隔时间，跳过处理
 
@@ -282,7 +276,7 @@ async def process_group(session, group_config, global_status):
                 # ------ 2.1 获取Feed数据 ------
                 feed_data = await fetch_feed(session, feed_url)
                 if not feed_data or not feed_data.entries:
-                    logger.warning(f"⚠️ 空数据源 [{feed_url}]")
+             #       logger.warning(f"⚠️ 空数据源 [{feed_url}]")
                     continue
 
                 # ------ 2.2 加载处理状态 & 收集新条目 ------
@@ -338,11 +332,11 @@ async def process_group(session, group_config, global_status):
                             global_status[feed_url] = processed_ids
 
                         except Exception as send_error:
-                            logger.error(f"❌ 发送消息失败 [{feed_url}]: {str(send_error)}")
+                            logger.error(f"❌ 发送消息失败 [{feed_url}]")
                             raise  # 抛出异常，阻止后续保存操作
 
             except Exception as e:
-                logger.error(f"❌ 处理源失败 [{feed_url}]: {str(e)}", exc_info=True)
+                logger.error(f"❌ 处理失败 [{feed_url}]")
 
         # ========== 3. 保存最后运行时间 ==========
         await save_last_run_time_to_db(group_key, now)
@@ -351,7 +345,7 @@ async def process_group(session, group_config, global_status):
         await asyncio.sleep(1)  # 组处理完成后延迟3秒
 
     except Exception as e:
-        logger.critical(f"‼️ 处理组失败 [{group_name}]: {str(e)}", exc_info=True)
+        logger.critical(f"‼️ 处理组失败 [{feed_url}]")
    # finally:
     #    logger.info(f"🏁 完成处理 [{group_name}]")
 
@@ -481,19 +475,13 @@ def remove_html_tags(text):
     text = re.sub(r'【\s*】', '', text)  # 移除"【 】" 样式的符号，包含中间的空格
     return text
 
-def escape_markdown_v2(text, exclude=None):
-    if exclude is None:
-        exclude = []
-    # 1. 先转义已有的反斜杠（避免后续转义干扰）
-    text = text.replace('\\', '\\\\')
-    # 2. 转义其他 MarkdownV2 特殊符号
-    chars_to_escape = {'_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'}
-    chars_to_escape -= set(exclude)
-    pattern = re.compile(f'([{"".join(re.escape(c) for c in chars_to_escape)}])')
-    return pattern.sub(r'\\\1', text)
+def escape_markdown_v2(text):
+    """统一使用此函数进行MarkdownV2转义"""
+    chars_to_escape = r'_*[]()~`>#+-=|{}.!\\'
+    return re.sub(r'([{}])'.format(re.escape(chars_to_escape)), r'\\\1', text)
 
 @retry(
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(1),
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
@@ -531,11 +519,11 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
     except BadRequest as e:
         logging.error(f"消息发送失败(Markdown错误): {e} - 文本片段: {chunk[:200]}...")
     except Exception as e:
-        logging.error(f"消息发送失败: {e}")
+     #   logging.error(f"消息发送失败: {e}")
         raise
 
 @retry(
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(1),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
@@ -546,20 +534,25 @@ async def fetch_feed(session, feed_url):
             async with session.get(feed_url, headers=headers, timeout=30) as response:
                 # 统一处理临时性错误（503/403）
                 if response.status in (503, 403,404,429):
-                    logger.warning(f"RSS源暂时不可用（{response.status}）: {feed_url}")
+                #    logger.warning(f"RSS源暂时不可用（{response.status}）: {feed_url}")
                     return None  # 跳过当前源，下次运行会重试
                 response.raise_for_status()
                 return parse(await response.read())
     except aiohttp.ClientResponseError as e:
         if e.status in (503, 403,404,429):
-            logger.warning(f"RSS源暂时不可用（{e.status}）: {feed_url}")
+         #   logger.warning(f"RSS源暂时不可用{feed_url}")
             return None
-        logging.error(f"HTTP 错误 {e.status} 抓取失败 {feed_url}: {e}")
+    #    logging.error(f"HTTP 错误 {e.status} 抓取失败 {feed_url}: {e}")
         raise
     except Exception as e:
-        logging.error(f"抓取失败 {feed_url}: {e}")
+     #   logging.error(f"抓取失败 {feed_url}: {e}")
         raise
 
+@retry(
+    stop=stop_after_attempt(1),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+)
 async def auto_translate_text(text):
     try:
         cred = credential.Credential(TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY)
@@ -575,7 +568,7 @@ async def auto_translate_text(text):
         return client.TextTranslate(req).TargetText
     except Exception as e:
         logging.error(f"翻译错误: {e}")
-        return text
+        raise  # 必须重新抛出异常才能触发重试
 
 async def load_status():
     """仅从SQLite加载状态"""
@@ -621,22 +614,6 @@ async def save_single_status(feed_group, feed_url, entry_url):
                 logger.error(f"SQLite错误: {e}")
             finally:
                 conn.close()
-
-async def clean_old_entries(feed_group, max_age_days=30):
-    """仅清理SQLite旧记录"""
-    cutoff_time = time.time() - max_age_days * 24 * 3600
-    conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM rss_status WHERE feed_group = ? AND entry_timestamp < ?", 
-                         (feed_group, cutoff_time))
-            conn.commit()
-          #  logger.info(f"本地记录清理完成: {feed_group}")
-        except sqlite3.Error as e:
-            logger.error(f"本地清理失败: {e}")
-        finally:
-            conn.close()
 
 def get_entry_identifier(entry):
     # 优先使用guid
@@ -694,7 +671,7 @@ async def process_feed_common(session, feed_group, feed_url, status):
         return feed_data, new_entries
 
     except Exception as e:
-        logger.error(f"处理源异常 {feed_url}: {e}")
+      #  logger.error(f"处理源异常 {feed_url}")
         return None
 
 async def main():
@@ -720,39 +697,12 @@ async def main():
         logger.critical(f"‼️ 数据库初始化失败: {str(e)}")
         return
 
-    # ================== 3. 旧日志清理 ==================
-    try:
-        clean_old_logs()
-    #    logger.info("🗑️ 旧日志清理完成")
-    except Exception as e:
-        logger.error(f"⚠️ 日志清理失败: {str(e)}")
-
     # ================== 4. 主处理流程 ==================
     async with aiohttp.ClientSession() as session:
         try:
             # ===== 4.1 加载处理状态 =====
             status = await load_status()
      #       logger.info("📂 加载历史状态完成")
-
-            # ===== 4.2 清理旧记录 =====
-            retention_config = {
-                "RSS_FEEDS": 30,
-                "THIRD_RSS_FEEDS": 30,
-                "FOURTH_RSS_FEEDS": 7,
-                "FIFTH_RSS_FEEDS": 30,
-                "FIFTH_RSS_RSS_SAN": 7,
-                "YOUTUBE_RSSS_FEEDS": 600,
-                "FIFTH_RSS_YOUTUBE": 600
-            }
-            
-            for group in RSS_GROUPS:
-                try:
-                    await clean_old_entries(
-                        group["group_key"], 
-                        retention_config.get(group["group_key"], 30)
-                    )
-                except Exception as e:
-                    logger.error(f"⚠️ 清理旧记录失败 [{group['name']}]: {str(e)}")
 
             # ===== 4.3 创建处理任务 =====
             tasks = []
