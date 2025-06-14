@@ -25,10 +25,10 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MAX_MESSAGE_LENGTH = 3500
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true" # 
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true" 
 GEMINI_RETRY_DELAY = 5
 GEMINI_MAX_RETRIES = 3
-IMAP_TIMEOUT = 30  # IMAP连接超时时间(秒)
+IMAP_TIMEOUT = 60  # IMAP连接超时时间(秒)
 TELEGRAM_RATE_LIMIT = 1.0  # 每条消息之间的最小间隔(秒)
 # RUN_INTERVAL = 300  # 每5分钟运行一次(秒)
 
@@ -444,4 +444,6 @@ async def check_emails():
         logging.error(f"IMAP连接异常: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    asyncio.run(check_emails())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(check_emails())
+    loop.close()
