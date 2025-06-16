@@ -21,7 +21,7 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 #from md2tgmd import escape
-from cron import RSS_GROUPS
+from cc import RSS_GROUPS
 
 # 加载.env文件
 load_dotenv()
@@ -277,6 +277,8 @@ async def save_last_run_time_to_db(feed_group, last_run_time):
 
 # 函数 (保持不变，除非另有说明)
 def remove_html_tags(text):
+    text = re.sub(r'#([^#\s]+)#', r'\1', text)  # 匹配 #文字# → 文字
+ #   text = re.sub(r'#[^#\s]+#', '', text)  # 匹配 #文字# 并整体删除
     text = re.sub(r'#\w+', '', text)    # 移除 hashtags
     text = re.sub(r'@[^\s]+', '', text).strip()     # 移除 @提及
     text = re.sub(r'【\s*】', '', text)    # 移除 【】符号（含中间空格）
