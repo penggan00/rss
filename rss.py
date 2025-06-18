@@ -284,7 +284,7 @@ def remove_html_tags(text):
     text = re.sub(r'【\s*】', '', text)    # 移除 【】符号（含中间空格）
     # 新增：如果 # 前后都是空格（或不存在字符），就删除 #
     text = re.sub(r'(?<!\S)#(?!\S)', '', text)
-    text = re.sub(r'(?<!\S):(?!\S)', '', text)
+    text = re.sub(r'(?<!\S)：(?!\S)', '', text)
     # 仅替换 英文单词.英文单词 的情况（如 example.com → example．com）
  #   text = re.sub(
  #       r'\.([a-zA-Z])',  # 匹配 `.` 后接一个字母（不关心前面是什么）
