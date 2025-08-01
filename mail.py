@@ -7,14 +7,14 @@ import os
 import asyncio
 import re
 import chardet
-import logging
 from dotenv import load_dotenv
 from email.utils import parseaddr
-import google.generativeai as genai
-from typing import Optional
-from md2tgmd import escape
-import time
-from collections import deque
+from md2tgmd import escape  # 确保只在这里转义一次
+import logging
+from tencentcloud.common import credential
+from tencentcloud.common.profile.client_profile import ClientProfile
+from tencentcloud.common.profile.http_profile import HttpProfile
+from tencentcloud.tmt.v20180321 import tmt_client, models
 
 load_dotenv()
 
@@ -24,19 +24,81 @@ EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MAX_MESSAGE_LENGTH = 3500
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true" 
-GEMINI_RETRY_DELAY = 5
-GEMINI_MAX_RETRIES = 3
-IMAP_TIMEOUT = 60  # IMAP连接超时时间(秒)
-TELEGRAM_RATE_LIMIT = 1.0  # 每条消息之间的最小间隔(秒)
-# RUN_INTERVAL = 300  # 每5分钟运行一次(秒)
+MAX_MESSAGE_LENGTH = 3900  # 保留安全余量
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-# 配置logging
-logging.basicConfig(
-    level=logging.DEBUG if DEBUG_MODE else logging.WARNING,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# 腾讯翻译配置
+TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
+ENABLE_TRANSLATION = os.getenv("ENABLE_TRANSLATION", "true").lower() == "true"
+
+# 设置日志
+logging.basicConfig(level=logging.INFO if DEBUG_MODE else logging.WARNING)
+logger = logging.getLogger(__name__)
+
+def remove_html_tags(text):
+    """移除HTML标签"""
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', text)
+
+def translate_content_sync(text):
+    """同步翻译文本为中文"""
+    if not text or not ENABLE_TRANSLATION:
+        return text
+    
+    if not TENCENTCLOUD_SECRET_ID or not TENCENTCLOUD_SECRET_KEY:
+        logger.warning("缺少腾讯云翻译密钥，跳过翻译")
+        return text
+    
+    try:
+        cred = credential.Credential(TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY)
+        http_profile = HttpProfile(endpoint="tmt.tencentcloudapi.com")
+        client_profile = ClientProfile(httpProfile=http_profile)
+        client = tmt_client.TmtClient(cred, TENCENT_REGION, client_profile)
+        
+        # 确保文本长度在API限制内
+        MAX_TRANSLATE_LENGTH = 2000
+        if len(text) > MAX_TRANSLATE_LENGTH:
+            text = text[:MAX_TRANSLATE_LENGTH] + " [...]"
+        
+        req = models.TextTranslateRequest()
+        req.SourceText = remove_html_tags(text)
+        req.Source = "auto"
+        req.Target = "zh"
+        req.ProjectId = 0
+        
+        resp = client.TextTranslate(req)
+        return resp.TargetText
+    except Exception as e:
+        logger.error(f"翻译失败: {e}")
+        return text
+
+async def translate_content_async(text):
+    """异步翻译文本为中文"""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, translate_content_sync, text)
+    except Exception as e:
+        logger.error(f"异步翻译失败: {e}")
+        return text
+
+def is_mainly_chinese(text):
+    """检测文本是否主要是中文"""
+    if not text:
+        return True
+    
+    # 计算中文字符的比例
+    chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
+    chinese_chars = len(chinese_pattern.findall(text))
+    total_chars = len(text)
+    
+    # 避免除零错误
+    if total_chars == 0:
+        return True
+    
+    # 如果中文字符超过50%的比例，则认为主要是中文
+    return (chinese_chars / total_chars) > 0.1
 
 class EmailDecoder:
     @staticmethod
@@ -47,13 +109,13 @@ class EmailDecoder:
         try:
             decoded = decode_header(header)
             return ''.join([
-                t[0].decode(t[1] or 'utf-8', errors='ignore')
-                if isinstance(t[0], bytes)
+                t[0].decode(t[1] or 'utf-8', errors='ignore') 
+                if isinstance(t[0], bytes) 
                 else str(t[0])
                 for t in decoded
             ])
         except Exception as e:
-            logging.error(f"Header decode error: {e}", exc_info=True)
+            logger.error(f"Header decode error: {e}")
             return str(header)
 
     @staticmethod
@@ -65,8 +127,8 @@ class EmailDecoder:
                 return result['encoding']
             return 'gb18030' if b'\x80' in content[:100] else 'utf-8'
         except Exception as e:
-            logging.error(f"Encoding detection error: {e}", exc_info=True)
-            return 'utf-8'
+            logger.error(f"Encoding detection error: {e}")
+            return 'gb18030'
 
 class ContentProcessor:
     @staticmethod
@@ -74,38 +136,91 @@ class ContentProcessor:
         """统一换行符并合并空行"""
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         return re.sub(r'\n{3,}', '\n\n', text)
-
+    
+    @staticmethod
+    def collapse_empty_lines(text):
+        """清理连续空行，最多保留一个空行"""
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'^\n+', '', text)
+        text = re.sub(r'\n+$', '', text)
+        return text
+    
     @staticmethod
     def clean_text(text):
-        """文本清洗"""
+        """终极文本清洗"""
+        text = text.replace('|', '')
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+        text = ContentProcessor.normalize_newlines(text)
+        text = '\n'.join(line.strip() for line in text.split('\n'))
+        text = re.sub(r'<[^>]+>', '', text)
         return text.strip()
 
     @staticmethod
     def extract_urls(html):
-        """智能链接过滤"""
+        """智能链接过滤，排除图片和视频链接"""
         url_pattern = re.compile(
             r'(https?://[^\s>"\'{}|\\^`]+)',
             re.IGNORECASE
         )
         urls = []
         seen = set()
-        exclude_domains = {'w3.org', 'example.com'}
+        # 排除的无意义域名
+        exclude_domains = {'w3.org', 'schema.org', 'example.com', 'mozilla.org'}
+    
+        # 排除的图片和视频扩展名
+        media_extensions = {
+            # 图片类型
+            '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.raw',
+            # 视频类型
+            '.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm', '.wmv', '.mpeg', '.mpg',
+            '.3gp', '.m4v', '.ts'
+        }
+    
+        # 内联图片标识符
+        media_keywords = {
+            '/thumb/', '/image/', '/img/', '/cover/', '/poster/', '/gallery/', 
+            'picture', 'photo', 'snapshot', 'preview', 'thumbnail'
+        }
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
-            clean_url = raw_url.split('"')[0]
-
-            if not (10 < len(clean_url) <= 800):
+            clean_url = re.sub(r'[{}|\\)(<>`]', '', raw_url.split('"')[0])
+        
+            # 基本长度过滤
+            if not (10 < len(clean_url) <= 100):
                 continue
-
-            if any(d in clean_url for d in exclude_domains):
+                
+            # 排除特定域名
+            if any(domain in clean_url for domain in exclude_domains):
                 continue
-
+            
+            # 排除内联图片
+            if clean_url.startswith('data:image/'):
+                continue
+            
+            # 排除图片和视频扩展名
+            if any(ext in clean_url.lower() for ext in media_extensions):
+                continue
+            
+            # 排除包含媒体关键词的链接
+            lower_url = clean_url.lower()
+            if any(kw in lower_url for kw in media_keywords):
+                continue
+            
+            # 排除CDN和静态资源
+            if '/cdn/' in lower_url or '/static/' in lower_url or '/assets/' in lower_url:
+                continue
+            
+            # 确保URL有路径部分（非域名）
+            if clean_url.count('/') < 3:
+                continue
+            
+            # 检查是否重复
             if clean_url not in seen:
                 seen.add(clean_url)
-                urls.append((raw_url, clean_url, match.start(), match.end()))
-
-        return urls[:5]
+                urls.append(clean_url)
+            
+        return urls[:3]  # 最多返回8个链接
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -113,34 +228,32 @@ class ContentProcessor:
         try:
             encoding = EmailDecoder.detect_encoding(html_bytes)
             html = html_bytes.decode(encoding, errors='replace')
-
+            
             converter = html2text.HTML2Text()
             converter.body_width = 0
             converter.ignore_links = True
             converter.ignore_images = True
             converter.ignore_emphasis = True
-
+            
             text = converter.handle(html)
             text = ContentProcessor.clean_text(text)
-
+            
             urls = ContentProcessor.extract_urls(html)
-
-            offset = 0
-            for raw_url, clean_url, start, end in sorted(urls, key=lambda x: x[2]):
-                text = text[:start + offset] + clean_url + text[end + offset:]
-                offset += len(clean_url) - (end - start)
-
+            
             final_text = text
+            if urls:
+                final_text += "\n\n相关链接：\n" + "\n".join(urls)
+                
             return ContentProcessor.normalize_newlines(final_text)
-
+            
         except Exception as e:
-            logging.error(f"HTML处理失败: {e}", exc_info=True)
+            logger.error(f"HTML处理失败: {e}")
             return "⚠️ 内容解析异常"
 
 class EmailHandler:
     @staticmethod
-    def get_email_content(msg):
-        """统一内容获取"""
+    async def get_email_content(msg):
+        """统一内容获取，添加翻译功能"""
         try:
             content = ""
             for part in msg.walk():
@@ -148,7 +261,7 @@ class EmailHandler:
                     html_bytes = part.get_payload(decode=True)
                     content = ContentProcessor.convert_html_to_text(html_bytes)
                     break
-
+                    
             if not content:
                 for part in msg.walk():
                     if part.get_content_type() == 'text/plain':
@@ -157,44 +270,67 @@ class EmailHandler:
                         raw_text = text_bytes.decode(encoding, errors='replace')
                         content = ContentProcessor.clean_text(raw_text)
                         break
-
+                        
             if not content and any(part.get_content_maintype() == 'image' for part in msg.walk()):
                 content = "📨 图片内容（文本信息如下）\n" + "\n".join(
-                    f"{k}: {v}" for k, v in msg.items() if k.lower() in ['subject', 'from', 'date']
+                    f"{k}: {v}" for k,v in msg.items() if k.lower() in ['subject', 'from', 'date']
                 )
-
+            
+            # 检测是否需要翻译
+            if content and not is_mainly_chinese(content) and ENABLE_TRANSLATION:
+                if DEBUG_MODE:
+                    logger.info("检测到非中文内容，开始翻译...")
+                translated = await translate_content_async(content)
+                if translated and translated != content:
+                    content = "🇨🇳 以下内容已翻译:\n\n" + translated
+                    if DEBUG_MODE:
+                        logger.info("翻译完成")
+            
             return ContentProcessor.normalize_newlines(content or "⚠️ 无法解析内容")
-
+            
         except Exception as e:
-            logging.error(f"内容提取失败: {e}", exc_info=True)
+            logger.error(f"内容提取失败: {e}")
             return "⚠️ 内容提取异常"
-        
+
 class MessageFormatter:
     @staticmethod
-    def escape_markdown_v2(text):
-        """统一使用此函数进行MarkdownV2转义"""
-        chars_to_escape = r'_*[]()~`>#+-=|{}.!\\'
-        return re.sub(r'([{}])'.format(re.escape(chars_to_escape)), r'\\\1', text)
-    
-    @staticmethod
     def format_message(sender, subject, content):
-        """生成已转义的头部和未转义的正文"""
+        """返回分离的header和body"""
         realname, email_address = parseaddr(sender)
         
-        # 只在这里用escape_markdown_v2转义一次
-     #   escaped_realname = MessageFormatter.escape_markdown_v2(realname)
-     #   escaped_email = MessageFormatter.escape_markdown_v2(email_address)
-     #   escaped_subject = MessageFormatter.escape_markdown_v2(subject)
+        clean_realname = re.sub(r'[|]', '', realname).strip()
+        clean_email = email_address.strip()
+        clean_subject = re.sub(r'\s+', ' ', subject).replace('|', '')
         
-        header = (
-            f"**✉️ {realname}** "
-            f"`{email_address}`\n"
-            f"_{subject}_\n\n"
-        )
-        return header, content  # header已转义，content未转义
+        # 构建MarkdownV2格式的header部分
+        sender_line = "✉️ "
+        if clean_realname:
+            sender_line += f"**{clean_realname}**"  # 用户名加粗
+        if clean_email:
+            if clean_realname:
+                sender_line += " "  # 在用户名和邮箱之间加空格
+            sender_line += f"`{clean_email}`"  # 邮箱等宽
+            
+        # 主题单独一行
+        subject_line = f"_{clean_subject}_" if clean_subject else ""
+        
+        # 组合header部分
+        if sender_line and subject_line:
+            header = f"{sender_line}\n{subject_line}\n\n"
+        elif sender_line:
+            header = f"{sender_line}\n\n"
+        elif subject_line:
+            header = f"{subject_line}\n\n"
+        else:
+            header = ""
+            
+        formatted_content = ContentProcessor.normalize_newlines(content)
+        
+        return header, formatted_content
 
     @staticmethod
     def split_content(text, max_length):
+        """智能分割优化（返回分割后的块列表）"""
         chunks = []
         current_chunk = []
         current_length = 0
@@ -209,7 +345,7 @@ class MessageFormatter:
                     chunks.append('\n\n'.join(current_chunk))
                     current_chunk = []
                     current_length = 0
-
+                    
                     if len(para) > max_length:
                         start = 0
                         while start < len(para):
@@ -233,6 +369,7 @@ class MessageFormatter:
         if current_chunk:
             chunks.append('\n\n'.join(current_chunk))
 
+        # 最终长度校验
         final_chunks = []
         for chunk in chunks:
             while len(chunk) > max_length:
@@ -240,210 +377,98 @@ class MessageFormatter:
                 chunk = chunk[max_length:]
             if chunk:
                 final_chunks.append(chunk)
-
+        
         return final_chunks
-
-class GeminiAI:
-    def __init__(self, api_key):
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
-        
-        # 媒体URL正则（匹配http/https协议）
-        self._media_url_regex = re.compile(
-            r'((?:https?://)[^\s>"\'{}|\\^`]+\.(?:'
-            r'png|jpe?g|gif|bmp|webp|svg|ico|tiff?|'  # 图片格式
-            r'mp4|mov|avi|mkv|webm|flv|wmv|3gp|mpe?g|'  # 视频格式
-            r'mp3|wav|ogg|flac|aac|m4a|wma))',  # 音频格式
-            re.IGNORECASE
-        )
-        
-        # 通用URL正则（用于去重）
-        self._url_regex = re.compile(
-            r'(https?://[^\s>"\'{}|\\^`]+)', 
-            re.IGNORECASE
-        )
-
-    def generate_summary(self, text: str) -> Optional[str]:
-        """生成邮件正文摘要"""
-        prompt = """
-As a text formatting expert, process input STRICTLY by:
-1. URL Dedup (keep first occurrence)  
-2. Gen Link Desc:  
-   - Strictly prioritize the original descriptive text
-   - Use existing text OR 3-5 keywords  
-   - Ban symbols: _*[]()~>#+-=|{}.!  
-3. Convert to [Desc](URL)  
-4. Remove redundancy MINIMALLY:
-   - Please type this email to improve readability
-   - Preserve original phrasing style
-   - Keep transaction/billing records VERBATIM
-   - Preserve ALL technical terminology
-5. Output ONLY formatted Markdown  
-6. REQUIREMENTS:  
-   - Use CHINESE for all output  
-   - NO extra text/explanations
-"""  # 保持原有prompt不变
-        try:
-            processed_text = self._preprocess_text(text)
-            response = self.model.generate_content(
-                prompt + processed_text,
-                generation_config={
-                    "temperature": 0.3,
-                    "max_output_tokens": 6000
-                }
-            )
-            return response.text if response.text else None
-        except Exception as e:
-            logging.error(f"AI处理失败: {str(e)[:200]}...")  # 截断长错误信息
-            return None
-
-    def _preprocess_text(self, text: str) -> str:
-        # 1. 过滤媒体URL（保留原始协议）
-        text = self._media_url_regex.sub('', text)
-        
-        # 2. URL去重处理
-        seen_urls = set()
-        def replace_duplicate_urls(match):
-            url = match.group(1)
-            # 标准化比较（忽略协议和大小写）
-            normalized = url.lower().replace('http://', 'https://')
-            if normalized in seen_urls:
-                return ""  # 移除重复URL
-            seen_urls.add(normalized)
-            return url  # 保留原始URL
-            
-        return self._url_regex.sub(replace_duplicate_urls, text)
 
 class TelegramBot:
     def __init__(self):
         self.bot = telegram.Bot(TELEGRAM_TOKEN)
-        self.last_message_time = 0
-        self.message_queue = deque()
-
-    async def _rate_limited_send(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
-        """带速率限制的消息发送"""
-        now = time.time()
-        elapsed = now - self.last_message_time
-        if elapsed < TELEGRAM_RATE_LIMIT:
-            await asyncio.sleep(TELEGRAM_RATE_LIMIT - elapsed)
         
+    async def send_message(self, text):
+        """使用MarkdownV2格式发送，确保只转义一次"""
         try:
+            final_text = ContentProcessor.normalize_newlines(text)
+            final_text = re.sub(r'^\s*[-]{2,}\s*$', '', final_text, flags=re.MULTILINE)
+
+            # 应用Markdown转义（只在这里转义一次）
+            escaped_text = escape(final_text)
+            
+            cleaned_text = ContentProcessor.collapse_empty_lines(escaped_text)
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=escaped_text or raw_text,
-                parse_mode=parse_mode,
+                text=cleaned_text,
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=True
             )
-            self.last_message_time = time.time()
-            await asyncio.sleep(6)   #每发送一次延迟6秒
-        except telegram.error.BadRequest:
-            await self.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=raw_text,
-                parse_mode=None,
-                disable_web_page_preview=True
-            )
-            self.last_message_time = time.time()
-            await asyncio.sleep(6)  #每发送一次延迟6秒
+        except telegram.error.BadRequest as e:
+            logger.error(f"消息过长错误: {str(e)[:200]}")
         except Exception as e:
-            logging.error(f"消息发送失败: {e}")
+            logger.error(f"发送失败: {str(e)[:200]}")
 
-    async def send_message(self, raw_text, escaped_text=None, parse_mode='MarkdownV2'):
-        """将消息加入队列并处理"""
-        self.message_queue.append((raw_text, escaped_text, parse_mode))
-        await self._process_queue()
-
-    async def _process_queue(self):
-        """处理消息队列"""
-        while self.message_queue:
-            raw_text, escaped_text, parse_mode = self.message_queue.popleft()
-            await self._rate_limited_send(raw_text, escaped_text, parse_mode)
-
-def clean_ai_text(text: str) -> str:
-    if not text:
-        return text
-    
-    # 1. 移除所有|符号
-    text = text.replace('|', '')
-    
-    # 2. 清理无效的-行
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    # 匹配两种模式：
-    # ^-+$：行首至行尾全是减号
-    # -{3,}：包含3个及以上连续减号
-    pattern = re.compile(r'^-+$|.*-{3,}.*')
-    
-    for line in lines:
-        stripped_line = line.strip()
-        # 跳过匹配模式的行
-        if pattern.fullmatch(stripped_line):
-            continue
-        cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
-
-async def check_emails():
-    """检查邮件的核心逻辑"""
+async def main():
     bot = TelegramBot()
-    gemini_ai = GeminiAI(api_key=os.getenv("GEMINI_API_KEY")) if os.getenv("GEMINI_API_KEY") else None
-
+    
     try:
-        # 使用带超时的IMAP连接
-        with imaplib.IMAP4_SSL(IMAP_SERVER, timeout=IMAP_TIMEOUT) as mail:
+        with imaplib.IMAP4_SSL(IMAP_SERVER) as mail:
             mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             mail.select("INBOX")
-
+            
             _, nums = mail.search(None, "UNSEEN")
             if not nums[0]:
-                logging.info("无未读邮件")
+                logger.info("无未读邮件")
                 return
 
             for num in nums[0].split():
                 try:
-                    # 1. 获取原始邮件内容
                     _, data = mail.fetch(num, "(RFC822)")
                     msg = email.message_from_bytes(data[0][1])
+                    
                     sender = EmailDecoder.decode_email_header(msg.get("From"))
                     subject = EmailDecoder.decode_email_header(msg.get("Subject"))
-                    raw_content = EmailHandler.get_email_content(msg)
+                    content = await EmailHandler.get_email_content(msg)
 
-                    # 2. 生成未转义的头部和正文
-                    header, body = MessageFormatter.format_message(sender, subject, raw_content)
+                    header, body = MessageFormatter.format_message(sender, subject, content)
+                    header_len = len(header)
+                    max_body_len = MAX_MESSAGE_LENGTH - header_len
 
-                    # 3. AI处理并清理文本
-                    if gemini_ai:
-                        body = gemini_ai.generate_summary(body) or body
-                        body = clean_ai_text(body)
+                    # 处理header过长的情况
+                    if max_body_len <= 0:
+                        header = header[:MAX_MESSAGE_LENGTH-4] + "..."
+                        header_len = len(header)
+                        max_body_len = MAX_MESSAGE_LENGTH - header_len
 
-                    # 4. 准备发送内容
-                    escaped_body = escape(body)
-                    escaped_header = escape(header)
-                    safe_message = f"{escaped_header}{escaped_body}"  # header已转义，body刚转义
-                    raw_message = f"{header}{body}"  # 原始消息（用于fallback）
+                    # 第一步：分割带header的首个消息
+                    first_part_chunks = MessageFormatter.split_content(body, max_body_len)
+                    
+                    # 发送首个消息（如果有内容）
+                    if first_part_chunks:
+                        first_chunk = first_part_chunks[0]
+                        await bot.send_message(header + first_chunk)
+                        
+                        # 第二步：处理剩余内容（不带header）
+                        remaining_body = '\n\n'.join(
+                            para 
+                            for chunk in first_part_chunks[1:] 
+                            for para in chunk.split('\n\n')
+                        )
+                    else:
+                        remaining_body = body
 
-                    # 5. 分割内容
-                    chunks = MessageFormatter.split_content(safe_message, MAX_MESSAGE_LENGTH)
-                    raw_chunks = MessageFormatter.split_content(raw_message, MAX_MESSAGE_LENGTH)
-
-                    # 6. 发送消息
-                    for safe_chunk, raw_chunk in zip(chunks, raw_chunks):
-                        await bot.send_message(raw_chunk, safe_chunk)
-
-                    # 7. 标记为已读
+                    # 第三步：分割剩余内容（使用完整长度限制）
+                    subsequent_chunks = MessageFormatter.split_content(remaining_body, MAX_MESSAGE_LENGTH)
+                    
+                    # 发送后续消息
+                    for chunk in subsequent_chunks:
+                        await bot.send_message(chunk)
+                        
                     mail.store(num, "+FLAGS", "\\Seen")
-
+                    
                 except Exception as e:
-                    logging.error(f"邮件处理异常: {e}", exc_info=True)
+                    logger.error(f"处理异常: {str(e)[:200]}")
                     continue
 
-    except imaplib.IMAP4.abort as e:
-        logging.error(f"IMAP连接超时: {e}", exc_info=True)
     except Exception as e:
-        logging.error(f"IMAP连接异常: {e}", exc_info=True)
+        logger.error(f"连接异常: {str(e)[:200]}")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(check_emails())
-    loop.close()
+    asyncio.run(main())

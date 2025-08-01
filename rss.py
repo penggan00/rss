@@ -366,21 +366,55 @@ async def fetch_feed(session, feed_url):
      #   logging.error(f"抓取失败 {feed_url}: {e}")
         raise
 
-# 修改 auto_translate_text 函数
+# 修改翻译函数为异步安全版本
+async def translate_with_credentials(secret_id, secret_key, text):
+    """使用线程池执行同步翻译调用"""
+    loop = asyncio.get_running_loop()
+    
+    # 先进行字节级安全截断
+    text_bytes = text.encode('utf-8')
+    if len(text_bytes) > 2000:
+        # 按字节截断并安全解码
+        safe_bytes = text_bytes[:2000]
+        # 找到最后一个完整字符的边界
+        while safe_bytes[-1] & 0xC0 == 0x80:  # UTF-8连续字节
+            safe_bytes = safe_bytes[:-1]
+        text = safe_bytes.decode('utf-8', errors='ignore')
+        logger.warning(f"文本截断至 {len(text)} 字符 ({len(safe_bytes)} 字节)")
+    
+    try:
+        # 在单独线程中执行同步SDK调用
+        return await loop.run_in_executor(
+            None, 
+            lambda: _sync_translate(secret_id, secret_key, text)
+        )
+    except Exception as e:
+        logger.error(f"翻译执行失败: {type(e).__name__} - {str(e)}")
+        raise  # 重新抛出以供重试
+
+def _sync_translate(secret_id, secret_key, text):
+    """实际的同步翻译逻辑"""
+    cred = credential.Credential(secret_id, secret_key)
+    clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
+    client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
+    
+    req = models.TextTranslateRequest()
+    req.SourceText = remove_html_tags(text)
+    req.Source = "auto"
+    req.Target = "zh"
+    req.ProjectId = 0
+    
+    return client.TextTranslate(req).TargetText
+
+# 优化自动翻译函数
 @retry(
-    stop=stop_after_attempt(1),
-    wait=wait_exponential(multiplier=1, min=2, max=5),
+    stop=stop_after_attempt(3),  # 增加到3次重试
+    wait=wait_exponential(multiplier=1, min=2, max=10),
 )
 async def auto_translate_text(text):
-    """翻译文本，失败时返回清理后的原始文本"""
+    """更健壮的翻译处理流程"""
     try:
-        # 文本长度处理
-        max_length = 2000
-        if len(text) > max_length:
-            logger.warning(f"⚠️ 文本过长({len(text)}字符)，截断处理")
-            text = text[:max_length]
-        
-        # 第一组密钥尝试
+        # 优先使用主密钥
         try:
             return await translate_with_credentials(
                 TENCENTCLOUD_SECRET_ID, 
@@ -388,9 +422,9 @@ async def auto_translate_text(text):
                 text
             )
         except Exception as first_error:
-            # 第一组失败且存在备用密钥时尝试第二组
+            # 主密钥失败时尝试备用密钥
             if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-            #    logger.warning("⚠️ 主翻译密钥失败，尝试备用密钥...")
+                logger.warning("主翻译密钥失败，尝试备用密钥...")
                 try:
                     return await translate_with_credentials(
                         TENCENT_SECRET_ID,
@@ -398,30 +432,15 @@ async def auto_translate_text(text):
                         text
                     )
                 except Exception as second_error:
-                    logger.error(f"备用密钥翻译失败: {second_error}")
+                    logger.error(f"备用密钥翻译失败: {type(second_error).__name__}")
+                    raise second_error  # 抛出最后异常
+            raise first_error  # 没有备用密钥时抛出原始异常
             
-            # 所有尝试失败时返回清理后的原始文本
-            logger.error(f"所有翻译尝试均失败，返回原始文本")
-            return remove_html_tags(text)
-            
-    except Exception as e:
-        logging.error(f"翻译过程异常: {e}")
-        return remove_html_tags(text)  # 确保返回可用的文本
-
-# 新增辅助翻译函数
-async def translate_with_credentials(secret_id, secret_key, text):
-    """使用指定凭证进行翻译"""
-    cred = credential.Credential(secret_id, secret_key)
-    clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
-    client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
-
-    req = models.TextTranslateRequest()
-    req.SourceText = remove_html_tags(text)  # 确保文本已清理
-    req.Source = "auto"
-    req.Target = "zh"
-    req.ProjectId = 0
-
-    return client.TextTranslate(req).TargetText
+    except Exception as final_error:
+        logger.error(f"所有翻译尝试均失败: {type(final_error).__name__}")
+        # 返回安全的处理结果：清理HTML + Markdown转义
+        cleaned = remove_html_tags(text)
+        return escape_markdown_v2(cleaned)
 
 async def load_status():
     """仅从SQLite加载状态"""
