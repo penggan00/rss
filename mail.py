@@ -9,7 +9,7 @@ import re
 import chardet
 from dotenv import load_dotenv
 from email.utils import parseaddr
-from md2tgmd import escape  # 确保只在这里转义一次
+from md2tgmd import escape
 import logging
 from tencentcloud.common import credential
 from tencentcloud.common.profile.client_profile import ClientProfile
@@ -24,7 +24,7 @@ EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MAX_MESSAGE_LENGTH = 3900  # 保留安全余量
+MAX_MESSAGE_LENGTH = 3800  # 保留安全余量
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 # 腾讯翻译配置
@@ -97,7 +97,7 @@ def is_mainly_chinese(text):
     if total_chars == 0:
         return True
     
-    # 如果中文字符超过50%的比例，则认为主要是中文
+    # 如果中文字符超过10%的比例，则无需翻译
     return (chinese_chars / total_chars) > 0.1
 
 class EmailDecoder:
@@ -137,6 +137,7 @@ class ContentProcessor:
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         return re.sub(r'\n{3,}', '\n\n', text)
     
+    # 转义后清理连续空行，最多保留一个空行
     @staticmethod
     def collapse_empty_lines(text):
         """清理连续空行，最多保留一个空行"""
@@ -282,7 +283,7 @@ class EmailHandler:
                     logger.info("检测到非中文内容，开始翻译...")
                 translated = await translate_content_async(content)
                 if translated and translated != content:
-                    content = "🇨🇳 以下内容已翻译:\n\n" + translated
+                    content = "以下内容已翻译:\n\n" + translated
                     if DEBUG_MODE:
                         logger.info("翻译完成")
             
