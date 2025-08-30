@@ -26,7 +26,7 @@ python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
 # python3 rss.py
-python3 mail.py
+python3 usd.py
 
 pip install --supafunc
 pip install --upgrade pip
