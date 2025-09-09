@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 #from md2tgmd import escape
 from cc import RSS_GROUPS
-
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 # 加载.env文件
 load_dotenv()
 
@@ -51,7 +51,9 @@ TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
 TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID")
 TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
 semaphore = asyncio.Semaphore(2)  # 并发控制，限制同时最多2个请求
-
+# 配置备用域名（最多支持任意数量）
+BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS")
+BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
 
 # 新增通用处理函数
 async def process_group(session, group_config, global_status):
@@ -340,6 +342,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
      #   logging.error(f"消息发送失败: {e}")
         raise
 
+# 修改fetch_feed函数，添加域名切换逻辑
 @retry(
     stop=stop_after_attempt(1),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -347,24 +350,35 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
 )
 async def fetch_feed(session, feed_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
-    try:
-        async with semaphore:
-            async with session.get(feed_url, headers=headers, timeout=30) as response:
-                # 统一处理临时性错误（503/403）
-                if response.status in (503, 403,404,429):
-                #    logger.warning(f"RSS源暂时不可用（{response.status}）: {feed_url}")
-                    return None  # 跳过当前源，下次运行会重试
-                response.raise_for_status()
-                return parse(await response.read())
-    except aiohttp.ClientResponseError as e:
-        if e.status in (503, 403,404,429):
-         #   logger.warning(f"RSS源暂时不可用{feed_url}")
-            return None
-    #    logging.error(f"HTTP 错误 {e.status} 抓取失败 {feed_url}: {e}")
-        raise
-    except Exception as e:
-     #   logging.error(f"抓取失败 {feed_url}: {e}")
-        raise
+    
+    # 域名切换逻辑
+    domains_to_try = [urlparse(feed_url).netloc]  # 原始域名
+    if domains_to_try[0] == "rsshub.app":
+        domains_to_try.extend(BACKUP_DOMAINS)  # 添加备用域名
+    
+    for domain in domains_to_try:
+        modified_url = feed_url.replace(urlparse(feed_url).netloc, domain)
+        
+        try:
+            async with semaphore:
+                async with session.get(modified_url, headers=headers, timeout=30) as response:
+                    # 统一处理临时性错误（503/403）
+                    if response.status in (503, 403, 404, 429):
+                 #       logger.warning(f"RSS源暂时不可用（{response.status}）: {modified_url}")
+                        continue  # 尝试下一个域名
+                    response.raise_for_status()
+                    return parse(await response.read())
+        except aiohttp.ClientResponseError as e:
+            if e.status in (503, 403, 404, 429):
+         #       logger.warning(f"RSS源暂时不可用: {modified_url}")
+                continue  # 尝试下一个域名
+       #     logger.error(f"HTTP错误 {e.status} 抓取失败 {modified_url}: {e}")
+#        except Exception as e:
+      #      logger.error(f"抓取失败 {modified_url}: {e}")
+    
+    # 所有域名都失败
+    logger.error(f"所有备用域名尝试失败: {feed_url}")
+    return None
 
 # 修改翻译函数为异步安全版本
 async def translate_with_credentials(secret_id, secret_key, text):
@@ -394,21 +408,37 @@ async def translate_with_credentials(secret_id, secret_key, text):
 
 def _sync_translate(secret_id, secret_key, text):
     """实际的同步翻译逻辑"""
-    cred = credential.Credential(secret_id, secret_key)
-    clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
-    client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
+    try:
+        cred = credential.Credential(secret_id, secret_key)
+        clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
+        client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
+        
+        req = models.TextTranslateRequest()
+        req.SourceText = remove_html_tags(text)
+        req.Source = "auto"
+        req.Target = "zh"
+        req.ProjectId = 0
+        
+        return client.TextTranslate(req).TargetText
     
-    req = models.TextTranslateRequest()
-    req.SourceText = remove_html_tags(text)
-    req.Source = "auto"
-    req.Target = "zh"
-    req.ProjectId = 0
+    except TencentCloudSDKException as e:
+        # 记录详细的错误信息
+        error_details = {
+            "code": e.code,
+            "message": e.message,
+            "request_id": e.request_id,
+            "region": TENCENT_REGION
+        }
+        logger.error(f"腾讯云API错误详情: {error_details}")
+        raise
     
-    return client.TextTranslate(req).TargetText
+    except Exception as e:
+        logger.error(f"翻译过程中发生未知错误: {str(e)}")
+        raise
 
 # 优化自动翻译函数
 @retry(
-    stop=stop_after_attempt(3),  # 增加到3次重试
+    stop=stop_after_attempt(2),  # 增加到3次重试
     wait=wait_exponential(multiplier=1, min=2, max=10),
 )
 async def auto_translate_text(text):
@@ -421,20 +451,32 @@ async def auto_translate_text(text):
                 TENCENTCLOUD_SECRET_KEY,
                 text
             )
-        except Exception as first_error:
-            # 主密钥失败时尝试备用密钥
-            if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-                logger.warning("主翻译密钥失败，尝试备用密钥...")
-                try:
-                    return await translate_with_credentials(
-                        TENCENT_SECRET_ID,
-                        TENCENT_SECRET_KEY,
-                        text
-                    )
-                except Exception as second_error:
-                    logger.error(f"备用密钥翻译失败: {type(second_error).__name__}")
-                    raise second_error  # 抛出最后异常
-            raise first_error  # 没有备用密钥时抛出原始异常
+        except TencentCloudSDKException as e:
+            logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
+            raise
+        except Exception as e:
+            logger.error(f"主密钥翻译未知错误: {type(e).__name__} - {str(e)}")
+            raise
+        
+    except Exception as first_error:
+        # 主密钥失败时尝试备用密钥
+        if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
+            logger.warning("主翻译密钥失败，尝试备用密钥...")
+            try:
+                return await translate_with_credentials(
+                    TENCENT_SECRET_ID,
+                    TENCENT_SECRET_KEY,
+                    text
+                )
+            except TencentCloudSDKException as e:
+                logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
+                raise
+            except Exception as e:
+                logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
+                raise
+        else:
+            logger.error("主翻译密钥失败，且未配置备用密钥")
+            raise first_error
             
     except Exception as final_error:
         logger.error(f"所有翻译尝试均失败: {type(final_error).__name__}")
