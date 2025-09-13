@@ -22,8 +22,7 @@ from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-#from md2tgmd import escape
-from cc import RSS_GROUPS
+from md2tgmd import escape
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 
 # 加载.env文件
@@ -57,19 +56,296 @@ semaphore = asyncio.Semaphore(2)  # 并发控制，限制同时最多2个请求
 # 配置备用域名（最多支持任意数量）
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
+# 定义时间间隔 (秒)  600秒 = 10分钟   1200秒 = 20分钟   1800秒 = 30分钟  3600秒 = 1小时   7200秒 = 2小时   10800秒 = 3小时
+
+RSS_GROUPS = [
+    # ================== 国际新闻组 ==================False: 关闭 / True: 开启
+    {
+        "name": "国际新闻",
+        "urls": [
+            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+            'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
+       #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
+         #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
+        #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
+        #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
+           'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
+        #    'https://www.ft.com/?format=rss',                 # 金融时报
+       #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
+       #     'http://rss.cnn.com/rss/cnn_topstories.rss',   # cnn
+       #     'https://www.theguardian.com/world/rss',     # 卫报
+      #      'https://www.theverge.com/rss/index.xml',   # The Verge:
+        ],
+        "group_key": "RSS_FEEDS",
+        "interval": 3300,      # 55分钟 
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
+        "processor": {
+            "translate": True,       #翻译开
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,         # 禁止预览
+            "show_count": False        # ✅新增
+        }
+    },
+
+    # ================== 国际新闻中文组 ==================False: 关闭 / True: 开启
+    {
+        "name": "国际新闻中文",
+        "urls": [
+            'https://www.ftchinese.com/rss/news',   # ft中文网
+        ],
+        "group_key": "RSS_FEEDS_INTERNATIONAL",
+        "interval": 9900,      # 3小时
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
+        "processor": {
+            "translate": False,       #翻译关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,         # 禁止预览
+            "show_count": False        # ✅新增
+        }
+    },
+
+    # ================== 快讯组 ==================
+    {
+        "name": "快讯",
+        "urls": [
+    #        'https://rsshub.app/10jqka/realtimenews',
+            'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
+        ],
+        "group_key": "FOURTH_RSS_FEEDS",
+        "interval": 700,       # 11分钟 
+        "history_days": 5,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_LINDA"),  
+        "processor": {
+            "translate": False,     #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,            # 预览
+            "show_count": False          #计数
+        }
+    },
+
+    # ================== 社交媒体组+翻译预览 ==================
+    {
+        "name": "社交媒体",
+        "urls": [
+        #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
+         #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
+        #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
+        ],
+        "group_key": "FIFTH_RSS_FEEDS",
+        "interval": 35111,    # 1小时 56分钟
+        "history_days": 300,     # 新增，保留30天
+        "bot_token": os.getenv("YOUTUBE_RSS"), 
+        "processor": {
+            "translate": True,
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": True,        # 预览
+            "show_count": False     #计数
+        }
+    },
+    # ================== 新浪博客 ==================
+    {
+        "name": "社交媒体",
+        "urls": [
+            'https://rsshub.app/weibo/user/3194547262',  # 江西高速
+         #   'https://rsshub.app/weibo/user/1699432410',  # 新华社
+        #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
+            'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
+            'https://rsshub.app/weibo/user/1891035762',  # 交警
+       #     'https://rsshub.app/weibo/user/3917937138',  # 发布
+        #    'https://rsshub.app/weibo/user/3213094623',  # 邮政
+        #    'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
+
+        
+        ],
+        "group_key": "FIFTH_RSSSA_FEEDS",
+        "interval": 3500,    # 1小时 
+        "history_days": 300,     # 新增，保留30天
+        "bot_token": os.getenv("RRSS_LINDA"), 
+        "processor": {
+            "translate": False,
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,        # 预览
+            "show_count": False     #计数
+        }
+    },
+
+    # ================== 技术论坛组 ==================
+    {
+        "name": "技术论坛",
+        "urls": [
+            'https://rss.nodeseek.com',  # Nodeseek
+        ],
+        "group_key": "FIFTH_RSS_RSS_SAN",
+        "interval": 240,       # 4分钟 
+        "history_days": 3,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_SAN"),
+        "processor": {
+            "translate": False,                  #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "filter": {
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "docker", "折"]  # 本组关键词列表
+            },
+            "preview": False,               # 预览
+            "show_count": False               #计数
+        }
+    },
+    {
+        "name": "社交媒体",
+        "urls": [
+        #    'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+       #     'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
+     
+        ],
+        "group_key": "FIFTHHHH_RSSS_FEEDS",
+        "interval": 12000,      # 1小时56分钟
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_SAN"), 
+        "processor": {
+            "translate": True,
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,        # 预览
+            "show_count": False     #计数
+        }
+    },
+    # ================== YouTube频道组 ==================
+    {
+        "name": "YouTube频道",
+        "urls": [
+         #   'https://blog.090227.xyz/atom.xml',
+         #   'https://www.freedidi.com/feed',
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
+                    # ... 其他YouTube频道（共18个）
+        ],
+        "group_key": "YOUTUBE_RSSS_FEEDS",
+        "interval": 7211,      # 55分钟
+        "history_days": 360,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_TOKEN"),
+        "processor": {
+            "translate": False,
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "preview": True,                # 预览
+            "show_count": False               #计数
+        }
+    },
+
+    # ================== 中文YouTube组 ==================
+    {
+        "name": "中文YouTube",
+        "urls": [
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCF-Q1Zwyn9681F7du8DMAWg', # 謝宗桓-老謝來了
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCNiJNzSkfumLB7bYtXcIEmg', # 真的很博通
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCN0eCImZY6_OiJbo8cy5bLw', # 屈機TV
+         #   'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
+       #     'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
+          #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
+        # 影视
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCi2GvcaxZCN-61a0co8Smnw', # 館長
+   # bilibili
+       #     'https://rsshub.app/bilibili/user/video/271034954', #无限海子
+        #    'https://rsshub.app/bilibili/user/video/10720688', #乌客wuke
+         #   'https://rsshub.app/bilibili/user/video/33683045', #张召忠
+        #    'https://rsshub.app/bilibili/user/video/9458053', #李永乐
+         #   'https://rsshub.app/bilibili/user/video/456664753', #央视新闻
+          #  'https://rsshub.app/bilibili/user/video/95832115', #汐朵曼
+          #  'https://rsshub.app/bilibili/user/video/3546741104183937', #油管精選字幕组
+          #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
+
+            
+            
+        ],
+        "group_key": "FIFTH_RSS_YOUTUBE",
+        "interval": 35111,     # 10小时
+        "history_days": 360,     # 新增，保留30天
+        "bot_token": os.getenv("YOUTUBE_RSS"),
+        "processor": {
+        "translate": False,                    #翻译开关
+        "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+    #   "template": "*{subject}*\n🔗 {url}",
+        "template": "*{subject}*\n[more]({url})",
+        "preview": True,                       # 预览
+        "show_count": False                    #计数
+    }
+    },
+
+    # ================== 中文媒体组 ==================
+    {
+        "name": "中文媒体", 
+        "urls": [
+            'https://rsshub.app/guancha/headline',
+            'https://rsshub.app/guancha',
+            'https://rsshub.app/zaobao/znews/china',
+        ],
+        "group_key": "THIRD_RSS_FEEDS",
+        "interval": 7000,      # 1小时56分钟
+        "history_days": 30,     # 新增，保留30天
+        "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
+        "processor": {
+            "translate": False,                        #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,                              # 预览
+            "show_count": False                       #计数
+        }
+    }
+]
 
 # 新增通用处理函数
 async def process_group(session, group_config, global_status):
-    """统一处理RSS组（优化版：确保发送成功后才保存状态）"""
+    """统一处理RSS组（确保发送成功后才保存状态，所有状态都用canonical_url）"""
     group_name = group_config["name"]
     group_key = group_config["group_key"]
     processor = group_config["processor"]
     bot_token = group_config["bot_token"]
-    
-    try:
-        # ========== 0. 初始延迟 ==========
-        await asyncio.sleep(1)  # 组间初始延迟1秒
 
+    try:
         # ========== 1. 检查时间间隔 ==========
         last_run = await load_last_run_time_from_db(group_key)
         now = datetime.now(pytz.utc).timestamp()
@@ -82,23 +358,23 @@ async def process_group(session, group_config, global_status):
         for index, feed_url in enumerate(group_config["urls"]):
             try:
                 # ===== 2.0 源间延迟 =====
-                if index > 0:  # 第一个源不需要延迟
+                if index > 0:
                     await asyncio.sleep(1)  # 源间延迟1秒
 
                 # ------ 2.1 获取Feed数据 ------
-                feed_data = await fetch_feed(session, feed_url)
+                feed_data, canonical_url = await fetch_feed(session, feed_url)
                 if not feed_data or not feed_data.entries:
                     continue
+                processed_ids = global_status.get(canonical_url, set())
 
                 # ------ 2.2 加载处理状态 & 收集新条目 ------
-                processed_ids = global_status.get(feed_url, set())
                 new_entries = []
-                pending_entry_ids = []  # 待保存的条目ID（发送成功后才保存）
-                seen_in_batch = set()  # 临时存储当前批次的ID，避免重复
+                pending_entry_ids = []
+                seen_in_batch = set()
 
                 for entry in feed_data.entries:
                     entry_id = get_entry_identifier(entry)
-                    if entry_id in processed_ids or entry_id in seen_in_batch:  # 新增批次内去重
+                    if entry_id in processed_ids or entry_id in seen_in_batch:
                         continue
                     seen_in_batch.add(entry_id)
 
@@ -108,51 +384,42 @@ async def process_group(session, group_config, global_status):
                         raw_title = remove_html_tags(entry.title or "")
                         keywords = filter_config.get("keywords", [])
                         match = any(kw.lower() in raw_title.lower() for kw in keywords)
-                        # 根据模式判断是否跳过
                         if filter_config.get("mode", "allow") == "allow":
-                            if not match:  # 允许模式：不包含关键词则跳过
+                            if not match:
                                 continue
-                        else:  # block模式
-                            if match:     # 包含关键词则跳过
+                        else:
+                            if match:
                                 continue
 
                     new_entries.append(entry)
-                    pending_entry_ids.append(entry_id)  # 暂存，不立即保存
+                    pending_entry_ids.append(entry_id)
 
                 # ===== 2.3 发送消息（成功后保存状态） =====
                 if new_entries:
-                    await asyncio.sleep(1)  # 发送前延迟1秒
                     feed_message = await generate_group_message(feed_data, new_entries, processor)
                     if feed_message:
                         try:
-                            # 尝试发送消息
                             await send_single_message(
                                 bot,
                                 TELEGRAM_CHAT_ID[0],
                                 feed_message,
                                 disable_web_page_preview=not processor.get("preview", True)
                             )
-
-                            # 发送成功，保存所有条目状态
                             for entry_id in pending_entry_ids:
-                                await save_single_status(group_key, feed_url, entry_id)
+                                await save_single_status(group_key, canonical_url, entry_id)
                                 processed_ids.add(entry_id)
 
-                            # 更新内存状态
-                            global_status[feed_url] = processed_ids
+                            global_status[canonical_url] = processed_ids
 
                         except Exception as send_error:
                             logger.error(f"❌ 发送消息失败 [{feed_url}]")
-                            raise  # 抛出异常，阻止后续保存操作
+                            raise
 
             except Exception as e:
                 logger.error(f"❌ 处理失败 [{feed_url}]")
 
         # ========== 3. 保存最后运行时间 ==========
         await save_last_run_time_to_db(group_key, now)
-
-        # ========== 4. 最终延迟 ==========
-        await asyncio.sleep(1)
     except Exception as e:
         logger.critical(f"‼️ 处理组失败 [{group_key}]")
 
@@ -161,7 +428,7 @@ async def generate_group_message(feed_data, entries, processor):
     try:
         # ===== 1. 基础信息处理 =====
         source_name = feed_data.feed.get('title', "未知来源")
-        safe_source = escape_markdown_v2(source_name)
+        safe_source = escape(source_name)
         
         # ===== 新增：标题处理 =====
         header = ""
@@ -178,11 +445,11 @@ async def generate_group_message(feed_data, entries, processor):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
-            safe_subject = escape_markdown_v2(translated_subject)
+            safe_subject = escape(translated_subject)
 
             # -- 2.2 链接处理 --
             raw_url = entry.link
-            safe_url = escape_markdown_v2(raw_url)
+            safe_url = escape(raw_url)
 
             # -- 2.3 构建消息 --
             message = processor["template"].format(
@@ -288,10 +555,6 @@ def remove_html_tags(text):
     text = re.sub(r'(?<!\S)：(?!\S)', '', text)
     return text
 
-def escape_markdown_v2(text):
-    """统一使用此函数进行MarkdownV2转义"""
-    chars_to_escape = r'_*[]()~`>#+-=|{}.!\\'
-    return re.sub(r'([{}])'.format(re.escape(chars_to_escape)), r'\\\1', text)
 
 @retry(
     stop=stop_after_attempt(1),
@@ -340,17 +603,22 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
 async def fetch_feed(session, feed_url):
+    """
+    获取RSS Feed数据，只有rsshub.app主域名才用备用域名，否则只用原始域名。
+    返回: feed_data, canonical_url
+    """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
     parsed = urlparse(feed_url)
-    # 判断rsshub，严格只用备用域名
-    if parsed.netloc.endswith("rsshub"):
-        if not BACKUP_DOMAINS:
-            logger.error(f"rsshub源但未配置BACKUP_DOMAINS: {feed_url}")
-            return None
-        domains_to_try = BACKUP_DOMAINS  # 只用备用域名
+    is_rsshub = parsed.netloc.endswith("rsshub.app")
+
+    if is_rsshub:
+        try_domains = BACKUP_DOMAINS + ["rsshub.app"]
+        canonical_url = feed_url.replace(parsed.netloc, "rsshub.app")
     else:
-        domains_to_try = [parsed.netloc]  # 其他feed正常
-    for domain in domains_to_try:
+        try_domains = [parsed.netloc]
+        canonical_url = feed_url
+
+    for domain in try_domains:
         modified_url = feed_url.replace(parsed.netloc, domain)
         try:
             async with semaphore:
@@ -358,15 +626,15 @@ async def fetch_feed(session, feed_url):
                     if response.status in (503, 403, 404, 429):
                         continue  # 尝试下一个域名
                     response.raise_for_status()
-                    return parse(await response.read())
+                    return parse(await response.read()), canonical_url
         except aiohttp.ClientResponseError as e:
             if e.status in (503, 403, 404, 429):
                 continue
         except Exception as e:
             logger.error(f"请求失败: {modified_url}, 错误: {e}")
             continue
-    logger.error(f"所有备用域名尝试失败: {feed_url}")
-    return None
+    logger.error(f"所有域名尝试失败: {feed_url}")
+    return None, canonical_url
 
 async def translate_with_credentials(secret_id, secret_key, text):
     loop = asyncio.get_running_loop()
@@ -449,7 +717,7 @@ async def auto_translate_text(text):
     except Exception as final_error:
         logger.error(f"所有翻译尝试均失败: {type(final_error).__name__}")
         cleaned = remove_html_tags(text)
-        return escape_markdown_v2(cleaned)
+        return escape(cleaned)
 
 async def load_status():
     status = {}
