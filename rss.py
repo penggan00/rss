@@ -33,7 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # 创建锁文件
 LOCK_FILE = BASE_DIR / "rss.lock"
 # SQLite 数据库初始化
-DATABASE_FILE = BASE_DIR / "rss_status.db"
+DATABASE_FILE = BASE_DIR / "rss.db"
 
 # 增强日志配置
 logging.basicConfig(
@@ -77,7 +77,7 @@ RSS_GROUPS = [
       #      'https://www.theverge.com/rss/index.xml',   # The Verge:
         ],
         "group_key": "RSS_FEEDS",
-        "interval": 3300,      # 55分钟 
+        "interval": 3330,      # 55分钟 
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -96,7 +96,7 @@ RSS_GROUPS = [
             'https://www.ftchinese.com/rss/news',   # ft中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
-        "interval": 9900,      # 3小时
+        "interval": 9990,      # 3小时
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -118,7 +118,7 @@ RSS_GROUPS = [
             
         ],
         "group_key": "FOURTH_RSS_FEEDS",
-        "interval": 700,       # 11分钟 
+        "interval": 660,       # 11分钟 
         "history_days": 5,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA"),  
         "processor": {
@@ -140,7 +140,7 @@ RSS_GROUPS = [
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
         ],
         "group_key": "FIFTH_RSS_FEEDS",
-        "interval": 35111,    # 1小时 56分钟
+        "interval": 16660,    # 5小时 56分钟
         "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"), 
         "processor": {
@@ -168,8 +168,8 @@ RSS_GROUPS = [
         
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
-        "interval": 3500,    # 1小时 
-        "history_days": 300,     # 新增，保留30天
+        "interval": 6660,    # 2小时 
+        "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RRSS_LINDA"), 
         "processor": {
             "translate": False,
@@ -188,7 +188,7 @@ RSS_GROUPS = [
             'https://rss.nodeseek.com',  # Nodeseek
         ],
         "group_key": "FIFTH_RSS_RSS_SAN",
-        "interval": 240,       # 4分钟 
+        "interval": 33,       # 1分钟 
         "history_days": 3,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
@@ -196,7 +196,7 @@ RSS_GROUPS = [
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "docker", "折"]  # 本组关键词列表
             },
@@ -212,7 +212,7 @@ RSS_GROUPS = [
      
         ],
         "group_key": "FIFTHHHH_RSSS_FEEDS",
-        "interval": 12000,      # 1小时56分钟
+        "interval": 10800,      # 1小时56分钟
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"), 
         "processor": {
@@ -252,7 +252,7 @@ RSS_GROUPS = [
                     # ... 其他YouTube频道（共18个）
         ],
         "group_key": "YOUTUBE_RSSS_FEEDS",
-        "interval": 7211,      # 55分钟
+        "interval": 3330,      # 55分钟
         "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TOKEN"),
         "processor": {
@@ -302,7 +302,7 @@ RSS_GROUPS = [
             
         ],
         "group_key": "FIFTH_RSS_YOUTUBE",
-        "interval": 35111,     # 10小时
+        "interval": 33330,     # 10小时
         "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"),
         "processor": {
@@ -324,7 +324,7 @@ RSS_GROUPS = [
             'https://rsshub.app/zaobao/znews/china',
         ],
         "group_key": "THIRD_RSS_FEEDS",
-        "interval": 7000,      # 1小时56分钟
+        "interval": 6660,      # 1小时56分钟
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
         "processor": {
@@ -609,7 +609,7 @@ async def fetch_feed(session, feed_url):
     """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
     parsed = urlparse(feed_url)
-    is_rsshub = parsed.netloc.endswith("rsshub.app")
+    is_rsshub = parsed.netloc == "rsshub.app"  # 只允许主域名使用备用域名
 
     if is_rsshub:
         try_domains = BACKUP_DOMAINS + ["rsshub.app"]
@@ -617,7 +617,7 @@ async def fetch_feed(session, feed_url):
     else:
         try_domains = [parsed.netloc]
         canonical_url = feed_url
-
+        
     for domain in try_domains:
         modified_url = feed_url.replace(parsed.netloc, domain)
         try:

@@ -6,8 +6,8 @@ if pgrep -f "mail.py" > /dev/null; then
     # 终止mail.py进程
     pkill -f "mail.py"
 fi
-# 等待1秒确保进程完全终止
-sleep 1
+# 等待2秒确保进程完全终止
+sleep 2
 # 启动mail.py脚本
 source ~/rss/rss_venv/bin/activate
 nohup python3 ~/rss/mail.py > /dev/null 2>&1 &
