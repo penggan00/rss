@@ -9,6 +9,12 @@ import re
 import chardet
 from dotenv import load_dotenv
 from email.utils import parseaddr
+from md2tgmd import escape
+import logging
+from tencentcloud.common import credential
+from tencentcloud.common.profile.client_profile import ClientProfile
+from tencentcloud.common.profile.http_profile import HttpProfile
+from tencentcloud.tmt.v20180321 import tmt_client, models
 
 load_dotenv()
 
@@ -18,8 +24,81 @@ EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_API_KEY")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MAX_MESSAGE_LENGTH = 3900  # 保留安全余量
+MAX_MESSAGE_LENGTH = 3800  # 保留安全余量
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
+# 腾讯翻译配置
+TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
+ENABLE_TRANSLATION = os.getenv("ENABLE_TRANSLATION", "true").lower() == "true"
+
+# 设置日志
+logging.basicConfig(level=logging.INFO if DEBUG_MODE else logging.WARNING)
+logger = logging.getLogger(__name__)
+
+def remove_html_tags(text):
+    """移除HTML标签"""
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', text)
+
+def translate_content_sync(text):
+    """同步翻译文本为中文"""
+    if not text or not ENABLE_TRANSLATION:
+        return text
+    
+    if not TENCENTCLOUD_SECRET_ID or not TENCENTCLOUD_SECRET_KEY:
+        logger.warning("缺少腾讯云翻译密钥，跳过翻译")
+        return text
+    
+    try:
+        cred = credential.Credential(TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY)
+        http_profile = HttpProfile(endpoint="tmt.tencentcloudapi.com")
+        client_profile = ClientProfile(httpProfile=http_profile)
+        client = tmt_client.TmtClient(cred, TENCENT_REGION, client_profile)
+        
+        # 确保文本长度在API限制内
+        MAX_TRANSLATE_LENGTH = 2000
+        if len(text) > MAX_TRANSLATE_LENGTH:
+            text = text[:MAX_TRANSLATE_LENGTH] + " [...]"
+        
+        req = models.TextTranslateRequest()
+        req.SourceText = remove_html_tags(text)
+        req.Source = "auto"
+        req.Target = "zh"
+        req.ProjectId = 0
+        
+        resp = client.TextTranslate(req)
+        return resp.TargetText
+    except Exception as e:
+        logger.error(f"翻译失败: {e}")
+        return text
+
+async def translate_content_async(text):
+    """异步翻译文本为中文"""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, translate_content_sync, text)
+    except Exception as e:
+        logger.error(f"异步翻译失败: {e}")
+        return text
+
+def is_mainly_chinese(text):
+    """检测文本是否主要是中文"""
+    if not text:
+        return True
+    
+    # 计算中文字符的比例
+    chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
+    chinese_chars = len(chinese_pattern.findall(text))
+    total_chars = len(text)
+    
+    # 避免除零错误
+    if total_chars == 0:
+        return True
+    
+    # 如果中文字符超过10%的比例，则无需翻译
+    return (chinese_chars / total_chars) > 0.1
 
 class EmailDecoder:
     @staticmethod
@@ -36,7 +115,7 @@ class EmailDecoder:
                 for t in decoded
             ])
         except Exception as e:
-            # logging.error(f"Header decode error: {e}")
+            logger.error(f"Header decode error: {e}")
             return str(header)
 
     @staticmethod
@@ -48,7 +127,7 @@ class EmailDecoder:
                 return result['encoding']
             return 'gb18030' if b'\x80' in content[:100] else 'utf-8'
         except Exception as e:
-            # logging.error(f"Encoding detection error: {e}")
+            logger.error(f"Encoding detection error: {e}")
             return 'gb18030'
 
 class ContentProcessor:
@@ -57,7 +136,16 @@ class ContentProcessor:
         """统一换行符并合并空行"""
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         return re.sub(r'\n{3,}', '\n\n', text)
-
+    
+    # 转义后清理连续空行，最多保留一个空行
+    @staticmethod
+    def collapse_empty_lines(text):
+        """清理连续空行，最多保留一个空行"""
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'^\n+', '', text)
+        text = re.sub(r'\n+$', '', text)
+        return text
+    
     @staticmethod
     def clean_text(text):
         """终极文本清洗"""
@@ -70,30 +158,70 @@ class ContentProcessor:
 
     @staticmethod
     def extract_urls(html):
-        """智能链接过滤"""
+        """智能链接过滤，排除图片和视频链接"""
         url_pattern = re.compile(
             r'(https?://[^\s>"\'{}|\\^`]+)',
             re.IGNORECASE
         )
         urls = []
         seen = set()
-        exclude_domains = {'w3.org', 'schema.org', 'example.com'}
+        # 排除的无意义域名
+        exclude_domains = {'w3.org', 'schema.org', 'example.com', 'mozilla.org'}
+    
+        # 排除的图片和视频扩展名
+        media_extensions = {
+            # 图片类型
+            '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.raw',
+            # 视频类型
+            '.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm', '.wmv', '.mpeg', '.mpg',
+            '.3gp', '.m4v', '.ts'
+        }
+    
+        # 内联图片标识符
+        media_keywords = {
+            '/thumb/', '/image/', '/img/', '/cover/', '/poster/', '/gallery/', 
+            'picture', 'photo', 'snapshot', 'preview', 'thumbnail'
+        }
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
             clean_url = re.sub(r'[{}|\\)(<>`]', '', raw_url.split('"')[0])
-            
+        
+            # 基本长度过滤
             if not (10 < len(clean_url) <= 100):
                 continue
                 
-            if any(d in clean_url for d in exclude_domains):
+            # 排除特定域名
+            if any(domain in clean_url for domain in exclude_domains):
                 continue
-                
+            
+            # 排除内联图片
+            if clean_url.startswith('data:image/'):
+                continue
+            
+            # 排除图片和视频扩展名
+            if any(ext in clean_url.lower() for ext in media_extensions):
+                continue
+            
+            # 排除包含媒体关键词的链接
+            lower_url = clean_url.lower()
+            if any(kw in lower_url for kw in media_keywords):
+                continue
+            
+            # 排除CDN和静态资源
+            if '/cdn/' in lower_url or '/static/' in lower_url or '/assets/' in lower_url:
+                continue
+            
+            # 确保URL有路径部分（非域名）
+            if clean_url.count('/') < 3:
+                continue
+            
+            # 检查是否重复
             if clean_url not in seen:
                 seen.add(clean_url)
                 urls.append(clean_url)
-                
-        return urls[:5]
+            
+        return urls[:3]  # 最多返回8个链接
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -120,13 +248,13 @@ class ContentProcessor:
             return ContentProcessor.normalize_newlines(final_text)
             
         except Exception as e:
-            # logging.error(f"HTML处理失败: {e}")
+            logger.error(f"HTML处理失败: {e}")
             return "⚠️ 内容解析异常"
 
 class EmailHandler:
     @staticmethod
-    def get_email_content(msg):
-        """统一内容获取"""
+    async def get_email_content(msg):
+        """统一内容获取，添加翻译功能"""
         try:
             content = ""
             for part in msg.walk():
@@ -148,11 +276,21 @@ class EmailHandler:
                 content = "📨 图片内容（文本信息如下）\n" + "\n".join(
                     f"{k}: {v}" for k,v in msg.items() if k.lower() in ['subject', 'from', 'date']
                 )
-                
+            
+            # 检测是否需要翻译
+            if content and not is_mainly_chinese(content) and ENABLE_TRANSLATION:
+                if DEBUG_MODE:
+                    logger.info("检测到非中文内容，开始翻译...")
+                translated = await translate_content_async(content)
+                if translated and translated != content:
+                    content = "以下内容已翻译:\n\n" + translated
+                    if DEBUG_MODE:
+                        logger.info("翻译完成")
+            
             return ContentProcessor.normalize_newlines(content or "⚠️ 无法解析内容")
             
         except Exception as e:
-            # logging.error(f"内容提取失败: {e}")
+            logger.error(f"内容提取失败: {e}")
             return "⚠️ 内容提取异常"
 
 class MessageFormatter:
@@ -165,18 +303,30 @@ class MessageFormatter:
         clean_email = email_address.strip()
         clean_subject = re.sub(r'\s+', ' ', subject).replace('|', '')
         
-        sender_lines = []
+        # 构建MarkdownV2格式的header部分
+        sender_line = "✉️ "
         if clean_realname:
-            sender_lines.append(f"✉️ {clean_realname}")
+            sender_line += f"**{clean_realname}**"  # 用户名加粗
         if clean_email:
-            sender_lines.append(f"{clean_email}")
+            if clean_realname:
+                sender_line += " "  # 在用户名和邮箱之间加空格
+            sender_line += f"`{clean_email}`"  # 邮箱等宽
+            
+        # 主题单独一行
+        subject_line = f"_{clean_subject}_" if clean_subject else ""
         
+        # 组合header部分
+        if sender_line and subject_line:
+            header = f"{sender_line}\n{subject_line}\n\n"
+        elif sender_line:
+            header = f"{sender_line}\n\n"
+        elif subject_line:
+            header = f"{subject_line}\n\n"
+        else:
+            header = ""
+            
         formatted_content = ContentProcessor.normalize_newlines(content)
         
-        header = (
-            f"{' '.join(sender_lines)}\n"
-            f"{clean_subject}\n\n"
-        )
         return header, formatted_content
 
     @staticmethod
@@ -236,23 +386,25 @@ class TelegramBot:
         self.bot = telegram.Bot(TELEGRAM_TOKEN)
         
     async def send_message(self, text):
-        """最终发送处理"""
+        """使用MarkdownV2格式发送，确保只转义一次"""
         try:
             final_text = ContentProcessor.normalize_newlines(text)
             final_text = re.sub(r'^\s*[-]{2,}\s*$', '', final_text, flags=re.MULTILINE)
+
+            # 应用Markdown转义（只在这里转义一次）
+            escaped_text = escape(final_text)
             
+            cleaned_text = ContentProcessor.collapse_empty_lines(escaped_text)
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=final_text,
-                parse_mode=None,
+                text=cleaned_text,
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=True
             )
         except telegram.error.BadRequest as e:
-            # logging.error(f"消息过长错误: {str(e)[:200]}")
-            pass
+            logger.error(f"消息过长错误: {str(e)[:200]}")
         except Exception as e:
-            # logging.error(f"发送失败: {str(e)[:200]}")
-            pass
+            logger.error(f"发送失败: {str(e)[:200]}")
 
 async def main():
     bot = TelegramBot()
@@ -264,7 +416,7 @@ async def main():
             
             _, nums = mail.search(None, "UNSEEN")
             if not nums[0]:
-                # logging.info("无未读邮件")
+                logger.info("无未读邮件")
                 return
 
             for num in nums[0].split():
@@ -274,7 +426,7 @@ async def main():
                     
                     sender = EmailDecoder.decode_email_header(msg.get("From"))
                     subject = EmailDecoder.decode_email_header(msg.get("Subject"))
-                    content = EmailHandler.get_email_content(msg)
+                    content = await EmailHandler.get_email_content(msg)
 
                     header, body = MessageFormatter.format_message(sender, subject, content)
                     header_len = len(header)
@@ -313,12 +465,11 @@ async def main():
                     mail.store(num, "+FLAGS", "\\Seen")
                     
                 except Exception as e:
-                    # logging.error(f"处理异常: {str(e)[:200]}")
+                    logger.error(f"处理异常: {str(e)[:200]}")
                     continue
 
     except Exception as e:
-        # logging.error(f"连接异常: {str(e)[:200]}")
-        pass
+        logger.error(f"连接异常: {str(e)[:200]}")
 
 if __name__ == "__main__":
     asyncio.run(main())

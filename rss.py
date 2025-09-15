@@ -77,7 +77,7 @@ RSS_GROUPS = [
       #      'https://www.theverge.com/rss/index.xml',   # The Verge:
         ],
         "group_key": "RSS_FEEDS",
-        "interval": 3330,      # 55分钟 
+        "interval": 3590,      # 55分钟 
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -96,7 +96,7 @@ RSS_GROUPS = [
             'https://www.ftchinese.com/rss/news',   # ft中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
-        "interval": 9990,      # 3小时
+        "interval": 10790,      # 3小时
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -118,7 +118,7 @@ RSS_GROUPS = [
             
         ],
         "group_key": "FOURTH_RSS_FEEDS",
-        "interval": 660,       # 11分钟 
+        "interval": 960,       # 11分钟 
         "history_days": 5,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA"),  
         "processor": {
@@ -140,7 +140,7 @@ RSS_GROUPS = [
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
         ],
         "group_key": "FIFTH_RSS_FEEDS",
-        "interval": 16660,    # 5小时 56分钟
+        "interval": 17990,    # 5小时
         "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"), 
         "processor": {
@@ -168,7 +168,7 @@ RSS_GROUPS = [
         
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
-        "interval": 6660,    # 2小时 
+        "interval": 10800,    # 3小时 
         "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RRSS_LINDA"), 
         "processor": {
@@ -188,7 +188,7 @@ RSS_GROUPS = [
             'https://rss.nodeseek.com',  # Nodeseek
         ],
         "group_key": "FIFTH_RSS_RSS_SAN",
-        "interval": 33,       # 1分钟 
+        "interval": 290,       # 4分钟 
         "history_days": 3,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
@@ -212,7 +212,7 @@ RSS_GROUPS = [
      
         ],
         "group_key": "FIFTHHHH_RSSS_FEEDS",
-        "interval": 10800,      # 1小时56分钟
+        "interval": 7190,      # 1小时56分钟
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"), 
         "processor": {
@@ -252,7 +252,7 @@ RSS_GROUPS = [
                     # ... 其他YouTube频道（共18个）
         ],
         "group_key": "YOUTUBE_RSSS_FEEDS",
-        "interval": 3330,      # 55分钟
+        "interval": 3590,      # 55分钟
         "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TOKEN"),
         "processor": {
@@ -302,8 +302,8 @@ RSS_GROUPS = [
             
         ],
         "group_key": "FIFTH_RSS_YOUTUBE",
-        "interval": 33330,     # 10小时
-        "history_days": 360,     # 新增，保留30天
+        "interval": 35990,     # 10小时
+        "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("YOUTUBE_RSS"),
         "processor": {
         "translate": False,                    #翻译开关
@@ -324,7 +324,7 @@ RSS_GROUPS = [
             'https://rsshub.app/zaobao/znews/china',
         ],
         "group_key": "THIRD_RSS_FEEDS",
-        "interval": 6660,      # 1小时56分钟
+        "interval": 6990,      # 1小时56分钟
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
         "processor": {
