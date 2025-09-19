@@ -18,10 +18,12 @@ pip install -r ~/rss/requirements.txt
 echo "设置定时任务crontab -e"
 # 检查是否已存在对应的 crontab 任务
 # (crontab -l | grep -q '~/rss/mail.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
-(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+#(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "*/5 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+#(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "0,10,20,30,40,50 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+#(crontab -l | grep -q '~/rss/rss.py') || (crontab -l; echo "5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 #(crontab -l | grep -q '~/rss/call.py') || (crontab -l; echo "20 10 * * * /bin/bash ~/rss/call.sh") | crontab -
-(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
-(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
+#(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
+#(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
 
 echo "2秒钟后增加/rss/.env"
 sleep 2

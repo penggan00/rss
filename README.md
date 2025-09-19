@@ -15,8 +15,12 @@ nano docker-compose.yml
 sudo docker-compose down
 sudo docker-compose up -d
 pip3 install md2tgmd
+pip3 install asyncpg
 
 crontab -e
+0,10,20,30,40,50 * * * * /bin/bash ~/rss/rss.sh
+5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
+
 # 升级到最新supabase客户端
 pip install --upgrade supabase
 pip install tushare pandas
