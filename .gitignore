@@ -7,7 +7,6 @@ ss.sh
 cron.py
 rss2.py
 rss2.sh
-sql_rss.py
 cc.py
 README.rss.md
 cc.sh
