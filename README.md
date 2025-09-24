@@ -1,14 +1,18 @@
+```
 git clone https://github.com/penggan00/rss.git
-
+```
 chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 ##### 安装
 /bin/bash ~/rss/setup.sh
 
 0 6 * * 1 /usr/bin/docker restart xiaoya
-
-##### docker pull penggan0/rss-full:latest
-##### nano docker-compose.yml
+```
+docker pull penggan0/rss-full:latest
+```
+nano docker-compose.yml
+```
 docker pull penggan0/rss-full-alpine:latest
+```
 nano docker-compose.yml
 
 ##### sudo docker-compose pull
@@ -46,5 +50,13 @@ deactivate
 
 \d rss_status  -- 查看rss_status表的结构
 SELECT * FROM rss_status LIMIT 5;
+
+##### -- 连接到您的数据库后执行以下 SQL
+```
+ALTER TABLE rss_status ADD COLUMN IF NOT EXISTS entry_content_hash TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash ON rss_status(feed_group, entry_content_hash);
+```
 ##### ``````````````````````````````````````````````````
+```
 /sub https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA
+```
