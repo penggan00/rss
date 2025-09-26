@@ -27,28 +27,28 @@ from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentClo
 # ========== 环境加载 ==========
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
-LOCK_FILE = BASE_DIR / "rss.lock"
-DATABASE_FILE = BASE_DIR / "rss.db"
+LOCK_FILE = BASE_DIR / "rss.lock"   # 锁文件路径
+DATABASE_FILE = BASE_DIR / "rss.db" # SQLite 数据库文件路径
 
 logging.basicConfig(
-    filename=BASE_DIR / "rss.log",
+    filename=BASE_DIR / "rss.log",  # 日志文件路径
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # 全局日志记录器
 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
-TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
-TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
-TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
-TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID")
-TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
-semaphore = asyncio.Semaphore(2)
-BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
-BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")  # Telegram Chat IDs
+TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID") # 腾讯云 Secret ID
+TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY") # 腾讯云 Secret Key
+TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley") # 腾讯云区域
+TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID") # 腾讯 Secret ID
+TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")  # 腾讯 Secret Key
+semaphore = asyncio.Semaphore(2)                     # 控制并发数 
+BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "") # 备用域名，多个用逗号分隔
+BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()] # 备用域名列表
 
-RSS_GROUPS = [
+RSS_GROUPS = [ # RSS 组配置列表
     # ================== 国际新闻组 ==================False: 关闭 / True: 开启
     {
         "name": "国际新闻",
@@ -90,7 +90,7 @@ RSS_GROUPS = [
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
-            "translate": False,       #翻译关
+            "translate": False,       #翻译 False: 关闭 / True: 开启
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
@@ -102,7 +102,7 @@ RSS_GROUPS = [
     {
         "name": "快讯",
         "urls": [
-    #        'https://rsshub.app/10jqka/realtimenews',
+         #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
             'https://36kr.com/feed-newsflash',  # 36氪快讯
         #    'https://36kr.com/feed',  # 36氪综合
             
@@ -110,44 +110,48 @@ RSS_GROUPS = [
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 960,       # 20分钟 
         "history_days": 5,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_LINDA"),  
+        "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": False,            # 预览
+            "preview": False,            # 禁止预览
+            "show_count": False          #计数
+        }
+    },
+    # ================== 快讯组 ==================
+    {
+        "name": "快讯",
+        "urls": [
+            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+         #   'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
+        ],
+        "group_key": "TOURTH_RSS_FEEDS",
+        "interval": 650,       # 15分钟
+        "history_days": 5,     # 新增，保留30天
+        "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
+        "processor": {
+            "translate": False,     #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "*{subject}*\n[more]({url})",
+            "filter": {
+                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "docker", "折"]  # 本组关键词列表
+            },
+            "preview": False,            # 禁止预览
             "show_count": False          #计数
         }
     },
 
-    # ================== 社交媒体组+翻译预览 ==================
-    {
-        "name": "社交媒体",
-        "urls": [
-        #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
-         #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
-        #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
-        ],
-        "group_key": "FIFTH_RSS_FEEDS",
-        "interval": 17990,    # 5小时
-        "history_days": 300,     # 新增，保留30天
-        "bot_token": os.getenv("YOUTUBE_RSS"), 
-        "processor": {
-            "translate": True,
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-         #   "template": "*{subject}*\n🔗 {url}",
-            "template": "*{subject}*\n[more]({url})",
-            "preview": True,        # 预览
-            "show_count": False     #计数
-        }
-    },
     # ================== 新浪博客 ==================
     {
         "name": "社交媒体",
         "urls": [
             'https://rsshub.app/weibo/user/3194547262',  # 江西高速
-         #   'https://rsshub.app/weibo/user/1699432410',  # 新华社
+            'https://rsshub.app/weibo/user/1699432410',  # 新华社
         #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
             'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
             'https://rsshub.app/weibo/user/1891035762',  # 交警
@@ -155,18 +159,17 @@ RSS_GROUPS = [
         #    'https://rsshub.app/weibo/user/3213094623',  # 邮政
         #    'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
 
-        
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
         "interval": 10790,    # 3小时
         "history_days": 300,     # 新增，保留300天
-        "bot_token": os.getenv("RRSS_LINDA"), 
+        "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
-            "translate": False,
+            "translate": False,     #翻译关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{subject}*\n[more]({url})",
-            "preview": False,        # 预览
+            "preview": False,        # 禁止预览
             "show_count": False     #计数
         }
     },
@@ -175,22 +178,22 @@ RSS_GROUPS = [
     {
         "name": "技术论坛",
         "urls": [
-            'https://rss.nodeseek.com',  # Nodeseek
+            'https://rss.nodeseek.com',  # Nodeseek  
         ],
-        "group_key": "FIFTH_RSS_RSS_SAN",
+        "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,       # 4分钟 
         "history_days": 3,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_SAN"),
+        "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
         "processor": {
-            "translate": False,                  #翻译开关
+            "translate": False,                  #翻译关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
+            "template": "*{subject}*\n[more]({url})", 
             "filter": {
                 "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "docker", "折"]  # 本组关键词列表
             },
-            "preview": False,               # 预览
+            "preview": False,              # 禁止预览
             "show_count": False               #计数
         }
     },
@@ -204,13 +207,13 @@ RSS_GROUPS = [
         "group_key": "FIFTHHHH_RSSS_FEEDS",
         "interval": 7190,      # 1小时56分钟
         "history_days": 30,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_SAN"), 
+        "bot_token": os.getenv("RSS_SAN"),  # Telegram Bot Token
         "processor": {
-            "translate": True,
+            "translate": True,                     #翻译开
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,        # 预览
+            "template": "*{subject}*\n[more]({url})",  #新增
+            "preview": False,       # 禁止预览
             "show_count": False     #计数
         }
     },
@@ -241,12 +244,12 @@ RSS_GROUPS = [
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
                     # ... 其他YouTube频道（共18个）
         ],
-        "group_key": "YOUTUBE_RSSS_FEEDS",
+        "group_key": "YOUTUBE_RSSS_FEEDS", # YouTube频道
         "interval": 3590,      # 60分钟
         "history_days": 360,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_TOKEN"),
+        "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
         "processor": {
-            "translate": False,
+            "translate": False,                    #翻译关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": True,                # 预览
@@ -287,16 +290,13 @@ RSS_GROUPS = [
           #  'https://rsshub.app/bilibili/user/video/95832115', #汐朵曼
           #  'https://rsshub.app/bilibili/user/video/3546741104183937', #油管精選字幕组
           #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
-
-            
-            
         ],
-        "group_key": "FIFTH_RSS_YOUTUBE",
+        "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
         "interval": 35990,     # 10小时
         "history_days": 360,     # 新增，保留300天
-        "bot_token": os.getenv("YOUTUBE_RSS"),
+        "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
-        "translate": False,                    #翻译开关
+        "translate": False,                    #翻译关
         "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
@@ -304,7 +304,28 @@ RSS_GROUPS = [
         "show_count": False                    #计数
     }
     },
-
+    # ================== 社交媒体组+翻译预览 ==================
+    {
+        "name": "社交媒体",
+        "urls": [
+        #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
+         #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
+        #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
+            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
+        ],
+        "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
+        "interval": 17990,    # 5小时
+        "history_days": 300,     # 新增，保留30天
+        "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
+        "processor": {
+            "translate": True,          #翻译开
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+         #   "template": "*{subject}*\n🔗 {url}",
+            "template": "*{subject}*\n[more]({url})",
+            "preview": True,        # 预览
+            "show_count": False     #计数
+        }
+    },
     # ================== 中文媒体组 ==================
     {
         "name": "中文媒体", 
@@ -316,12 +337,12 @@ RSS_GROUPS = [
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 7190,      # 2小时
         "history_days": 30,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_LINDA_YOUTUBE"),
+        "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
             "translate": False,                        #翻译开关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": False,                              # 预览
+            "preview": False,                             # 禁止预览
             "show_count": False                       #计数
         }
     }
