@@ -158,70 +158,67 @@ class ContentProcessor:
 
     @staticmethod
     def extract_urls(html):
-        """智能链接过滤，排除图片和视频链接"""
-        url_pattern = re.compile(
-            r'(https?://[^\s>"\'{}|\\^`]+)',
-            re.IGNORECASE
-        )
+        """
+        智能链接过滤，排除图片、视频、CSS、字体、API等资源链接，只返回主要内容相关页面链接。
+        最多返回3个有效链接。
+        """
+        url_pattern = re.compile(r'(https?://[^\s>"\'{}|\\^`]+)', re.IGNORECASE)
         urls = []
         seen = set()
-        # 排除的无意义域名
-        exclude_domains = {'w3.org', 'schema.org', 'example.com', 'mozilla.org'}
-    
-        # 排除的图片和视频扩展名
-        media_extensions = {
-            # 图片类型
-            '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.raw',
-            # 视频类型
-            '.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm', '.wmv', '.mpeg', '.mpg',
-            '.3gp', '.m4v', '.ts'
+        exclude_domains = {
+            'w3.org', 'schema.org', 'example.com', 'mozilla.org',
+            'fonts.googleapis.com', 'googleapis.com'
         }
-    
-        # 内联图片标识符
+        # 图片和视频扩展名
+        media_extensions = {
+            '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.raw',
+            '.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm', '.wmv', '.mpeg', '.mpg', '.3gp', '.m4v', '.ts'
+        }
+        # 图片关键字
         media_keywords = {
-            '/thumb/', '/image/', '/img/', '/cover/', '/poster/', '/gallery/', 
+            '/thumb/', '/image/', '/img/', '/cover/', '/poster/', '/gallery/',
             'picture', 'photo', 'snapshot', 'preview', 'thumbnail'
         }
+        # 资源文件关键字
+        resource_keywords = [
+            '/css', '/js', '/font', '/api', '/assets', 'static.', 'cdn.',
+            '.css', '.js', '.woff', '.ttf', '.svg'
+        ]
 
         for match in url_pattern.finditer(html):
             raw_url = match.group(1)
+            # 清理可能残留的特殊字符
             clean_url = re.sub(r'[{}|\\)(<>`]', '', raw_url.split('"')[0])
-        
             # 基本长度过滤
             if not (10 < len(clean_url) <= 100):
                 continue
-                
             # 排除特定域名
             if any(domain in clean_url for domain in exclude_domains):
                 continue
-            
             # 排除内联图片
             if clean_url.startswith('data:image/'):
                 continue
-            
             # 排除图片和视频扩展名
             if any(ext in clean_url.lower() for ext in media_extensions):
                 continue
-            
-            # 排除包含媒体关键词的链接
+            # 排除图片/视频关键字
             lower_url = clean_url.lower()
             if any(kw in lower_url for kw in media_keywords):
                 continue
-            
+            # 排除资源文件
+            if any(kw in lower_url for kw in resource_keywords):
+                continue
             # 排除CDN和静态资源
             if '/cdn/' in lower_url or '/static/' in lower_url or '/assets/' in lower_url:
                 continue
-            
-            # 确保URL有路径部分（非域名）
+            # 确保URL有路径部分（至少3个斜杠，排除纯域名）
             if clean_url.count('/') < 3:
                 continue
-            
             # 检查是否重复
             if clean_url not in seen:
                 seen.add(clean_url)
                 urls.append(clean_url)
-            
-        return urls[:3]  # 最多返回8个链接
+        return urls[:3]  # 最多返回3个链接
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -292,6 +289,45 @@ class EmailHandler:
         except Exception as e:
             logger.error(f"内容提取失败: {e}")
             return "⚠️ 内容提取异常"
+
+def clean_bill_data(input_data):
+    cleaned_lines = []
+    for line in input_data.split('\n'):
+        if not line.strip():
+            cleaned_lines.append(line)
+            continue
+            
+        parts = [p.strip() for p in line.split('   ') if p.strip()]
+        
+        # 移除第二个日期（索引为1的部分）
+        if len(parts) > 1:
+            parts.pop(1)
+        
+        # 检查并移除重复的货币金额
+        # 查找货币代码出现的位置（CNY, USD等）
+        currency_indices = [i for i, part in enumerate(parts) 
+                           if part in ['CNY', 'USD', 'EUR', 'JPY']]  # 可以添加更多货币代码
+        
+        if len(currency_indices) > 1:
+            # 保留第一个货币和金额，移除后续重复
+            first_currency_index = currency_indices[0]
+            currency = parts[first_currency_index]
+            # amount_after_first = parts[first_currency_index + 1]  # 可选，暂未用到
+            
+            # 移除后续所有相同货币和金额
+            i = first_currency_index + 2
+            while i < len(parts):
+                if parts[i] == currency:
+                    parts.pop(i)  # 移除货币
+                    if i < len(parts):
+                        parts.pop(i)  # 移除金额
+                else:
+                    i += 1
+        
+        cleaned_line = '   '.join(parts)
+        cleaned_lines.append(cleaned_line)
+    
+    return '\n'.join(cleaned_lines)
 
 class MessageFormatter:
     @staticmethod
@@ -394,7 +430,11 @@ class TelegramBot:
             # 应用Markdown转义（只在这里转义一次）
             escaped_text = escape(final_text)
             
-            cleaned_text = ContentProcessor.collapse_empty_lines(escaped_text)
+            # 转义后清理多余的#号，防止标题过度转义
+            cleaned_hashtags = re.sub(r'^(\\)?#+', '', escaped_text, flags=re.MULTILINE)
+               
+            cleaned_text = ContentProcessor.collapse_empty_lines(cleaned_hashtags)
+        # 发送消息
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
                 text=cleaned_text,
@@ -431,6 +471,11 @@ async def main():
                     header, body = MessageFormatter.format_message(sender, subject, content)
                     header_len = len(header)
                     max_body_len = MAX_MESSAGE_LENGTH - header_len
+
+                    # ------- 这里集成账单清洗逻辑 ---------
+                    if "建设银行信用卡" in subject:
+                        body = clean_bill_data(body)
+                    # --------------------------------------
 
                     # 处理header过长的情况
                     if max_body_len <= 0:

@@ -3,7 +3,7 @@
 echo "进入 rss 目录"
 cd ~/rss || exit
 
-chmod +x /root/rss/{rss.sh,usd.sh,mail.sh}
+chmod +x /root/rss/{rss.sh,usd.sh,mail.sh，call.sh,rss.log.sh}
 
 echo "创建虚拟环境！"
 python3 -m venv rss_venv
@@ -24,6 +24,7 @@ echo "设置定时任务crontab -e"
 #(crontab -l | grep -q '~/rss/call.py') || (crontab -l; echo "20 10 * * * /bin/bash ~/rss/call.sh") | crontab -
 #(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
 #(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
+#(crontab -l | grep -q '~/rss/rss.log.sh') || (crontab -l; echo "0 1 * * * /bin/bash ~/rss/rss.log.sh") | crontab -
 
 echo "2秒钟后增加/rss/.env"
 sleep 2

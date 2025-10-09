@@ -1,9 +1,10 @@
 ```
 git clone https://github.com/penggan00/rss.git
-```
-chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 ##### 安装
 /bin/bash ~/rss/setup.sh
+```
+chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
+chmod +x ~/rss/ss.sh
 
 0 6 * * 1 /usr/bin/docker restart xiaoya
 ```
@@ -23,6 +24,9 @@ crontab -e
 */10 * * * * /bin/bash ~/rss/rss.sh
 5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
 ```
+
+pip install aiosqlite
+pip install langdetect
 apt install python3-venv
 ##### 创建虚拟环境
 python3 -m venv rss_venv
@@ -30,6 +34,7 @@ python3 -m venv rss_venv
 source rss_venv/bin/activate
 python3 rss.py
 python3 usd.py
+python3 mail.py
 ```
 ```
 pip freeze

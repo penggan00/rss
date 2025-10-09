@@ -469,6 +469,7 @@ class RSSDatabase:
 # ========== 业务逻辑 ==========
 
 def remove_html_tags(text):
+    text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'#([^#\s]+)#', r'\1', text)
     text = re.sub(r'#\w+', '', text)
     text = re.sub(r'@[^\s]+', '', text).strip()

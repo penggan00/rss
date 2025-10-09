@@ -27,26 +27,26 @@ from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentClo
 # ========== 环境加载 ==========
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
-LOCK_FILE = BASE_DIR / "rss.lock"   # 锁文件路径
-DATABASE_FILE = BASE_DIR / "rss.db" # SQLite 数据库文件路径
+LOCK_FILE = BASE_DIR / "rss.lock"
+DATABASE_FILE = BASE_DIR / "rss.db"
 
 logging.basicConfig(
-    filename=BASE_DIR / "rss.log",  # 日志文件路径
+    filename=BASE_DIR / "rss.log",
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
 )
-logger = logging.getLogger(__name__) # 全局日志记录器
+logger = logging.getLogger(__name__)
 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")  # Telegram Chat IDs
-TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID") # 腾讯云 Secret ID
-TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY") # 腾讯云 Secret Key
-TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley") # 腾讯云区域
-TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID") # 腾讯 Secret ID
-TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")  # 腾讯 Secret Key
-semaphore = asyncio.Semaphore(2)                     # 控制并发数 
-BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "") # 备用域名，多个用逗号分隔
-BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()] # 备用域名列表
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
+TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
+TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID")
+TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
+semaphore = asyncio.Semaphore(2)
+BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
+BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
 
 RSS_GROUPS = [ # RSS 组配置列表
     # ================== 国际新闻组 ==================False: 关闭 / True: 开启
@@ -68,6 +68,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "RSS_FEEDS",
         "interval": 3590,      # 60分钟 
+        "batch_send_interval": 14390,   # 批量推送
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -86,8 +87,9 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://www.ftchinese.com/rss/news',   # ft中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
-        "interval": 10790,      # 3小时
-        "history_days": 30,     # 新增，保留30天
+        "interval": 7200,      # 2小时
+        "batch_send_interval": 35990,   # 批量推送←加上即
+        "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": False,       #翻译 False: 关闭 / True: 开启
@@ -108,7 +110,8 @@ RSS_GROUPS = [ # RSS 组配置列表
             
         ],
         "group_key": "FOURTH_RSS_FEEDS",
-        "interval": 880,       # 15分钟 
+        "interval": 710,       # 10分钟 
+        "batch_send_interval": 3590,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -124,8 +127,8 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "快讯",
         "urls": [
             'https://rsshub.app/10jqka/realtimenews', #同花顺财经
-            'https://rsshub.app/eastmoney/report/strategyreport', # 东方财富策略
-            'https://rsshub.app/jin10',  # 金十
+        #    'https://rsshub.app/eastmoney/report/strategyreport', # 东方财富策略
+         #   'https://rsshub.app/jin10',  # 金十
        #     'https://rsshub.app/huijin-inv/news',
        #     'https://rsshub.app/eeo/kuaixun',
          #   'https://36kr.com/feed-newsflash',  # 36氪快讯
@@ -133,7 +136,8 @@ RSS_GROUPS = [ # RSS 组配置列表
             
         ],
         "group_key": "TOURTH_RSS_FEEDS",
-        "interval": 650,       # 15分钟
+        "interval": 710,       # 15分钟
+        "batch_send_interval": 1790,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
         "processor": {
@@ -150,7 +154,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "社交媒体",
         "urls": [
             'https://rsshub.app/weibo/user/3194547262',  # 江西高速
-            'https://rsshub.app/weibo/user/1699432410',  # 新华社
+        #    'https://rsshub.app/weibo/user/1699432410',  # 新华社
         #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
             'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
             'https://rsshub.app/weibo/user/1891035762',  # 交警
@@ -160,7 +164,8 @@ RSS_GROUPS = [ # RSS 组配置列表
 
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
-        "interval": 10790,    # 3小时
+        "interval": 21590,    # 4小时
+       # "batch_send_interval": 21590,   # 批量推送    
         "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
@@ -181,6 +186,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,       # 4分钟 
+        "batch_send_interval": 3590,   # 批量推送
         "history_days": 3,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
         "processor": {
@@ -188,9 +194,9 @@ RSS_GROUPS = [ # RSS 组配置列表
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})", 
             "filter": {
-                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "docker", "折"]  # 本组关键词列表
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "折"]  # 本组关键词列表
             },
             "preview": False,              # 禁止预览
             "show_count": False               #计数
@@ -200,11 +206,12 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "vps",
         "urls": [
-            'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+        #    'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
             'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
         ],
         "group_key": "FIFTH_RSS_RRSS_SAN",
-        "interval": 7190,      # 120分钟 
+        "interval": 3300,      # 60分钟 
+        "batch_send_interval": 21590,   # 批量推送
         "history_days": 60,     # 保留60天
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
@@ -244,6 +251,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "YOUTUBE_RSSS_FEEDS", # YouTube频道
         "interval": 3590,      # 60分钟
+       # "batch_send_interval": 10800,   # 批量推送
         "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
         "processor": {
@@ -290,7 +298,8 @@ RSS_GROUPS = [ # RSS 组配置列表
           #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
         ],
         "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
-        "interval": 35990,     # 10小时
+        "interval": 7180,     # 2小时
+        "batch_send_interval": 35990,   # 批量推送
         "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
@@ -313,7 +322,8 @@ RSS_GROUPS = [ # RSS 组配置列表
 
         ],
         "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
-        "interval": 3590,    # 1小时
+        "interval": 7000,    # 2小时
+        "batch_send_interval": 21590,   # 批量推送
         "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
         "processor": {
@@ -334,7 +344,8 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://rsshub.app/zaobao/znews/china',
         ],
         "group_key": "THIRD_RSS_FEEDS",
-        "interval": 7190,      # 2小时
+        "interval": 7180,      # 2小时
+        "batch_send_interval": 14380,   # 批量推送
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
@@ -348,6 +359,7 @@ RSS_GROUPS = [ # RSS 组配置列表
 ]
 
 # ========== 数据库适配层 ==========
+
 USE_PG = os.getenv("PG_URL") is not None
 PG_URL = os.getenv("PG_URL")
 if USE_PG:
@@ -401,6 +413,27 @@ class RSSDatabase:
                     last_cleanup_time DOUBLE PRECISION
                 );
                 """)
+                await conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_messages (
+                    feed_group TEXT,
+                    feed_url TEXT,
+                    entry_id TEXT,
+                    content_hash TEXT,
+                    title TEXT,
+                    translated_title TEXT,
+                    link TEXT,
+                    summary TEXT,
+                    entry_timestamp DOUBLE PRECISION,
+                    sent INTEGER DEFAULT 0,
+                    PRIMARY KEY (feed_group, feed_url, entry_id)
+                );
+                """)
+                await conn.execute("""
+                CREATE TABLE IF NOT EXISTS batch_timestamps (
+                    feed_group TEXT PRIMARY KEY,
+                    last_batch_sent_time DOUBLE PRECISION
+                );
+                """)
         else:
             def _create():
                 c = self.conn.cursor()
@@ -427,9 +460,126 @@ class RSSDatabase:
                     feed_group TEXT PRIMARY KEY,
                     last_cleanup_time REAL
                 )""")
+                c.execute("""
+                CREATE TABLE IF NOT EXISTS pending_messages (
+                    feed_group TEXT,
+                    feed_url TEXT,
+                    entry_id TEXT,
+                    content_hash TEXT,
+                    title TEXT,
+                    translated_title TEXT,
+                    link TEXT,
+                    summary TEXT,
+                    entry_timestamp REAL,
+                    sent INTEGER DEFAULT 0,
+                    PRIMARY KEY (feed_group, feed_url, entry_id)
+                )
+                """)
+                c.execute("""
+                CREATE TABLE IF NOT EXISTS batch_timestamps (
+                    feed_group TEXT PRIMARY KEY,
+                    last_batch_sent_time REAL
+                )
+                """)
                 self.conn.commit()
             await self.loop.run_in_executor(None, _create)
 
+    # 待发消息操作
+    async def add_pending_message(self, feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp, feed_title):
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                await conn.execute("""
+                INSERT INTO pending_messages (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, entry_timestamp, sent)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)
+                ON CONFLICT DO NOTHING
+                """, feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp)
+        else:
+            def _add():
+                c = self.conn.cursor()
+                c.execute("""
+                    INSERT OR IGNORE INTO pending_messages
+                    (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, entry_timestamp, sent, feed_title)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """, (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp, feed_title))
+                self.conn.commit()
+            await self.loop.run_in_executor(None, _add)
+
+    async def get_pending_messages(self, feed_group):
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT * FROM pending_messages
+                    WHERE feed_group=$1 AND sent=0
+                    ORDER BY entry_timestamp ASC
+                """, feed_group)
+                return [dict(row) for row in rows]
+        else:
+            def _get():
+                c = self.conn.cursor()
+                c.execute("""
+                    SELECT * FROM pending_messages
+                    WHERE feed_group=? AND sent=0
+                    ORDER BY entry_timestamp ASC
+                """, (feed_group,))
+                keys = [d[0] for d in c.description]
+                return [dict(zip(keys, row)) for row in c.fetchall()]
+            return await self.loop.run_in_executor(None, _get)
+
+    async def mark_pending_as_sent(self, feed_group, ids):
+        if not ids:
+            return
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                await conn.executemany("""
+                    UPDATE pending_messages SET sent=1
+                    WHERE feed_group=$1 AND entry_id=$2
+                """, [(feed_group, eid) for eid in ids])
+        else:
+            def _mark():
+                c = self.conn.cursor()
+                c.executemany("""
+                    UPDATE pending_messages SET sent=1
+                    WHERE feed_group=? AND entry_id=?
+                """, [(feed_group, eid) for eid in ids])
+                self.conn.commit()
+            await self.loop.run_in_executor(None, _mark)
+
+    async def get_last_batch_sent_time(self, feed_group):
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT last_batch_sent_time FROM batch_timestamps WHERE feed_group=$1
+                """, feed_group)
+                return row['last_batch_sent_time'] if row else 0
+        else:
+            def _get():
+                c = self.conn.cursor()
+                c.execute("""
+                    SELECT last_batch_sent_time FROM batch_timestamps WHERE feed_group=?
+                """, (feed_group,))
+                result = c.fetchone()
+                return result[0] if result else 0
+            return await self.loop.run_in_executor(None, _get)
+
+    async def save_last_batch_sent_time(self, feed_group, ts):
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                await conn.execute("""
+                INSERT INTO batch_timestamps (feed_group, last_batch_sent_time)
+                VALUES ($1, $2)
+                ON CONFLICT (feed_group) DO UPDATE SET last_batch_sent_time=EXCLUDED.last_batch_sent_time
+                """, feed_group, ts)
+        else:
+            def _save():
+                c = self.conn.cursor()
+                c.execute("""
+                    INSERT OR REPLACE INTO batch_timestamps (feed_group, last_batch_sent_time)
+                    VALUES (?, ?)
+                """, (feed_group, ts))
+                self.conn.commit()
+            await self.loop.run_in_executor(None, _save)
+
+    # RSS状态操作
     async def save_status(self, feed_group, feed_url, entry_url, entry_content_hash, timestamp):
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
@@ -558,7 +708,6 @@ class RSSDatabase:
                 """, (feed_group, now))
                 self.conn.commit()
             await self.loop.run_in_executor(None, _cleanup)
-
 # ========== 业务逻辑 ==========
 
 def remove_html_tags(text):
@@ -623,7 +772,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
         current_length = 0
         paragraphs = text.split('\n\n')
         for para in paragraphs:
-            para_length = len(para.encode('utf-8'))
+            para_length = len(para)  # 字符长度
             if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
                 text_chunks.append('\n\n'.join(current_chunk))
                 current_chunk = []
@@ -674,7 +823,7 @@ async def fetch_feed(session, feed_url):
             if e.status in (503, 403, 404, 429):
                 continue
         except Exception as e:
-            logger.error(f"请求失败: {modified_url}, 错误: {e}")
+        #    logger.error(f"请求失败: {modified_url}, 错误: {e}")
             continue
     logger.error(f"所有域名尝试失败: {feed_url}")
     return None, canonical_url
@@ -709,7 +858,6 @@ def _sync_translate(secret_id, secret_key, text):
         req.ProjectId = 0
         return client.TextTranslate(req).TargetText
     except TencentCloudSDKException as e:
-        # 安全访问属性
         error_details = {
             "code": getattr(e, "code", ""),
             "message": getattr(e, "message", str(e)),
@@ -794,11 +942,63 @@ async def generate_group_message(feed_data, entries, processor):
         logger.error(f"生成消息失败: {str(e)}")
         return ""
 
+# ========== 新增: 批量消息发送 ==========
+async def process_batch_send(group, db: RSSDatabase):
+    group_key = group["group_key"]
+    bot_token = group["bot_token"]
+    processor = group["processor"]
+    batch_interval = group.get("batch_send_interval")
+    if not batch_interval:
+        return
+    now = datetime.now(pytz.utc).timestamp()
+    last_batch_sent = await db.get_last_batch_sent_time(group_key)
+    if now - last_batch_sent < batch_interval:
+        return
+    # 获取所有该组的未发送消息
+    pending = await db.get_pending_messages(group_key)
+    if not pending:
+        await db.save_last_batch_sent_time(group_key, now)
+        return
+
+    # 按 feed_url 分组
+    from collections import defaultdict
+    feed_url_to_msgs = defaultdict(list)
+    for row in pending:
+        feed_url_to_msgs[row["feed_url"]].append(row)
+
+    bot = Bot(token=bot_token)
+    for feed_url, msgs in feed_url_to_msgs.items():
+        # feed_title 优先用存储的字段
+        feed_title = (msgs[0].get("feed_title") or group.get("name") or feed_url)
+        class DummyFeed:
+            feed = {'title': feed_title}
+        class Entry:
+            def __init__(self, row):
+                self.title = row["translated_title"] or row["title"]
+                self.link = row["link"]
+        entries = [Entry(row) for row in msgs]
+        try:
+            feed_message = await generate_group_message(DummyFeed, entries, {**processor, "translate": False})
+            if feed_message:
+                await send_single_message(
+                    bot,
+                    TELEGRAM_CHAT_ID[0],
+                    feed_message,
+                    disable_web_page_preview=not processor.get("preview", True)
+                )
+                await db.mark_pending_as_sent(group_key, [row["entry_id"] for row in msgs])
+        except Exception as e:
+            logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
+
+    await db.save_last_batch_sent_time(group_key, now)
+
+# ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
     group_name = group_config["name"]
     group_key = group_config["group_key"]
     processor = group_config["processor"]
     bot_token = group_config["bot_token"]
+    batch_send_interval = group_config.get("batch_send_interval", None)
     try:
         last_run = await db.load_last_run_time(group_key)
         now = datetime.now(pytz.utc).timestamp()
@@ -818,7 +1018,6 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                 for entry in feed_data.entries:
                     entry_id = get_entry_identifier(entry)
                     content_hash = get_entry_content_hash(entry)
-                    # 如果内容hash已存在则跳过（即使entry_id不同）
                     if await db.has_content_hash(group_key, content_hash):
                         continue
                     if entry_id in processed_ids or entry_id in seen_in_batch:
@@ -835,25 +1034,41 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                         else:
                             if match:
                                 continue
-                    # 保存entry、hash、id
                     new_entries.append((entry, content_hash, entry_id))
                 if new_entries:
-                    feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
-                    if feed_message:
-                        try:
-                            await send_single_message(
-                                bot,
-                                TELEGRAM_CHAT_ID[0],
-                                feed_message,
-                                disable_web_page_preview=not processor.get("preview", True)
+                    if batch_send_interval:
+                        for entry, content_hash, entry_id in new_entries:
+                            raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
+                            if processor["translate"]:
+                                translated_subject = await auto_translate_text(raw_subject)
+                            else:
+                                translated_subject = raw_subject
+                            await db.add_pending_message(
+                                group_key, canonical_url, entry_id, content_hash,
+                                getattr(entry, "title", ""), translated_subject, getattr(entry, "link", ""), getattr(entry, "summary", ""),
+                                get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
+                                feed_data.feed.get('title', "") 
                             )
-                            for entry, content_hash, entry_id in new_entries:
-                                await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                processed_ids.add(entry_id)
-                            global_status[canonical_url] = processed_ids
-                        except Exception as send_error:
-                            logger.error(f"❌ 发送消息失败 [{feed_url}]")
-                            raise
+                            await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                            processed_ids.add(entry_id)
+                        global_status[canonical_url] = processed_ids
+                    else:
+                        feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
+                        if feed_message:
+                            try:
+                                await send_single_message(
+                                    bot,
+                                    TELEGRAM_CHAT_ID[0],
+                                    feed_message,
+                                    disable_web_page_preview=not processor.get("preview", True)
+                                )
+                                for entry, content_hash, entry_id in new_entries:
+                                    await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                    processed_ids.add(entry_id)
+                                global_status[canonical_url] = processed_ids
+                            except Exception as send_error:
+                                logger.error(f"❌ 发送消息失败 [{feed_url}]")
+                                raise
             except Exception as e:
                 logger.error(f"❌ 处理失败 [{feed_url}]")
         await db.save_last_run_time(group_key, now)
@@ -900,6 +1115,9 @@ async def main():
                         logger.error(f"任务执行异常: {res}")
             else:
                 logger.warning("⛔ 未创建任何处理任务")
+            batch_tasks = [process_batch_send(group, db) for group in RSS_GROUPS if group.get("batch_send_interval")]
+            if batch_tasks:
+                await asyncio.gather(*batch_tasks)
         except asyncio.CancelledError:
             logger.warning("⏹️ 任务被取消")
         except Exception as e:

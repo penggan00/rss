@@ -44,3 +44,6 @@ cron copy.py
 cc.py
 cc.copy.py
 cc.sh
+rss.log.sh
+sqlrss2.py
+mail.py.py
