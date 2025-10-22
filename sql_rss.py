@@ -26,7 +26,7 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
-import time
+
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
 # ========== 环境加载 ==========
@@ -115,14 +115,14 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "快讯",
         "urls": [
-         #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
             'https://36kr.com/feed-newsflash',  # 36氪快讯
         #    'https://36kr.com/feed',  # 36氪综合
             
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 10分钟 
-        "batch_send_interval": 3590,   # 批量推送
+        "batch_send_interval": 1790,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -133,23 +133,27 @@ RSS_GROUPS = [ # RSS 组配置列表
             "show_count": False          #计数
         }
     },
-    # ================== 快讯组 ==================
+    # ================== 综合资讯 ==================
     {
-        "name": "快讯",
+        "name": "综合资讯",
         "urls": [
-            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
-        #    'https://rsshub.app/eastmoney/report/strategyreport', # 东方财富策略
-         #   'https://rsshub.app/jin10',  # 金十
-       #     'https://rsshub.app/huijin-inv/news',
-       #     'https://rsshub.app/eeo/kuaixun',
-         #   'https://36kr.com/feed-newsflash',  # 36氪快讯
-        #    'https://36kr.com/feed',  # 36氪综合
-            
+            'https://cn.nytimes.com/rss.html', 
+         #   'https://www.gcores.com/rss', 
+            'https://www.yystv.cn/rss/feed', 
+            'https://www.ruanyifeng.com/blog/atom.xml', 
+            'https://www.huxiu.com/rss/0.xml', 
+            'https://sspai.com/feed', 
+            'https://sputniknews.cn/export/rss2/archive/index.xml',
+            'https://feeds.feedburner.com/rsscna/intworld',
+            'https://feeds.feedburner.com/rsscna/mainland',         
+            'https://rsshub.app/telegram/channel/zaobaosg', 
+            'https://rsshub.app/telegram/channel/rocCHL', 
+            'https://rsshub.app/telegram/channel/tnews365', 
         ],
         "group_key": "TOURTH_RSS_FEEDS",
-        "interval": 700,       # 10分钟
-        "batch_send_interval": 3590,   # 批量推送
-        "history_days": 3,     # 新增，保留3天
+        "interval": 1790,       # 30分钟
+        "batch_send_interval": 35990,   # 批量推送
+        "history_days": 300,     # 新增，保留3天
         "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
@@ -159,31 +163,57 @@ RSS_GROUPS = [ # RSS 组配置列表
             "show_count": False          #计数
         }
     },
+    # ================== tegegram ==================
+    {
+        "name": "tg",
+        "urls": [
+            'https://rsshub.app/telegram/channel/shareAliyun', 
+         #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
+          #  'https://rsshub.app/telegram/channel/dianying4K', 
 
+        ],
+        "group_key": "ZONGHE_RSS_FEEDS",
+        "interval": 3590,       # 60分钟
+        "batch_send_interval": 17990,   # 批量推送
+        "history_days": 300,     # 新增，保留300天
+        "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
+        "processor": {
+            "translate": False,     #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "template": "[{subject}]({url})",
+            "filter": {
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "keywords": ["电子书", "epub", "mobi", "pdf", "azw3"]  # 本组关键词列表
+            },
+            "preview": False,            # 禁止预览
+            "show_count": False          #计数
+        }
+    },
     # ================== 新浪博客 ==================
     {
         "name": "社交媒体",
         "urls": [
             'https://rsshub.app/weibo/user/3194547262',  # 江西高速
-        #    'https://rsshub.app/weibo/user/1699432410',  # 新华社
+         #   'https://rsshub.app/weibo/user/1699432410',  # 新华社
         #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
             'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
             'https://rsshub.app/weibo/user/1891035762',  # 交警
        #     'https://rsshub.app/weibo/user/3917937138',  # 发布
         #    'https://rsshub.app/weibo/user/3213094623',  # 邮政
-        #    'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
+            'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
 
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
-        "interval": 7190,    # 2小时
-        "batch_send_interval": 35990,   # 批量推送    
+        "interval": 3590,    # 1小时
+        "batch_send_interval": 17990,   # 批量推送    
         "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译关
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
-            "template": "*{subject}*\n[more]({url})",
+            "template": "*{summary}*\n[more]({url})",
             "preview": False,        # 禁止预览
             "show_count": False     #计数
         }
@@ -197,7 +227,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,       # 4分钟 
-        "batch_send_interval": 3590,   # 批量推送
+        "batch_send_interval": 1790,   # 批量推送
         "history_days": 3,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
         "processor": {
@@ -207,13 +237,19 @@ RSS_GROUPS = [ # RSS 组配置列表
             "filter": {
                 "enable": True,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "折"]  # 本组关键词列表
+                "scope": "title",      # 只过滤标题
+     #           "scope": "link",      # 只过滤链接
+     #           "scope": "both",      # 同时过滤标题和链接
+     #           "scope": "all",       # 过滤标题+链接+摘要
+     #           "scope": "title_summary",  # 过滤标题和摘要
+     #           "scope": "link_summary",   # 过滤链接和摘要
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "折"]  # 本组关键词列表
             },
             "preview": False,              # 禁止预览
-            "show_count": False               #计数
+            "show_count": False               # 计数
         }
     },
-    # ================== vps ==================
+    # ================== vps 翻译 ==================
     {
         "name": "vps",
         "urls": [
@@ -247,7 +283,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
+       #     'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
@@ -309,7 +345,7 @@ RSS_GROUPS = [ # RSS 组配置列表
           #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
         ],
         "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
-        "interval": 7180,     # 2小时
+        "interval": 3590,     # 1小时
         "batch_send_interval": 35990,   # 批量推送
         "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
@@ -318,6 +354,12 @@ RSS_GROUPS = [ # RSS 组配置列表
         "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
+            "filter": {
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "scope": "link",  # 只过滤链接
+                "keywords": ["/shorts/", "/shorts/"]  # 本组关键词列表
+            },
         "preview": True,                       # 预览
         "show_count": False                    #计数
     }
@@ -385,7 +427,6 @@ else:
 
 if USE_PG:
     import asyncpg
-
 class RSSDatabase:
     def __init__(self, loop=None):
         self.loop = loop or asyncio.get_event_loop()
@@ -408,103 +449,106 @@ class RSSDatabase:
         """确保数据库表已创建"""
         await self.create_tables()
 
-    async def create_tables(self):
+    async def create_tables(self):  # 这里缩进修复
+        """改进的建表语句，确保 PostgreSQL 和 SQLite 索引一致"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
+                # 主表
                 await conn.execute("""
-                CREATE TABLE IF NOT EXISTS rss_status (
-                    feed_group TEXT,
-                    feed_url TEXT,
-                    entry_url TEXT,
-                    entry_content_hash TEXT,
-                    entry_timestamp DOUBLE PRECISION,
-                    PRIMARY KEY (feed_group, feed_url, entry_url)
-                );
+                    CREATE TABLE IF NOT EXISTS rss_status (
+                        feed_group TEXT,
+                        feed_url TEXT,
+                        entry_url TEXT,
+                        entry_content_hash TEXT,
+                        entry_timestamp DOUBLE PRECISION,
+                        PRIMARY KEY (feed_group, feed_url, entry_url)
+                    );
+                """)
+                # 确保内容哈希索引存在
+                await conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash 
+                    ON rss_status(feed_group, entry_content_hash);
                 """)
                 await conn.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash
-                ON rss_status(feed_group, entry_content_hash);
+                    CREATE TABLE IF NOT EXISTS timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_run_time DOUBLE PRECISION
+                    );
                 """)
                 await conn.execute("""
-                CREATE TABLE IF NOT EXISTS timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_run_time DOUBLE PRECISION
-                );
+                    CREATE TABLE IF NOT EXISTS cleanup_timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_cleanup_time DOUBLE PRECISION
+                    );
                 """)
                 await conn.execute("""
-                CREATE TABLE IF NOT EXISTS cleanup_timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_cleanup_time DOUBLE PRECISION
-                );
+                    CREATE TABLE IF NOT EXISTS pending_messages (
+                        feed_group TEXT,
+                        feed_url TEXT,
+                        entry_id TEXT,
+                        content_hash TEXT,
+                        title TEXT,
+                        translated_title TEXT,
+                        link TEXT,
+                        summary TEXT,
+                        entry_timestamp DOUBLE PRECISION,
+                        sent INTEGER DEFAULT 0,
+                        feed_title TEXT,
+                        PRIMARY KEY (feed_group, feed_url, entry_id)
+                    );
                 """)
                 await conn.execute("""
-                CREATE TABLE IF NOT EXISTS pending_messages (
-                    feed_group TEXT,
-                    feed_url TEXT,
-                    entry_id TEXT,
-                    content_hash TEXT,
-                    title TEXT,
-                    translated_title TEXT,
-                    link TEXT,
-                    summary TEXT,
-                    entry_timestamp DOUBLE PRECISION,
-                    sent INTEGER DEFAULT 0,
-                    feed_title TEXT,
-                    PRIMARY KEY (feed_group, feed_url, entry_id)
-                );
-                """)
-                await conn.execute("""
-                CREATE TABLE IF NOT EXISTS batch_timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_batch_sent_time DOUBLE PRECISION
-                );
+                    CREATE TABLE IF NOT EXISTS batch_timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_batch_sent_time DOUBLE PRECISION
+                    );
                 """)
         else:
             async with self.conn.cursor() as c:
                 await c.execute("""
-                CREATE TABLE IF NOT EXISTS rss_status (
-                    feed_group TEXT,
-                    feed_url TEXT,
-                    entry_url TEXT,
-                    entry_content_hash TEXT,
-                    entry_timestamp REAL,
-                    PRIMARY KEY (feed_group, feed_url, entry_url)
-                )""")
+                    CREATE TABLE IF NOT EXISTS rss_status (
+                        feed_group TEXT,
+                        feed_url TEXT,
+                        entry_url TEXT,
+                        entry_content_hash TEXT,
+                        entry_timestamp REAL,
+                        PRIMARY KEY (feed_group, feed_url, entry_url)
+                    )""")
                 await c.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash
-                ON rss_status(feed_group, entry_content_hash);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash 
+                    ON rss_status(feed_group, entry_content_hash);
                 """)
                 await c.execute("""
-                CREATE TABLE IF NOT EXISTS timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_run_time REAL
-                )""")
+                    CREATE TABLE IF NOT EXISTS timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_run_time REAL
+                    )""")
                 await c.execute("""
-                CREATE TABLE IF NOT EXISTS cleanup_timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_cleanup_time REAL
-                )""")
+                    CREATE TABLE IF NOT EXISTS cleanup_timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_cleanup_time REAL
+                    )""")
                 await c.execute("""
-                CREATE TABLE IF NOT EXISTS pending_messages (
-                    feed_group TEXT,
-                    feed_url TEXT,
-                    entry_id TEXT,
-                    content_hash TEXT,
-                    title TEXT,
-                    translated_title TEXT,
-                    link TEXT,
-                    summary TEXT,
-                    entry_timestamp REAL,
-                    sent INTEGER DEFAULT 0,
-                    feed_title TEXT,
-                    PRIMARY KEY (feed_group, feed_url, entry_id)
-                )
+                    CREATE TABLE IF NOT EXISTS pending_messages (
+                        feed_group TEXT,
+                        feed_url TEXT,
+                        entry_id TEXT,
+                        content_hash TEXT,
+                        title TEXT,
+                        translated_title TEXT,
+                        link TEXT,
+                        summary TEXT,
+                        entry_timestamp REAL,
+                        sent INTEGER DEFAULT 0,
+                        feed_title TEXT,
+                        PRIMARY KEY (feed_group, feed_url, entry_id)
+                    )
                 """)
                 await c.execute("""
-                CREATE TABLE IF NOT EXISTS batch_timestamps (
-                    feed_group TEXT PRIMARY KEY,
-                    last_batch_sent_time REAL
-                )
+                    CREATE TABLE IF NOT EXISTS batch_timestamps (
+                        feed_group TEXT PRIMARY KEY,
+                        last_batch_sent_time REAL
+                    )
                 """)
                 await self.conn.commit()
 
@@ -594,24 +638,31 @@ class RSSDatabase:
                 await self.conn.commit()
 
     async def save_status(self, feed_group, feed_url, entry_url, entry_content_hash, timestamp):
+        """改进的状态保存，确保去重一致性"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_content_hash, entry_timestamp) "
-                    "VALUES($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-                    feed_group, feed_url, entry_url, entry_content_hash, timestamp
-                )
+                # 使用 ON CONFLICT 确保唯一性
+                await conn.execute("""
+                    INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_content_hash, entry_timestamp) 
+                    VALUES($1, $2, $3, $4, $5) 
+                    ON CONFLICT (feed_group, feed_url, entry_url) 
+                    DO UPDATE SET 
+                        entry_content_hash = EXCLUDED.entry_content_hash,
+                        entry_timestamp = EXCLUDED.entry_timestamp
+                """, feed_group, feed_url, entry_url, entry_content_hash, timestamp)
         else:
             async with self.conn.cursor() as c:
                 await c.execute(
-                    "INSERT OR IGNORE INTO rss_status VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?)",
                     (feed_group, feed_url, entry_url, entry_content_hash, timestamp)
                 )
                 await self.conn.commit()
 
     async def has_content_hash(self, feed_group, content_hash):
+        """改进的内容哈希检查，确保编码一致性"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
+                # 修复：PostgreSQL 参数占位符错误，应该是 $1, $2
                 row = await conn.fetchrow(
                     "SELECT 1 FROM rss_status WHERE feed_group=$1 AND entry_content_hash=$2 LIMIT 1",
                     feed_group, content_hash
@@ -739,14 +790,25 @@ def get_entry_identifier(entry):
     return hashlib.sha256(f"{title}|||{pub_date}".encode()).hexdigest()
 
 def get_entry_content_hash(entry):
+    """改进的内容哈希计算，确保编码一致性"""
     title = getattr(entry, 'title', '') or ''
     summary = getattr(entry, 'summary', '') or ''
+    
+    # 统一处理编码和空格
+    title = title.strip().encode('utf-8')
+    summary = summary.strip().encode('utf-8')
+    
+    # 获取发布时间（如果有）
     pub_date = ''
     if hasattr(entry, 'published'):
         pub_date = entry.published
     elif hasattr(entry, 'updated'):
         pub_date = entry.updated
-    raw_text = (title.strip() + summary.strip() + pub_date.strip()).encode('utf-8')
+    
+    pub_date = pub_date.strip().encode('utf-8')
+    
+    # 创建统一的哈希字符串
+    raw_text = title + b'|||' + summary + b'|||' + pub_date
     return hashlib.sha256(raw_text).hexdigest()
 
 def signal_handler(signum, frame):
@@ -831,7 +893,7 @@ async def fetch_feed(session, feed_url):
         except Exception as e:
         #    logger.error(f"请求失败: {modified_url}, 错误: {e}")
             continue
-    logger.error(f"所有域名尝试失败: {feed_url}")
+   # logger.error(f"所有域名尝试失败: {feed_url}")
     return None, canonical_url
 
 async def translate_with_credentials(secret_id, secret_key, text):
@@ -842,14 +904,14 @@ async def translate_with_credentials(secret_id, secret_key, text):
         while safe_bytes[-1] & 0xC0 == 0x80:
             safe_bytes = safe_bytes[:-1]
         text = safe_bytes.decode('utf-8', errors='ignore')
-        logger.warning(f"文本截断至 {len(text)} 字符 ({len(safe_bytes)} 字节)")
+     #   logger.warning(f"文本截断至 {len(text)} 字符 ({len(safe_bytes)} 字节)")
     try:
         return await loop.run_in_executor(
             None, 
             lambda: _sync_translate(secret_id, secret_key, text)
         )
     except Exception as e:
-        logger.error(f"翻译执行失败: {type(e).__name__} - {str(e)}")
+    #    logger.error(f"翻译执行失败: {type(e).__name__} - {str(e)}")
         raise
 
 def is_need_translate(text):
@@ -890,35 +952,63 @@ def _sync_translate(secret_id, secret_key, text):
             "request_id": getattr(e, "request_id", ""),
             "region": TENCENT_REGION
         }
-        logger.error(f"腾讯云API错误详情: {error_details}")
+    #    logger.error(f"腾讯云API错误详情: {error_details}")
         raise
     except Exception as e:
-        logger.error(f"翻译过程中发生未知错误: {str(e)}")
+      #  logger.error(f"翻译过程中发生未知错误: {str(e)}")
         raise
 
 async def should_send_entry(entry, processor):
     filter_config = processor.get("filter", {})
-    title = getattr(entry, "title", "") or ""
-    summary = getattr(entry, "summary", "") or ""
-    content = title.lower()   # 仅标题过滤
-   # content = f"{title} {summary}".lower()  # 标题+摘要过滤 
+    
+    # 如果没有启用过滤，直接返回 True
+    if not filter_config.get("enable", False):
+        return True
+        
+    title = getattr(entry, "title", "") or ""      # 获取标题
+    link = getattr(entry, "link", "") or ""        # 获取链接
+    summary = getattr(entry, "summary", "") or ""  # 获取摘要
+    
+    # 获取过滤范围配置，默认为 "title"
+    scope = filter_config.get("scope", "title")
     keywords = [kw.lower() for kw in filter_config.get("keywords", [])]
     mode = filter_config.get("mode", "allow")
+    
+    # 根据范围配置构建过滤内容
+    content_parts = []
+    
+    if scope == "title":
+        content_parts = [title]
+    elif scope == "link":
+        content_parts = [link]
+    elif scope == "both":
+        content_parts = [title, link]
+    elif scope == "all":
+        content_parts = [title, link, summary]
+    elif scope == "title_summary":
+        content_parts = [title, summary]
+    elif scope == "link_summary":
+        content_parts = [link, summary]
+    else:  # 默认只过滤标题
+        content_parts = [title]
+    
+    # 合并内容并进行过滤检查
+    content = " ".join(content_parts).lower()
     has_keyword = any(keyword in content for keyword in keywords)
-    send = False
-    if not filter_config.get("enable", False):
-        send = True
-    elif not keywords:
-        send = mode != "allow"
+    
+    # 记录过滤详情（调试用）
+    logger.debug(f"[关键词过滤] 范围: {scope} | 标题: {title[:50]} | 链接: {link[:50]} | 关键词: {keywords} | 模式: {mode} | 命中: {has_keyword}")
+    
+    # 根据模式决定是否发送
+    if not keywords:  # 如果没有关键词，根据模式决定
+        return mode != "allow"
     elif mode == "allow":
-        send = has_keyword
+        return has_keyword
     elif mode == "block":
-        send = not has_keyword
+        return not has_keyword
     else:
-        send = True
- #   logger.warning(f"[关键词过滤] 标题: {title} | 摘要: {summary} | 内容: {content} | 关键词: {keywords} | 模式: {mode} | 是否命中: {has_keyword} | 发送: {send}")
-    return send
-
+        return True
+    
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -928,7 +1018,7 @@ async def auto_translate_text(text):
     
     # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
-        logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
+      #  logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
         return escape(cleaned_text)
     
     try:
@@ -941,16 +1031,16 @@ async def auto_translate_text(text):
             )
         except TencentCloudSDKException as e:
             if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
+             #   logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
                 return escape(cleaned_text)
             else:
-                logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
+          #      logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
                 raise
                 
     except Exception as first_error:
         # 只有在非语言识别错误的情况下才尝试备用密钥
         if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-            logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
+        #    logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
             try:
                 return await translate_with_credentials(
                     TENCENT_SECRET_ID,
@@ -959,19 +1049,18 @@ async def auto_translate_text(text):
                 )
             except TencentCloudSDKException as e:
                 if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                    logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
+                 #   logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
                     return escape(cleaned_text)
                 else:
-                    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
+                #    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
                     raise
             except Exception as e:
-                logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
+         #       logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
                 raise
         else:
-            logger.error("主翻译密钥失败，且未配置备用密钥")
+      #      logger.error("主翻译密钥失败，且未配置备用密钥")
             return escape(cleaned_text)
 
-# 改进的消息生成函数
 async def generate_group_message(feed_data, entries, processor):
     try:
         source_name = feed_data.feed.get('title', "未知来源")
@@ -981,6 +1070,13 @@ async def generate_group_message(feed_data, entries, processor):
             header = processor["header_template"].format(source=safe_source) + "\n"
         
         messages = []
+        
+        # ✅ 检查模板是否需要摘要
+        template_needs_summary = "{summary}" in processor["template"]
+        
+        # ✅ 现在可以安全地使用 template_needs_summary
+        logger.debug(f"[摘要处理] 组: {source_name}, 需要摘要: {template_needs_summary}")
+        
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
             if processor.get("translate", False):
@@ -991,21 +1087,27 @@ async def generate_group_message(feed_data, entries, processor):
             raw_url = entry.link
             safe_url = escape(raw_url)
             
-            # 确保每条消息都有完整的加粗格式
-            message = processor["template"].format(
-                subject=safe_subject,
-                source=safe_source,
-                url=safe_url
-            )
+            # ✅ 只在需要时处理摘要
+            format_kwargs = {
+                "subject": safe_subject,
+                "source": safe_source,
+                "url": safe_url
+            }
+            
+            if template_needs_summary:
+                raw_summary = getattr(entry, "summary", "") or ""
+                cleaned_summary = remove_html_tags(raw_summary)
+                safe_summary = escape(cleaned_summary)
+                format_kwargs["summary"] = safe_summary
+            
+            message = processor["template"].format(**format_kwargs)
             messages.append(message)
         
-        # 改进的分段逻辑，确保格式完整性
         full_message = await _format_batch_message(header, messages, processor)
         return full_message
     except Exception as e:
         logger.error(f"生成消息失败: {str(e)}")
         return ""
-
 
 async def _format_batch_message(header, messages, processor):
     """改进的批量消息格式化，确保Markdown格式完整"""
@@ -1119,7 +1221,7 @@ async def process_batch_send(group, db: RSSDatabase):
             def __init__(self, row):
                 self.title = row["translated_title"] or row["title"]
                 self.link = row["link"]
-                
+                self.summary = row.get("summary", "") or ""  # ✅ 新增摘要支持
         entries = [Entry(row) for row in msgs]
         
         try:
@@ -1156,62 +1258,85 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
     if SHOULD_EXIT:
         logger.info("收到退出信号，停止处理组任务")
         return
+        
     group_name = group_config["name"]
     group_key = group_config["group_key"]
     processor = group_config["processor"]
     bot_token = group_config["bot_token"]
     batch_send_interval = group_config.get("batch_send_interval", None)
+    
     try:
         last_run = await db.load_last_run_time(group_key)
         now = datetime.now(pytz.utc).timestamp()
         if (now - last_run) < group_config["interval"]:
             return
+            
         bot = Bot(token=bot_token)
         for index, feed_url in enumerate(group_config["urls"]):
             try:
                 if index > 0:
                     await asyncio.sleep(1)
+                    
                 feed_data, canonical_url = await fetch_feed(session, feed_url)
                 if not feed_data or not feed_data.entries:
                     continue
+                    
                 processed_ids = global_status.get(canonical_url, set())
                 new_entries = []
                 seen_in_batch = set()
-                new_hashes_in_batch = set()  # 新增
+                new_hashes_in_batch = set()  # 当前批次的内容哈希去重
+
                 for entry in feed_data.entries:
                     entry_id = get_entry_identifier(entry)
                     content_hash = get_entry_content_hash(entry)
+                    
+                    # 统一使用内容哈希去重（主要修复）
                     if await db.has_content_hash(group_key, content_hash):
                         continue
+                        
                     if entry_id in processed_ids or entry_id in seen_in_batch:
                         continue
+                        
+                    # 在当前批次中也用内容哈希去重
                     if content_hash in new_hashes_in_batch:
                         continue  
-                        # ✅ 新增：过滤检查
+                        
+                    # ✅ 过滤检查
                     if not await should_send_entry(entry, processor):
                         continue  # 跳过不符合过滤条件的条目
+
                     seen_in_batch.add(entry_id)
                     new_hashes_in_batch.add(content_hash)
                     new_entries.append((entry, content_hash, entry_id))
                     
                 if new_entries:
                     if batch_send_interval:
+                        # 批量发送模式：存入待发送队列
                         for entry, content_hash, entry_id in new_entries:
                             raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
                             if processor["translate"] and is_need_translate(raw_subject):
                                 translated_subject = await auto_translate_text(raw_subject)
                             else:
                                 translated_subject = raw_subject
+                                
                             await db.add_pending_message(
-                                group_key, canonical_url, entry_id, content_hash,
-                                getattr(entry, "title", ""), translated_subject, getattr(entry, "link", ""), getattr(entry, "summary", ""),
+                                group_key, 
+                                canonical_url, 
+                                entry_id, 
+                                content_hash,
+                                getattr(entry, "title", ""), 
+                                translated_subject, 
+                                getattr(entry, "link", ""), 
+                                getattr(entry, "summary", ""),
                                 get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
                                 feed_data.feed.get('title', "") 
                             )
                             await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
                             processed_ids.add(entry_id)
+                            
                         global_status[canonical_url] = processed_ids
                     else:
+                        # 立即发送模式
                         feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
                         if feed_message:
                             try:
@@ -1226,20 +1351,37 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     processed_ids.add(entry_id)
                                 global_status[canonical_url] = processed_ids
                             except Exception as send_error:
-                                logger.error(f"❌ 发送消息失败 [{feed_url}]")
+                                logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
                                 raise
+                                
             except Exception as e:
-                logger.error(f"❌ 处理失败 [{feed_url}]")
+                logger.error(f"❌ 处理失败 [{feed_url}]: {e}")
+                
         await db.save_last_run_time(group_key, now)
+        
     except Exception as e:
-        logger.critical(f"‼️ 处理组失败 [{group_key}]")
+        logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
 
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
-    start_time = time.time()
     
+    # 快速数据库连接检查（60秒超时）
+    try:
+        db_test = RSSDatabase()
+        await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
+        await db_test.ensure_initialized()
+        await db_test.close()
+        logger.info("✅ 数据库连接检查通过")
+    except asyncio.TimeoutError:
+        logger.error("❌ 数据库连接超时（60秒），程序退出")
+        return
+    except Exception as e:
+        logger.error(f"❌ 数据库连接失败: {e}，程序退出")
+        return
+    
+    start_time = time.time()
     max_retries = 3
-    retry_delay = 60  # 秒
+    retry_delay = 60
     
     for attempt in range(max_retries):
         try:
@@ -1263,6 +1405,7 @@ async def run_main_logic():
         # 获取文件锁
         lock_file = open(LOCK_FILE, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info("🔒 成功获取文件锁")
     except OSError:
         logger.warning("⛔ 无法获取文件锁，已有实例在运行，程序退出")
         return
@@ -1271,10 +1414,14 @@ async def run_main_logic():
         return
         
     try:
-        # 数据库连接增加重试机制
-        await connect_database_with_retry(db)
+        # 数据库连接（由于在main()中已经检查过，这里直接连接）
+        logger.info("🔗 正在连接数据库...")
+        await db.open()  # 直接连接，不再重试
+        await db.ensure_initialized()
+        logger.info("✅ 数据库连接成功")
         
         # 清理历史记录
+        logger.info("🧹 正在清理历史记录...")
         for group in RSS_GROUPS:
             days = group.get("history_days", 30)
             try:
@@ -1283,6 +1430,7 @@ async def run_main_logic():
                 logger.error(f"清理历史记录异常: 组={group['group_key']}, 错误={e}")
                 
         # 主处理逻辑
+        logger.info("🚀 开始处理 RSS 订阅...")
         async with aiohttp.ClientSession() as session:
             status = await db.load_status()
             tasks = []
@@ -1316,21 +1464,6 @@ async def run_main_logic():
     finally:
         # 确保资源清理
         await cleanup_resources(db, lock_file)
-
-async def connect_database_with_retry(db, max_attempts=3):
-    """带重试的数据库连接"""
-    for attempt in range(max_attempts):
-        try:
-            await db.open()
-            await db.ensure_initialized()
-            logger.info("✅ 数据库连接成功")
-            return
-        except Exception as e:
-            logger.error(f"数据库连接失败 (尝试 {attempt + 1}/{max_attempts}): {e}")
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(5)
-            else:
-                raise
 
 async def cleanup_resources(db, lock_file):
     """清理资源"""

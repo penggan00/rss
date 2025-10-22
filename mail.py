@@ -15,6 +15,7 @@ from tencentcloud.common import credential
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
+import fitz
 
 load_dotenv()
 
@@ -43,7 +44,7 @@ def remove_html_tags(text):
     return re.sub(clean, '', text)
 
 def translate_content_sync(text):
-    """同步翻译文本为中文"""
+    """同步翻译文本为中文，支持长文本分段翻译"""
     if not text or not ENABLE_TRANSLATION:
         return text
     
@@ -57,19 +58,90 @@ def translate_content_sync(text):
         client_profile = ClientProfile(httpProfile=http_profile)
         client = tmt_client.TmtClient(cred, TENCENT_REGION, client_profile)
         
-        # 确保文本长度在API限制内
-        MAX_TRANSLATE_LENGTH = 2000
-        if len(text) > MAX_TRANSLATE_LENGTH:
-            text = text[:MAX_TRANSLATE_LENGTH] + " [...]"
+        cleaned_text = remove_html_tags(text)
         
-        req = models.TextTranslateRequest()
-        req.SourceText = remove_html_tags(text)
-        req.Source = "auto"
-        req.Target = "zh"
-        req.ProjectId = 0
+        # 检查长度，如果超过限制则分段翻译
+        MAX_BYTES = 1900  # 保留一些余量
+        text_bytes = cleaned_text.encode('utf-8')
         
-        resp = client.TextTranslate(req)
-        return resp.TargetText
+        if len(text_bytes) <= MAX_BYTES:
+            # 短文本直接翻译
+            req = models.TextTranslateRequest()
+            req.SourceText = cleaned_text
+            req.Source = "auto"
+            req.Target = "zh"
+            req.ProjectId = 0
+            resp = client.TextTranslate(req)
+            return resp.TargetText
+        else:
+            # 长文本分段翻译
+            logger.info("检测到长文本，开始分段翻译...")
+            segments = []
+            current_segment = ""
+            
+            # 按段落分割
+            paragraphs = [p for p in cleaned_text.split('\n\n') if p.strip()]
+            
+            for para in paragraphs:
+                para_bytes = para.encode('utf-8')
+                new_segment = current_segment + ("\n\n" + para if current_segment else para)
+                new_segment_bytes = new_segment.encode('utf-8')
+                
+                if len(new_segment_bytes) > MAX_BYTES:
+                    # 当前段落会超出限制，先翻译已积累的内容
+                    if current_segment:
+                        req = models.TextTranslateRequest()
+                        req.SourceText = current_segment
+                        req.Source = "auto"
+                        req.Target = "zh"
+                        req.ProjectId = 0
+                        resp = client.TextTranslate(req)
+                        segments.append(resp.TargetText)
+                    
+                    # 如果单个段落就超过限制，单独处理
+                    if len(para_bytes) > MAX_BYTES:
+                        # 按句子分割大段落
+                        sentences = re.split(r'[。.!?？]\s*', para)
+                        temp_segment = ""
+                        for sentence in sentences:
+                            if not sentence.strip():
+                                continue
+                            sentence_with_punct = sentence + "。"
+                            temp_bytes = (temp_segment + sentence_with_punct).encode('utf-8')
+                            
+                            if len(temp_bytes) > MAX_BYTES and temp_segment:
+                                req = models.TextTranslateRequest()
+                                req.SourceText = temp_segment
+                                req.Source = "auto"
+                                req.Target = "zh"
+                                req.ProjectId = 0
+                                resp = client.TextTranslate(req)
+                                segments.append(resp.TargetText)
+                                temp_segment = sentence_with_punct
+                            else:
+                                temp_segment += sentence_with_punct
+                        
+                        if temp_segment:
+                            current_segment = temp_segment
+                        else:
+                            current_segment = ""
+                    else:
+                        current_segment = para
+                else:
+                    current_segment = new_segment
+            
+            # 翻译最后一段
+            if current_segment:
+                req = models.TextTranslateRequest()
+                req.SourceText = current_segment
+                req.Source = "auto"
+                req.Target = "zh"
+                req.ProjectId = 0
+                resp = client.TextTranslate(req)
+                segments.append(resp.TargetText)
+            
+            return "\n\n".join(segments)
+            
     except Exception as e:
         logger.error(f"翻译失败: {e}")
         return text
@@ -247,12 +319,163 @@ class ContentProcessor:
         except Exception as e:
             logger.error(f"HTML处理失败: {e}")
             return "⚠️ 内容解析异常"
-
+        
+def format_boc_bill_data(pdf_text):
+    """格式化中国银行信用卡账单 - 修复版"""
+    try:
+        lines = pdf_text.split('\n')
+        formatted_lines = []
+        
+        # 账单关键信息
+        bill_info = {
+            '到期还款日': '',
+            '账单日': '',
+            '本期人民币欠款总计': '',
+            '本期最小还款额': '',
+            '卡号': ''
+        }
+        
+        transactions = []
+        current_section = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 检测章节变化
+            if '账单信息总览' in line or 'Account Summary' in line:
+                current_section = 'summary'
+                continue
+            elif '人民币交易明细' in line or 'RMB Transaction Detailed List' in line:
+                current_section = 'transactions'
+                continue
+            elif '卡号' in line and '本期应还款额' in line:
+                current_section = 'card_details'
+                continue
+            
+            # 提取账单摘要信息
+            if current_section == 'summary':
+                if '到期还款日' in line:
+                    # 查找日期格式
+                    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+                    if date_match:
+                        bill_info['到期还款日'] = date_match.group(1)
+                elif '账单日' in line:
+                    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+                    if date_match:
+                        bill_info['账单日'] = date_match.group(1)
+                elif '本期人民币欠款总计' in line:
+                    # 查找金额
+                    amount_match = re.search(r'(\d+\.\d{2})', line)
+                    if amount_match:
+                        bill_info['本期人民币欠款总计'] = amount_match.group(1)
+                elif '本期最小还款' in line:
+                    amount_match = re.search(r'(\d+\.\d{2})', line)
+                    if amount_match:
+                        bill_info['本期最小还款额'] = amount_match.group(1)
+            
+            # 提取卡号信息
+            elif current_section == 'card_details':
+                if re.match(r'\d{4}\s\d{4}\s\s\d{4}', line):
+                    bill_info['卡号'] = line.strip()
+                elif '本期应还款额' in line:
+                    amount_match = re.search(r'(\d+\.\d{2})', line)
+                    if amount_match and not bill_info['本期人民币欠款总计']:
+                        bill_info['本期人民币欠款总计'] = amount_match.group(1)
+            
+            # 提取交易记录
+            elif current_section == 'transactions':
+                # 检测交易记录行（包含日期）
+                if re.match(r'\d{4}-\d{2}-\d{2}', line):
+                    transaction = {
+                        'date': line.strip(),
+                        'card_last_four': '',
+                        'description': '',
+                        'amount': ''
+                    }
+                    
+                    # 这是一个交易开始，我们需要收集后续的相关行
+                    transactions.append(transaction)
+                elif transactions:
+                    # 为最后一个交易添加信息
+                    last_transaction = transactions[-1]
+                    
+                    # 检测卡号后四位
+                    if re.match(r'^\d{4}$', line):
+                        last_transaction['card_last_four'] = line
+                    # 检测金额（数字格式）
+                    elif re.match(r'^-?\d+\.?\d*$', line) and not last_transaction['amount']:
+                        last_transaction['amount'] = line
+                    # 检测交易描述（包含中文或英文，且不是纯数字）
+                    elif (not re.match(r'^-?\d+\.?\d*$', line) and 
+                          not re.match(r'^\d{4}$', line) and 
+                          len(line) > 2 and 
+                          not last_transaction['description']):
+                        # 清理描述文本
+                        clean_desc = line.replace('CHN', '').strip()
+                        clean_desc = re.sub(r'[^\w\s\u4e00-\u9fff\-·]', '', clean_desc)  # 保留中文、英文、连字符等
+                        last_transaction['description'] = clean_desc
+        
+        # 构建格式化输出
+        final_output = []
+        
+        # 账单摘要
+        final_output.append("🏦 中国银行信用卡账单摘要")
+        if bill_info['到期还款日']:
+            final_output.append(f"⏰ 到期还款日: {bill_info['到期还款日']}")
+        if bill_info['账单日']:
+            final_output.append(f"📅 账单日: {bill_info['账单日']}")
+        if bill_info['本期人民币欠款总计']:
+            final_output.append(f"💰 本期欠款总额: {bill_info['本期人民币欠款总计']}元")
+        if bill_info['本期最小还款额']:
+            final_output.append(f"💳 最低还款额: {bill_info['本期最小还款额']}元")
+        if bill_info['卡号']:
+            final_output.append(f"🔢 卡号: {bill_info['卡号']}")
+        
+        # 交易明细（去重和清理）
+        if transactions:
+            final_output.append("\n--- 交易明细 ---")
+            
+            # 清理交易记录：移除不完整的记录，合并相同日期的连续交易
+            cleaned_transactions = []
+            for trans in transactions:
+                if trans['description'] and trans['amount']:
+                    # 如果商家名称太短，尝试从原始文本中获取更完整的描述
+                    if len(trans['description']) <= 2:
+                        continue
+                    cleaned_transactions.append(trans)
+            
+            # 输出交易记录
+            for trans in cleaned_transactions:
+                emoji = "🍔" if "汉堡" in trans['description'] else "🛒"
+                final_output.append(f"📅 {trans['date']} | 💳 {trans['card_last_four']} | {emoji} {trans['description']} | 💰 {trans['amount']}元")
+        
+        # 如果没有提取到交易记录，添加提示
+        if not transactions or len(cleaned_transactions) == 0:
+            final_output.append("\n⚠️ 交易明细提取不完整，建议查看原PDF")
+        
+        return '\n'.join(final_output)
+        
+    except Exception as e:
+        logger.error(f"中国银行账单格式化失败: {e}")
+        return f"账单格式化异常: {str(e)}"
+    
 class EmailHandler:
     @staticmethod
     async def get_email_content(msg):
         """统一内容获取，添加翻译功能"""
         try:
+            subject = EmailDecoder.decode_email_header(msg.get("Subject", ""))
+            
+            # 检查是否是中国银行邮件且有PDF附件
+            if "中国银行" in subject:
+                pdf_content = await EmailHandler.extract_pdf_attachment(msg)
+                if pdf_content:
+                    logger.info("检测到中国银行PDF附件，优先处理PDF内容")
+                    return pdf_content
+            
+            # 原有逻辑（非中国银行邮件或没有PDF附件）
             content = ""
             for part in msg.walk():
                 if part.get_content_type() == 'text/html':
@@ -273,16 +496,18 @@ class EmailHandler:
                 content = "📨 图片内容（文本信息如下）\n" + "\n".join(
                     f"{k}: {v}" for k,v in msg.items() if k.lower() in ['subject', 'from', 'date']
                 )
-            
+
             # 检测是否需要翻译
             if content and not is_mainly_chinese(content) and ENABLE_TRANSLATION:
                 if DEBUG_MODE:
                     logger.info("检测到非中文内容，开始翻译...")
+                original_length = len(content)
                 translated = await translate_content_async(content)
                 if translated and translated != content:
-                    content = "以下内容已翻译:\n\n" + translated
+                    if not content.startswith("以下内容已翻译:"):
+                        content = "以下内容已翻译:\n\n" + translated
                     if DEBUG_MODE:
-                        logger.info("翻译完成")
+                        logger.info(f"翻译完成，原始长度: {original_length}, 翻译后长度: {len(translated)}")
             
             return ContentProcessor.normalize_newlines(content or "⚠️ 无法解析内容")
             
@@ -290,6 +515,135 @@ class EmailHandler:
             logger.error(f"内容提取失败: {e}")
             return "⚠️ 内容提取异常"
 
+    @staticmethod
+    async def extract_pdf_attachment(msg):
+        """提取PDF附件内容 - 修复版"""
+        try:
+            pdf_attachments = []
+            
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                filename = part.get_filename()
+                content_disposition = str(part.get("Content-Disposition", ""))
+                
+                # 解码文件名（如果是编码的）
+                if filename and '=?' in filename:
+                    try:
+                        filename = EmailDecoder.decode_email_header(filename)
+                        logger.info(f"解码后文件名: {filename}")
+                    except Exception as e:
+                        logger.error(f"文件名解码失败: {e}")
+                
+                logger.info(f"检查部分: type={content_type}, filename={filename}, disposition={content_disposition}")
+                
+                # 检测PDF附件 - 包括 application/octet-stream 类型
+                is_pdf = (content_type in ["application/pdf", "application/octet-stream"] or 
+                         (filename and filename.lower().endswith('.pdf')) or
+                         (filename and '账单' in filename) or
+                         (filename and 'bill' in filename.lower()))
+                
+                if is_pdf:
+                    pdf_data = part.get_payload(decode=True)
+                    if pdf_data and len(pdf_data) > 100:
+                        actual_filename = filename or "bill.pdf"
+                        # 验证PDF文件头
+                        if len(pdf_data) >= 4 and pdf_data[:4] == b'%PDF':
+                            pdf_attachments.append((actual_filename, pdf_data))
+                            logger.info(f"确认找到PDF文件: {actual_filename}, 大小: {len(pdf_data)} 字节")
+                        else:
+                            logger.info(f"找到疑似文件但文件头不匹配: {actual_filename}")
+            
+            # 如果有PDF附件，处理第一个
+            if pdf_attachments:
+                filename, pdf_data = pdf_attachments[0]
+                logger.info(f"开始处理PDF附件: {filename}")
+                
+                # 异步处理PDF内容
+                loop = asyncio.get_running_loop()
+                pdf_text = await loop.run_in_executor(
+                    None, 
+                    EmailHandler.extract_pdf_text, 
+                    pdf_data
+                )
+                
+                if pdf_text:
+                    logger.info(f"PDF内容提取成功，长度: {len(pdf_text)} 字符")
+                    
+                    # 如果是中国银行账单，进行格式化
+                    if "中国银行" in filename or "BOC" in filename.upper():
+                        logger.info("检测到中国银行账单，进行格式化处理")
+                        formatted_text = format_boc_bill_data(pdf_text)
+                        pdf_text = f"📄 中国银行信用卡账单:\n\n{formatted_text}"
+                    
+                    # 检测是否需要翻译
+                    if not is_mainly_chinese(pdf_text) and ENABLE_TRANSLATION:
+                        translated = await translate_content_async(pdf_text)
+                        if translated and translated != pdf_text:
+                            pdf_text = f"📄 PDF内容已翻译 ({filename}):\n\n{translated}"
+                        else:
+                            pdf_text = f"📄 PDF内容 ({filename}):\n\n{pdf_text}"
+                    else:
+                        pdf_text = f"📄 PDF内容 ({filename}):\n\n{pdf_text}"
+                    
+                    return ContentProcessor.normalize_newlines(pdf_text)
+                else:
+                    logger.warning(f"PDF附件无法提取文本: {filename}")
+                    return f"📄 找到PDF附件但无法提取文本: {filename}"
+            
+            logger.info("未找到PDF附件")
+            return None
+            
+        except Exception as e:
+            logger.error(f"PDF附件处理失败: {e}")
+            return None
+
+    @staticmethod
+    def extract_pdf_text(pdf_data):
+        """同步提取PDF文本内容 - 改进版"""
+        try:
+            # 打开PDF文档
+            pdf_document = fitz.open(stream=pdf_data, filetype="pdf")
+            all_text = []
+            
+            # 提取每一页的文本，使用更好的提取选项
+            for page_num in range(len(pdf_document)):
+                page = pdf_document.load_page(page_num)
+                
+                # 使用不同的文本提取选项
+                text_options = [
+                    page.get_text(),  # 默认提取
+                    page.get_text("text", sort=True),  # 排序文本
+                    page.get_text("words")  # 按单词提取
+                ]
+                
+                for text in text_options:
+                    if isinstance(text, str) and text.strip():
+                        all_text.append(text.strip())
+                    elif isinstance(text, list):
+                        # 处理单词列表
+                        words_text = ' '.join([word[4] for word in text if len(word) > 4])
+                        if words_text.strip():
+                            all_text.append(words_text.strip())
+            
+            pdf_document.close()
+            
+            # 合并所有文本
+            combined_text = '\n'.join(all_text)
+            
+            if combined_text.strip():
+                # 清理文本但保留更多信息
+                cleaned_text = ContentProcessor.clean_text(combined_text)
+                # 移除过多的空行但保留段落结构
+                cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+                return cleaned_text
+            else:
+                logger.warning("PDF文档没有可提取的文本内容")
+                return None
+                
+        except Exception as e:
+            logger.error(f"PDF文本提取失败: {e}")
+            return None
+        
 def clean_bill_data(input_data):
     cleaned_lines = []
     for line in input_data.split('\n'):
@@ -331,13 +685,24 @@ def clean_bill_data(input_data):
 
 class MessageFormatter:
     @staticmethod
-    def format_message(sender, subject, content):
-        """返回分离的header和body"""
+    async def format_message(sender, subject, content):
+        """返回分离的header和body，添加主题翻译"""
         realname, email_address = parseaddr(sender)
         
         clean_realname = re.sub(r'[|]', '', realname).strip()
         clean_email = email_address.strip()
         clean_subject = re.sub(r'\s+', ' ', subject).replace('|', '')
+        
+        # 主题翻译（如果是非中文且启用了翻译）
+        final_subject = clean_subject
+        if clean_subject and not is_mainly_chinese(clean_subject) and ENABLE_TRANSLATION:
+            if DEBUG_MODE:
+                logger.info("检测到非中文主题，开始翻译...")
+            translated_subject = await translate_content_async(clean_subject)
+            if translated_subject and translated_subject != clean_subject:
+                final_subject = f"{clean_subject} ({translated_subject})"
+                if DEBUG_MODE:
+                    logger.info("主题翻译完成")
         
         # 构建MarkdownV2格式的header部分
         sender_line = "✉️ "
@@ -348,8 +713,8 @@ class MessageFormatter:
                 sender_line += " "  # 在用户名和邮箱之间加空格
             sender_line += f"`{clean_email}`"  # 邮箱等宽
             
-        # 主题单独一行
-        subject_line = f"_{clean_subject}_" if clean_subject else ""
+        # 主题单独一行（使用可能翻译后的主题）
+        subject_line = f"_{final_subject}_" if final_subject else ""
         
         # 组合header部分
         if sender_line and subject_line:
@@ -466,9 +831,23 @@ async def main():
                     
                     sender = EmailDecoder.decode_email_header(msg.get("From"))
                     subject = EmailDecoder.decode_email_header(msg.get("Subject"))
+                    
+                    # 记录邮件信息
+                    logger.info(f"处理邮件 - 发件人: {sender}, 主题: {subject}")
+                    
+                    # 调试：分析邮件结构
+                    if "中国银行" in subject and DEBUG_MODE:
+                        logger.info("=== 邮件结构分析 ===")
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            filename = part.get_filename()
+                            content_disposition = str(part.get("Content-Disposition", ""))
+                            logger.info(f"部分: {content_type}, 文件名: {filename}, 处置: {content_disposition}")
+                        logger.info("=== 分析结束 ===")
+                    
                     content = await EmailHandler.get_email_content(msg)
 
-                    header, body = MessageFormatter.format_message(sender, subject, content)
+                    header, body = await MessageFormatter.format_message(sender, subject, content)
                     header_len = len(header)
                     max_body_len = MAX_MESSAGE_LENGTH - header_len
 
