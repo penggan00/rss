@@ -139,7 +139,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
             'https://cn.nytimes.com/rss.html', 
          #   'https://www.gcores.com/rss', 
-            'https://www.yystv.cn/rss/feed', 
+          #  'https://www.yystv.cn/rss/feed', 
             'https://www.ruanyifeng.com/blog/atom.xml', 
             'https://www.huxiu.com/rss/0.xml', 
             'https://sspai.com/feed', 
