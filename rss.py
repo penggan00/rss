@@ -137,18 +137,19 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "综合资讯",
         "urls": [
-            'https://cn.nytimes.com/rss.html', 
-         #   'https://www.gcores.com/rss', 
-          #  'https://www.yystv.cn/rss/feed', 
-            'https://www.ruanyifeng.com/blog/atom.xml', 
-            'https://www.huxiu.com/rss/0.xml', 
-            'https://sspai.com/feed', 
-            'https://sputniknews.cn/export/rss2/archive/index.xml',
-            'https://feeds.feedburner.com/rsscna/intworld',
-            'https://feeds.feedburner.com/rsscna/mainland',         
-            'https://rsshub.app/telegram/channel/zaobaosg', 
-            'https://rsshub.app/telegram/channel/rocCHL', 
-            'https://rsshub.app/telegram/channel/tnews365', 
+            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
+         #   'https://www.gcores.com/rss', # 游戏时光
+          #  'https://www.yystv.cn/rss/feed', # 游戏研究社
+            'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
+            'https://www.huxiu.com/rss/0.xml',  # 虎嗅
+            'https://sspai.com/feed', # 少数派
+            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 斯普尼克
+            'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
+            'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
+            'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
+            'https://rsshub.app/telegram/channel/rocCHL',  # 台湾中央社
+            'https://rsshub.app/telegram/channel/tnews365', # 竹新社
+            'https://www.v2ex.com/index.xml',  # V2EX
         ],
         "group_key": "TOURTH_RSS_FEEDS",
         "interval": 1790,       # 30分钟
@@ -167,7 +168,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "tg",
         "urls": [
-            'https://rsshub.app/telegram/channel/shareAliyun', 
+            'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
 
@@ -392,9 +393,9 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub.app/guancha/headline',
-            'https://rsshub.app/guancha',
-            'https://rsshub.app/zaobao/znews/china',
+            'https://rsshub.app/guancha/headline', # 观察者网 头条
+            'https://rsshub.app/guancha', # 观察者网全部
+            'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 3590,      # 1小时
