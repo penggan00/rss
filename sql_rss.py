@@ -26,6 +26,7 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
+from datetime import datetime, timezone
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -115,7 +116,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "快讯",
         "urls": [
-            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+         #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
             'https://36kr.com/feed-newsflash',  # 36氪快讯
         #    'https://36kr.com/feed',  # 36氪综合
             
@@ -133,22 +134,51 @@ RSS_GROUPS = [ # RSS 组配置列表
             "show_count": False          #计数
         }
     },
+
+    {
+        "name": "同花顺",
+        "urls": [
+            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+         #   'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
+        ],
+        "group_key": "FOURTH_RRSS_FEEDS",
+        "interval": 700,       # 10分钟 
+        "batch_send_interval": 3590,   # 批量推送
+        "history_days": 3,     # 新增，保留3天
+        "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
+        "processor": {
+            "translate": False,     #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "filter": {
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "keywords": ["比亚迪", "比特币", "美元", "失守", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"]  # 本组关键词列表
+            },
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,            # 禁止预览
+            "show_count": False          #计数
+        }
+    },
+
     # ================== 综合资讯 ==================
     {
         "name": "综合资讯",
         "urls": [
-            'https://cn.nytimes.com/rss.html', 
-         #   'https://www.gcores.com/rss', 
-            'https://www.yystv.cn/rss/feed', 
-            'https://www.ruanyifeng.com/blog/atom.xml', 
-            'https://www.huxiu.com/rss/0.xml', 
-            'https://sspai.com/feed', 
-            'https://sputniknews.cn/export/rss2/archive/index.xml',
-            'https://feeds.feedburner.com/rsscna/intworld',
-            'https://feeds.feedburner.com/rsscna/mainland',         
-            'https://rsshub.app/telegram/channel/zaobaosg', 
-            'https://rsshub.app/telegram/channel/rocCHL', 
-            'https://rsshub.app/telegram/channel/tnews365', 
+            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
+         #   'https://www.gcores.com/rss', # 游戏时光
+          #  'https://www.yystv.cn/rss/feed', # 游戏研究社
+          #  'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
+         #   'https://www.huxiu.com/rss/0.xml',  # 虎嗅
+         #   'https://sspai.com/feed', # 少数派
+            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+            'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
+            'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
+            'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
+            'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
+      #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
+      #      'https://www.v2ex.com/index.xml',  # V2EX
         ],
         "group_key": "TOURTH_RSS_FEEDS",
         "interval": 1790,       # 30分钟
@@ -167,7 +197,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "tg",
         "urls": [
-            'https://rsshub.app/telegram/channel/shareAliyun', 
+            'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
 
@@ -392,9 +422,9 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub.app/guancha/headline',
-            'https://rsshub.app/guancha',
-            'https://rsshub.app/zaobao/znews/china',
+            'https://rsshub.app/guancha/headline', # 观察者网 头条
+            'https://rsshub.app/guancha', # 观察者网全部
+            'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 3590,      # 1小时

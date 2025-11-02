@@ -10,8 +10,8 @@ import time
 import signal
 import aiosqlite
 import sys
+import shutil
 from pathlib import Path
-from datetime import datetime
 from dotenv import load_dotenv
 from feedparser import parse
 from telegram import Bot
@@ -26,17 +26,30 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
+from datetime import datetime, timezone
+import importlib.util
 
-# ========== 全局退出标志 ==========
+# ========== 首先加载环境变量 ==========
+load_dotenv()  # 在顶部立即加载
+
+# ========== 配置同步设置 ==========
+CONFIG_URL = os.getenv("CONFIG_URL")
+LOCAL_CONFIG_FILE = Path(__file__).parent / "rss_config.py"
+CONFIG_CACHE_TIME = 24 * 3600  # 24小时缓存
+
+# 全局配置管理器
+config_manager = None
+
+# ========== 原有的全局变量和配置 ==========
 SHOULD_EXIT = False
-# ========== 环境加载 ==========
-load_dotenv()
+
 # 设置时区（在cron环境中很重要）
 os.environ['TZ'] = 'Asia/Singapore'
 try:
     time.tzset()  # Linux系统
 except AttributeError:
     pass  # Windows系统忽略
+
 BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
 DATABASE_FILE = BASE_DIR / "rss.db"
@@ -49,7 +62,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
+# 现在这些环境变量会在 load_dotenv() 之后正确加载
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").split(",")
 TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
 TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
 TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
@@ -59,358 +73,8 @@ semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
 
-RSS_GROUPS = [ # RSS 组配置列表
-    # ================== 国际新闻组 ==================False: 关闭 / True: 开启
-    {
-        "name": "国际新闻",
-        "urls": [
-            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
-            'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
-       #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
-         #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
-        #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
-        #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
-           'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
-        #    'https://www.ft.com/?format=rss',                 # 金融时报
-       #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
-       #     'http://rss.cnn.com/rss/cnn_topstories.rss',   # cnn
-       #     'https://www.theguardian.com/world/rss',     # 卫报
-      #      'https://www.theverge.com/rss/index.xml',   # The Verge:
-        ],
-        "group_key": "RSS_FEEDS",
-        "interval": 3590,      # 60分钟 
-        "batch_send_interval": 14390,   # 4小时批量推送
-        "history_days": 180,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
-        "processor": {
-            "translate": True,       #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,         # 禁止预览
-            "show_count": False        # ✅新增
-        }
-    },
-
-    # ================== 国际新闻中文组 ==================False: 关闭 / True: 开启
-    {
-        "name": "国际新闻中文",
-        "urls": [
-            'https://www.ftchinese.com/rss/news',   # ft中文网
-        ],
-        "group_key": "RSS_FEEDS_INTERNATIONAL",
-        "interval": 3590,      # 1小时
-        "batch_send_interval": 35990,   # 批量推送←加上即
-        "history_days": 300,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
-        "processor": {
-            "translate": False,       #翻译 False: 关闭 / True: 开启
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,         # 禁止预览
-            "show_count": False        # ✅新增
-        }
-    },
-
-    # ================== 快讯组 ==================
-    {
-        "name": "快讯",
-        "urls": [
-            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
-            'https://36kr.com/feed-newsflash',  # 36氪快讯
-        #    'https://36kr.com/feed',  # 36氪综合
-            
-        ],
-        "group_key": "FOURTH_RSS_FEEDS",
-        "interval": 700,       # 10分钟 
-        "batch_send_interval": 1790,   # 批量推送
-        "history_days": 3,     # 新增，保留3天
-        "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
-        "processor": {
-            "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,            # 禁止预览
-            "show_count": False          #计数
-        }
-    },
-    # ================== 综合资讯 ==================
-    {
-        "name": "综合资讯",
-        "urls": [
-            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
-         #   'https://www.gcores.com/rss', # 游戏时光
-          #  'https://www.yystv.cn/rss/feed', # 游戏研究社
-            'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
-            'https://www.huxiu.com/rss/0.xml',  # 虎嗅
-            'https://sspai.com/feed', # 少数派
-            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 斯普尼克
-            'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
-            'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
-            'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
-            'https://rsshub.app/telegram/channel/rocCHL',  # 台湾中央社
-            'https://rsshub.app/telegram/channel/tnews365', # 竹新社
-            'https://www.v2ex.com/index.xml',  # V2EX
-        ],
-        "group_key": "TOURTH_RSS_FEEDS",
-        "interval": 1790,       # 30分钟
-        "batch_send_interval": 35990,   # 批量推送
-        "history_days": 300,     # 新增，保留3天
-        "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
-        "processor": {
-            "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,            # 禁止预览
-            "show_count": False          #计数
-        }
-    },
-    # ================== tegegram ==================
-    {
-        "name": "tg",
-        "urls": [
-            'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
-         #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
-          #  'https://rsshub.app/telegram/channel/dianying4K', 
-
-        ],
-        "group_key": "ZONGHE_RSS_FEEDS",
-        "interval": 3590,       # 60分钟
-        "batch_send_interval": 17990,   # 批量推送
-        "history_days": 300,     # 新增，保留300天
-        "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
-        "processor": {
-            "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "[{subject}]({url})",
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["电子书", "epub", "mobi", "pdf", "azw3"]  # 本组关键词列表
-            },
-            "preview": False,            # 禁止预览
-            "show_count": False          #计数
-        }
-    },
-    # ================== 新浪博客 ==================
-    {
-        "name": "社交媒体",
-        "urls": [
-            'https://rsshub.app/weibo/user/3194547262',  # 江西高速
-         #   'https://rsshub.app/weibo/user/1699432410',  # 新华社
-        #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
-            'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
-            'https://rsshub.app/weibo/user/1891035762',  # 交警
-       #     'https://rsshub.app/weibo/user/3917937138',  # 发布
-        #    'https://rsshub.app/weibo/user/3213094623',  # 邮政
-            'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
-
-        ],
-        "group_key": "FIFTH_RSSSA_FEEDS",
-        "interval": 3590,    # 1小时
-        "batch_send_interval": 17990,   # 批量推送    
-        "history_days": 300,     # 新增，保留300天
-        "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
-        "processor": {
-            "translate": False,     #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-         #   "template": "*{subject}*\n🔗 {url}",
-            "template": "*{summary}*\n[more]({url})",
-            "preview": False,        # 禁止预览
-            "show_count": False     #计数
-        }
-    },
-
-    # ================== 技术论坛组 ==================
-    {
-        "name": "技术论坛",
-        "urls": [
-            'https://rss.nodeseek.com',  # Nodeseek  
-        ],
-        "group_key": "FIFTH_RSS_RSS_SAN", 
-        "interval": 240,       # 4分钟 
-        "batch_send_interval": 1790,   # 批量推送
-        "history_days": 3,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
-        "processor": {
-            "translate": False,                  #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})", 
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "scope": "title",      # 只过滤标题
-     #           "scope": "link",      # 只过滤链接
-     #           "scope": "both",      # 同时过滤标题和链接
-     #           "scope": "all",       # 过滤标题+链接+摘要
-     #           "scope": "title_summary",  # 过滤标题和摘要
-     #           "scope": "link_summary",   # 过滤链接和摘要
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "折"]  # 本组关键词列表
-            },
-            "preview": False,              # 禁止预览
-            "show_count": False               # 计数
-        }
-    },
-    # ================== vps 翻译 ==================
-    {
-        "name": "vps",
-        "urls": [
-        #    'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
-            'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
-        ],
-        "group_key": "FIFTH_RSS_RRSS_SAN",
-        "interval": 3590,      # 60分钟 
-        "batch_send_interval": 17990,   # 批量推送
-        "history_days": 60,     # 保留60天
-        "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
-        "processor": {
-            "translate": True,       #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,         # 禁止预览
-            "show_count": False        # ✅新增
-        }
-    },
-    # ================== YouTube频道组 ==================
-    {
-        "name": "YouTube频道",
-        "urls": [
-         #   'https://blog.090227.xyz/atom.xml',
-         #   'https://www.freedidi.com/feed',
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w', # 零度解说
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC96OvMh0Mb_3NmuE8Dpu7Gg', # 搞机零距离
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQoagx4VHBw3HkAyzvKEEBA', # 科技共享
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCbCCUH8S3yhlm7__rhxR2QQ', # 不良林
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCMtXiCoKFrc2ovAGc1eywDg', # 一休
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCii04BCvYIdQvshrdNDAcww', # 悟空的日常
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCJMEiNh1HvpopPU3n9vJsMQ', # 理科男士
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCYjB6uufPeHSwuHs8wovLjg', # 中指通
-       #     'https://www.youtube.com/feeds/videos.xml?channel_id=UCSs4A6HYKmHA2MG_0z-F0xw', # 李永乐老师
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCZDgXi7VpKhBJxsPuZcBpgA', # 可恩KeEn
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCxukdnZiXnTFvjF5B5dvJ5w', # 甬哥侃侃侃ygkkk
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCUfT9BAofYBKUTiEVrgYGZw', # 科技分享
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC51FT5EeNPiiQzatlA2RlRA', # 乌客wuke
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCDD8WJ7Il3zWBgEYBUtc9xQ', # jack stone
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCWurUlxgm7YJPPggDz9YJjw', # 一瓶奶油
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCvENMyIFurJi_SrnbnbyiZw', # 酷友社
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCmhbF9emhHa-oZPiBfcLFaQ', # WenWeekly
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC3BNSKOaphlEoK4L7QTlpbA', # 中外观察
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCXk0rwHPG9eGV8SaF2p8KUQ', # 烏鴉笑笑
-                    # ... 其他YouTube频道（共18个）
-        ],
-        "group_key": "YOUTUBE_RSSS_FEEDS", # YouTube频道
-        "interval": 3590,      # 60分钟
-       # "batch_send_interval": 10800,   # 批量推送
-        "history_days": 360,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
-        "processor": {
-            "translate": False,                    #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": True,                # 预览
-            "show_count": False               #计数
-        }
-    },
-
-    # ================== 中文YouTube组 ==================
-    {
-        "name": "中文YouTube",
-        "urls": [
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCUNciDq-y6I6lEQPeoP-R5A', # 苏恒观察
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCXkOTZJ743JgVhJWmNV8F3Q', # 寒國人
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC2r2LPbOUssIa02EbOIm7NA', # 星球熱點
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCF-Q1Zwyn9681F7du8DMAWg', # 謝宗桓-老謝來了
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCNiJNzSkfumLB7bYtXcIEmg', # 真的很博通
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCN0eCImZY6_OiJbo8cy5bLw', # 屈機TV
-         #   'https://www.youtube.com/feeds/videos.xml?channel_id=UCb3TZ4SD_Ys3j4z0-8o6auA', # BBC News 中文
-       #     'https://www.youtube.com/feeds/videos.xml?channel_id=UCiwt1aanVMoPYUt_CQYCPQg', # 全球大視野
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC000Jn3HGeQSwBuX_cLDK8Q', # 我是柳傑克
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
-          #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
-        # 影视
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCi2GvcaxZCN-61a0co8Smnw', # 館長
-   # bilibili
-       #     'https://rsshub.app/bilibili/user/video/271034954', #无限海子
-        #    'https://rsshub.app/bilibili/user/video/10720688', #乌客wuke
-         #   'https://rsshub.app/bilibili/user/video/33683045', #张召忠
-        #    'https://rsshub.app/bilibili/user/video/9458053', #李永乐
-         #   'https://rsshub.app/bilibili/user/video/456664753', #央视新闻
-          #  'https://rsshub.app/bilibili/user/video/95832115', #汐朵曼
-          #  'https://rsshub.app/bilibili/user/video/3546741104183937', #油管精選字幕组
-          #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
-        ],
-        "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
-        "interval": 3590,     # 1小时
-        "batch_send_interval": 35990,   # 批量推送
-        "history_days": 360,     # 新增，保留300天
-        "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
-        "processor": {
-        "translate": False,                    #翻译关
-        "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-    #   "template": "*{subject}*\n🔗 {url}",
-        "template": "*{subject}*\n[more]({url})",
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "scope": "link",  # 只过滤链接
-                "keywords": ["/shorts/", "/shorts/"]  # 本组关键词列表
-            },
-        "preview": True,                       # 预览
-        "show_count": False                    #计数
-    }
-    },
-    # ================== 社交媒体组+翻译预览 ==================
-    {
-        "name": "社交媒体",
-        "urls": [
-        #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
-         #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
-        #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
-
-        ],
-        "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
-        "interval": 7000,    # 2小时
-        "batch_send_interval": 36000,   # 批量推送
-        "history_days": 300,     # 新增，保留30天
-        "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
-        "processor": {
-            "translate": True,          #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-         #   "template": "*{subject}*\n🔗 {url}",
-            "template": "*{subject}*\n[more]({url})",
-            "preview": True,        # 预览
-            "show_count": False     #计数
-        }
-    },
-    # ================== 中文媒体组 ==================
-    {
-        "name": "中文媒体", 
-        "urls": [
-            'https://rsshub.app/guancha/headline', # 观察者网 头条
-            'https://rsshub.app/guancha', # 观察者网全部
-            'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
-        ],
-        "group_key": "THIRD_RSS_FEEDS",
-        "interval": 3590,      # 1小时
-        "batch_send_interval": 14350,   # 批量推送
-        "history_days": 30,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
-        "processor": {
-            "translate": False,                        #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,                             # 禁止预览
-            "show_count": False                       #计数
-        }
-    }
-]
+# ========== 全局 RSS_GROUPS 变量 ==========
+RSS_GROUPS = []  # 将在main函数中从配置文件加载
 
 # ========== 数据库配置 ==========
 PG_URL = os.getenv("PG_URL")
@@ -425,6 +89,170 @@ if USE_PG:
 else:
     logger.info(f"🔧 使用 SQLite 数据库: {DATABASE_FILE}")
     print(f"✅ SQLite : {DATABASE_FILE}")
+
+class ConfigManager:
+    def __init__(self, db=None):
+        self.last_update = 0
+        self.db = db
+        
+    async def ensure_fresh_config(self):
+        """确保配置是最新的"""
+        # 如果本地配置文件不存在，强制从GitHub下载
+        if not LOCAL_CONFIG_FILE.exists():
+            logger.info("📥 首次运行，本地配置文件不存在，从GitHub下载配置...")
+            success = await self._update_config_from_github()
+            if success:
+                logger.info("✅ 首次配置下载成功")
+                if self.db:
+                    await self.db.save_config_update_time()
+                    logger.info("✅ 配置更新时间已保存到数据库")
+            else:
+                logger.error("❌ 首次配置下载失败，程序无法继续")
+                # 可以在这里创建默认配置或退出程序
+            return
+            
+        # 本地配置文件存在，按时间缓存检查
+        if not await self._is_config_fresh():
+            logger.info("🔄 配置已过期，从GitHub更新...")
+            success = await self._update_config_from_github()
+            if success and self.db:
+                await self.db.save_config_update_time()
+                logger.info("✅ 配置更新时间已保存到数据库")
+        else:
+            logger.info("✅ 使用本地缓存配置")
+    
+    async def _is_config_fresh(self):
+        """检查配置是否在24小时内更新过"""
+        # 如果本地文件不存在，应该返回False强制更新，但这种情况应该在上层处理
+        if not LOCAL_CONFIG_FILE.exists():
+            return False
+            
+        if not self.db:
+            # 如果没有数据库，回退到文件时间检查
+            return await self._fallback_config_fresh_check()
+            
+        try:
+            last_update = await self.db.get_last_config_update_time()
+            if last_update is None:
+                logger.info("📝 首次运行或未找到配置更新时间记录")
+                return False
+                
+            is_fresh = (time.time() - last_update) < CONFIG_CACHE_TIME
+            if is_fresh:
+                logger.info(f"🕒 配置仍在有效期内，剩余 {int((CONFIG_CACHE_TIME - (time.time() - last_update)) / 3600)} 小时")
+            return is_fresh
+        except Exception as e:
+            logger.warning(f"⚠️ 数据库检查失败，回退到文件检查: {e}")
+            return await self._fallback_config_fresh_check()
+    
+    async def _fallback_config_fresh_check(self):
+        """回退方案：使用文件修改时间检查"""
+        if not LOCAL_CONFIG_FILE.exists():
+            return False
+        
+        file_mtime = LOCAL_CONFIG_FILE.stat().st_mtime
+        is_fresh = (time.time() - file_mtime) < CONFIG_CACHE_TIME
+        
+        if is_fresh:
+            remaining_hours = int((CONFIG_CACHE_TIME - (time.time() - file_mtime)) / 3600)
+            logger.info(f"🕒 文件检查：配置仍在有效期内，剩余 {remaining_hours} 小时")
+        
+        return is_fresh
+    
+    async def _update_config_from_github(self):
+        """从GitHub更新配置"""
+        if not CONFIG_URL:
+            logger.error("❌ CONFIG_URL 未设置，无法从GitHub更新配置")
+            return False
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+    
+        print(f"🔄 正在从 GitHub 下载配置: {CONFIG_URL}")
+    
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(CONFIG_URL, headers=headers, timeout=30) as response:
+                    print(f"📡 GitHub 响应状态码: {response.status}")
+                
+                    if response.status == 200:
+                        content = await response.text()
+                        print(f"📥 下载内容长度: {len(content)} 字符")
+                    
+                    # 安全检查
+                        if not self._is_safe_python_content(content):
+                            logger.error("❌ 下载的配置包含不安全代码")
+                            return False
+                    
+                    # 备份当前配置（如果存在）
+                        if LOCAL_CONFIG_FILE.exists():
+                            await self._backup_current_config()
+                    
+                    # 保存新配置
+                        with open(LOCAL_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                    
+                        print(f"💾 配置文件已保存到: {LOCAL_CONFIG_FILE}")
+                        logger.info("✅ 配置已从GitHub更新")
+                        return True
+                    else:
+                        logger.error(f"❌ GitHub请求失败: HTTP {response.status}")
+                        print(f"❌ GitHub请求失败: HTTP {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"❌ 配置更新失败: {e}")
+            print(f"❌ 配置更新失败: {e}")
+            return False
+    
+    async def _backup_current_config(self):
+        """备份当前配置"""
+        if LOCAL_CONFIG_FILE.exists():
+            backup_file = LOCAL_CONFIG_FILE.with_suffix(f'.backup.{int(time.time())}.py')
+            try:
+                shutil.copy2(LOCAL_CONFIG_FILE, backup_file)
+                logger.info(f"📦 配置已备份到: {backup_file.name}")
+            except Exception as e:
+                logger.warning(f"⚠️ 配置备份失败: {e}")
+    
+    def _is_safe_python_content(self, content):
+        """安全检查配置内容"""
+        dangerous_keywords = [
+            '__import__', 'eval(', 'exec(', 'compile(',
+            'os.system', 'os.popen', 'subprocess.', 'import requests',
+            'import urllib', 'import http'
+        ]
+        
+        content_lower = content.lower()
+        for keyword in dangerous_keywords:
+            if keyword in content_lower:
+                logger.warning(f"⚠️ 检测到不安全代码: {keyword}")
+                return False
+        return True
+    
+    def load_local_config(self):
+        """加载本地配置文件"""
+        try:
+            if not LOCAL_CONFIG_FILE.exists():
+                logger.error("❌ 本地配置文件不存在")
+                return []
+                
+            spec = importlib.util.spec_from_file_location("rss_config", LOCAL_CONFIG_FILE)
+            config_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(config_module)
+            
+            if hasattr(config_module, 'RSS_GROUPS'):
+                # 跳过验证配置
+                # if hasattr(config_module, 'validate_config'):
+                #     config_module.validate_config()
+                return config_module.RSS_GROUPS
+            else:
+                raise Exception("配置文件中未找到RSS_GROUPS变量")
+                
+        except Exception as e:
+            logger.error(f"❌ 本地配置加载失败: {e}")
+            # 返回空配置，让程序优雅退出
+            return []
 
 if USE_PG:
     import asyncpg
@@ -450,7 +278,65 @@ class RSSDatabase:
         """确保数据库表已创建"""
         await self.create_tables()
 
-    async def create_tables(self):  # 这里缩进修复
+    async def get_last_config_update_time(self):  # 🔧 这个函数需要缩进到类内部
+        """获取最后配置更新时间"""
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                # 先确保表存在
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                """)
+                row = await conn.fetchrow("SELECT value FROM app_config WHERE key = 'config_last_update'")
+                return float(row['value']) if row else None
+        else:
+            async with self.conn.cursor() as c:
+                # 先确保表存在
+                await c.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                """)
+                await c.execute("SELECT value FROM app_config WHERE key = 'config_last_update'")
+                result = await c.fetchone()
+                return float(result[0]) if result else None
+
+    async def save_config_update_time(self):  # 🔧 这个函数需要缩进到类内部
+        """保存配置更新时间"""
+        current_time = time.time()
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                # 先确保表存在
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                """)
+                await conn.execute("""
+                    INSERT INTO app_config (key, value) 
+                    VALUES ('config_last_update', $1)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """, str(current_time))
+        else:
+            async with self.conn.cursor() as c:
+                # 先确保表存在
+                await c.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                """)
+                await c.execute("""
+                    INSERT OR REPLACE INTO app_config (key, value)
+                    VALUES ('config_last_update', ?)
+                """, (str(current_time),))
+                await self.conn.commit()
+
+    async def create_tables(self):  # 🔧 这个函数需要缩进到类内部
         """改进的建表语句，确保 PostgreSQL 和 SQLite 索引一致"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
@@ -504,6 +390,13 @@ class RSSDatabase:
                         last_batch_sent_time DOUBLE PRECISION
                     );
                 """)
+                # 新增：应用配置表
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    );
+                """)
         else:
             async with self.conn.cursor() as c:
                 await c.execute("""
@@ -549,6 +442,13 @@ class RSSDatabase:
                     CREATE TABLE IF NOT EXISTS batch_timestamps (
                         feed_group TEXT PRIMARY KEY,
                         last_batch_sent_time REAL
+                    )
+                """)
+                # 新增：应用配置表
+                await c.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
                     )
                 """)
                 await self.conn.commit()
@@ -1366,60 +1266,101 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
     
-    # 快速数据库连接检查（60秒超时）
-    try:
-        db_test = RSSDatabase()
-        await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
-        await db_test.ensure_initialized()
-        await db_test.close()
-        logger.info("✅ 数据库连接检查通过")
-    except asyncio.TimeoutError:
-        logger.error("❌ 数据库连接超时（60秒），程序退出")
-        return
-    except Exception as e:
-        logger.error(f"❌ 数据库连接失败: {e}，程序退出")
+    # 添加环境变量验证
+    print("🔍 环境变量检查:")
+    print(f"  CONFIG_URL: {CONFIG_URL}")
+    print(f"  TELEGRAM_CHAT_ID: {TELEGRAM_CHAT_ID}")
+    print(f"  TENCENTCLOUD_SECRET_ID: {'已设置' if TENCENTCLOUD_SECRET_ID else '未设置'}")
+    print(f"  TENCENTCLOUD_SECRET_KEY: {'已设置' if TENCENTCLOUD_SECRET_KEY else '未设置'}")
+    
+    # 验证必要的环境变量
+    if not CONFIG_URL:
+        print("❌ 错误: CONFIG_URL 环境变量未设置")
+        logger.error("CONFIG_URL 环境变量未设置")
         return
     
-    start_time = time.time()
-    max_retries = 3
-    retry_delay = 60
+    if not TELEGRAM_CHAT_ID or not TELEGRAM_CHAT_ID[0]:
+        print("❌ 错误: TELEGRAM_CHAT_ID 环境变量未设置")
+        logger.error("TELEGRAM_CHAT_ID 环境变量未设置")
+        return
     
-    for attempt in range(max_retries):
-        try:
-            await run_main_logic()
-            logger.info(f"✅ RSS Bot 执行完成，耗时: {time.time() - start_time:.2f}秒")
-            break  # 成功执行则退出循环
-        except Exception as e:
-            logger.error(f"主程序运行失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"{retry_delay}秒后重试...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.critical("达到最大重试次数，程序退出")
-                return
-
-async def run_main_logic():
-    lock_file = None
+    print(f"🔍 当前工作目录: {os.getcwd()}")
+    print(f"🔍 配置文件路径: {LOCAL_CONFIG_FILE}")
+    print(f"🔍 配置文件是否存在: {LOCAL_CONFIG_FILE.exists()}")
+    
+    # 先初始化数据库
     db = RSSDatabase()
+    try:
+        await db.open()
+        await db.ensure_initialized()
+        logger.info("✅ 数据库连接成功")
+        
+        # 1. 初始化配置管理器并传入数据库实例
+        global config_manager
+        config_manager = ConfigManager(db)
+        
+        # 2. 确保配置是最新的 - 添加详细日志
+        print("🔄 开始检查配置更新...")
+        await config_manager.ensure_fresh_config()
+        print("✅ 配置检查完成")
+        
+        # 3. 再次检查配置文件是否存在
+        print(f"🔍 下载后配置文件是否存在: {LOCAL_CONFIG_FILE.exists()}")
+        
+        if not LOCAL_CONFIG_FILE.exists():
+            logger.error("❌ 配置文件不存在，程序退出")
+            print("❌ 错误：配置文件不存在，请检查 CONFIG_URL 设置")
+            return
+        
+        # 4. 加载配置
+        global RSS_GROUPS
+        RSS_GROUPS = config_manager.load_local_config()
+        
+        if not RSS_GROUPS:
+            logger.error("❌ 无法加载RSS配置，程序退出")
+            print("❌ 错误：无法加载RSS配置")
+            return
+        
+        logger.info(f"📋 加载了 {len(RSS_GROUPS)} 个RSS组")
+        print(f"✅ 成功加载 {len(RSS_GROUPS)} 个RSS组配置")
+        
+        # 5. 原有的主逻辑
+        start_time = time.time()
+        max_retries = 3
+        retry_delay = 60
+        
+        for attempt in range(max_retries):
+            try:
+                await run_main_logic(db)
+                logger.info(f"✅ RSS Bot 执行完成，耗时: {time.time() - start_time:.2f}秒")
+                break
+            except Exception as e:
+                logger.error(f"主程序运行失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"{retry_delay}秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.critical("达到最大重试次数，程序退出")
+                    return
+                    
+    except Exception as e:
+        logger.error(f"❌ 初始化失败: {e}")
+        print(f"❌ 初始化失败: {e}")
+    finally:
+        if db:
+            await db.close()
+
+async def run_main_logic(db):  # 修改：接收db参数
+    lock_file = None
+    # 注意：这里不再新建db实例，而是使用传入的db
     
     try:
         # 获取文件锁
         lock_file = open(LOCK_FILE, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         logger.info("🔒 成功获取文件锁")
-    except OSError:
-        logger.warning("⛔ 无法获取文件锁，已有实例在运行，程序退出")
-        return
-    except Exception as e:
-        logger.error(f"文件锁异常: {str(e)}")
-        return
         
-    try:
-        # 数据库连接（由于在main()中已经检查过，这里直接连接）
-        logger.info("🔗 正在连接数据库...")
-        await db.open()  # 直接连接，不再重试
-        await db.ensure_initialized()
-        logger.info("✅ 数据库连接成功")
+        # 数据库连接已经在main中建立，这里直接使用
         
         # 清理历史记录
         logger.info("🧹 正在清理历史记录...")
@@ -1461,19 +1402,14 @@ async def run_main_logic():
         logger.warning("⏹️ 任务被取消")
     except Exception as e:
         logger.error(f"主逻辑执行异常: {str(e)}")
-        raise  # 重新抛出以便外层捕获
+        raise
     finally:
-        # 确保资源清理
-        await cleanup_resources(db, lock_file)
+        # 注意：这里不再关闭db，因为db在main函数中统一管理
+        await cleanup_resources(None, lock_file)  # 修改：传入None而不是db
 
 async def cleanup_resources(db, lock_file):
     """清理资源"""
-    try:
-        if db:
-            await db.close()
-    except Exception as e:
-        logger.error(f"关闭数据库失败: {e}")
-    
+    # 注意：db现在在main函数中统一管理，这里只处理锁文件
     try:
         if lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

@@ -26,6 +26,7 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
+from datetime import datetime, timezone
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -115,7 +116,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "快讯",
         "urls": [
-            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+         #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
             'https://36kr.com/feed-newsflash',  # 36氪快讯
         #    'https://36kr.com/feed',  # 36氪综合
             
@@ -133,17 +134,51 @@ RSS_GROUPS = [ # RSS 组配置列表
             "show_count": False          #计数
         }
     },
+
+    {
+        "name": "同花顺",
+        "urls": [
+            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+         #   'https://36kr.com/feed-newsflash',  # 36氪快讯
+        #    'https://36kr.com/feed',  # 36氪综合
+            
+        ],
+        "group_key": "FOURTH_RRSS_FEEDS",
+        "interval": 700,       # 10分钟 
+        "batch_send_interval": 3590,   # 批量推送
+        "history_days": 3,     # 新增，保留3天
+        "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
+        "processor": {
+            "translate": False,     #翻译开关
+            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "filter": {
+                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "keywords": ["比亚迪", "比特币", "美元", "失守", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"]  # 本组关键词列表
+            },
+            "template": "*{subject}*\n[more]({url})",
+            "preview": False,            # 禁止预览
+            "show_count": False          #计数
+        }
+    },
+
     # ================== 综合资讯 ==================
     {
         "name": "综合资讯",
         "urls": [
-            'https://cn.nytimes.com/rss.html', 
-         #   'https://www.gcores.com/rss', 
-            'https://www.yystv.cn/rss/feed', 
-            'https://www.ruanyifeng.com/blog/atom.xml', 
-            'https://www.huxiu.com/rss/0.xml', 
-            'https://sspai.com/feed', 
-            
+            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
+         #   'https://www.gcores.com/rss', # 游戏时光
+          #  'https://www.yystv.cn/rss/feed', # 游戏研究社
+          #  'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
+         #   'https://www.huxiu.com/rss/0.xml',  # 虎嗅
+         #   'https://sspai.com/feed', # 少数派
+            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+            'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
+            'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
+            'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
+            'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
+      #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
+      #      'https://www.v2ex.com/index.xml',  # V2EX
         ],
         "group_key": "TOURTH_RSS_FEEDS",
         "interval": 1790,       # 30分钟
@@ -160,9 +195,9 @@ RSS_GROUPS = [ # RSS 组配置列表
     },
     # ================== tegegram ==================
     {
-        "name": "电报",
+        "name": "tg",
         "urls": [
-            'https://rsshub.app/telegram/channel/shareAliyun', 
+            'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
 
@@ -179,7 +214,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "filter": {
                 "enable": True,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["电子书", "电子书"]  # 本组关键词列表
+                "keywords": ["电子书", "epub", "mobi", "pdf", "azw3"]  # 本组关键词列表
             },
             "preview": False,            # 禁止预览
             "show_count": False          #计数
@@ -209,7 +244,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{summary}*\n[more]({url})",
-            "preview": True,        # 禁止预览
+            "preview": False,        # 禁止预览
             "show_count": False     #计数
         }
     },
@@ -238,7 +273,7 @@ RSS_GROUPS = [ # RSS 组配置列表
      #           "scope": "all",       # 过滤标题+链接+摘要
      #           "scope": "title_summary",  # 过滤标题和摘要
      #           "scope": "link_summary",   # 过滤链接和摘要
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "折"]  # 本组关键词列表
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "折"]  # 本组关键词列表
             },
             "preview": False,              # 禁止预览
             "show_count": False               # 计数
@@ -387,9 +422,9 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "中文媒体", 
         "urls": [
-            'https://rsshub.app/guancha/headline',
-            'https://rsshub.app/guancha',
-            'https://rsshub.app/zaobao/znews/china',
+            'https://rsshub.app/guancha/headline', # 观察者网 头条
+            'https://rsshub.app/guancha', # 观察者网全部
+            'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 3590,      # 1小时
@@ -1359,10 +1394,24 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
 
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
-    start_time = time.time()
     
+    # 快速数据库连接检查（60秒超时）
+    try:
+        db_test = RSSDatabase()
+        await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
+        await db_test.ensure_initialized()
+        await db_test.close()
+        logger.info("✅ 数据库连接检查通过")
+    except asyncio.TimeoutError:
+        logger.error("❌ 数据库连接超时（60秒），程序退出")
+        return
+    except Exception as e:
+        logger.error(f"❌ 数据库连接失败: {e}，程序退出")
+        return
+    
+    start_time = time.time()
     max_retries = 3
-    retry_delay = 60  # 秒
+    retry_delay = 60
     
     for attempt in range(max_retries):
         try:
@@ -1395,9 +1444,10 @@ async def run_main_logic():
         return
         
     try:
-        # 数据库连接增加重试机制
+        # 数据库连接（由于在main()中已经检查过，这里直接连接）
         logger.info("🔗 正在连接数据库...")
-        await connect_database_with_retry(db)
+        await db.open()  # 直接连接，不再重试
+        await db.ensure_initialized()
         logger.info("✅ 数据库连接成功")
         
         # 清理历史记录
@@ -1444,21 +1494,6 @@ async def run_main_logic():
     finally:
         # 确保资源清理
         await cleanup_resources(db, lock_file)
-
-async def connect_database_with_retry(db, max_attempts=3):
-    """带重试的数据库连接"""
-    for attempt in range(max_attempts):
-        try:
-            await db.open()
-            await db.ensure_initialized()
-            logger.info("✅ 数据库连接成功")
-            return
-        except Exception as e:
-            logger.error(f"数据库连接失败 (尝试 {attempt + 1}/{max_attempts}): {e}")
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(5)
-            else:
-                raise
 
 async def cleanup_resources(db, lock_file):
     """清理资源"""
