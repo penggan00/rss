@@ -229,68 +229,123 @@ class ContentProcessor:
         return text.strip()
 
     @staticmethod
+    def repair_broken_urls(html):
+        """修复被HTML标签污染的URL"""
+        try:
+            # 修复 URL 后跟 <br> 标签的情况
+            html = re.sub(r'(https?://[^\s<]+)<br[^>]*>\s*', r'\1 ', html, flags=re.IGNORECASE)
+            # 修复 URL 后跟其他标签的情况  
+            html = re.sub(r'(https?://[^\s<]+)</a>\s*', r'\1 ', html, flags=re.IGNORECASE)
+            # 修复 URL 被随机字符污染的情况
+            html = re.sub(r'(https?://[^\s<]+)[{}|\\)(<>`]', r'\1', html)
+            # 新增：移除URL中的空格（表明URL被截断）
+            html = re.sub(r'(https?://[^\s]*)\s+', r'\1', html)
+            return html
+        except Exception as e:
+            logger.error(f"URL修复失败: {e}")
+            return html
+
+    @staticmethod
     def extract_urls(html):
-        """
-        智能链接过滤，排除图片、视频、CSS、字体、API等资源链接，只返回主要内容相关页面链接。
-        最多返回3个有效链接。
-        """
-        url_pattern = re.compile(r'(https?://[^\s>"\'{}|\\^`]+)', re.IGNORECASE)
+        """改进的URL提取"""
+        # 先修复被污染的URL
+        cleaned_html = ContentProcessor.repair_broken_urls(html)
+        cleaned_html = re.sub(r'<br\s*/?>', ' ', cleaned_html, flags=re.IGNORECASE)
+        cleaned_html = re.sub(r'</?[^>]+>', ' ', cleaned_html)
+        
+        # 改进的URL正则，更好地处理参数
+        url_pattern = re.compile(
+            r'https?://'  # http:// or https://
+            r'(?:[-\w.]|(?:%[\da-fA-F]{2}))+'  # domain
+            r'(?::\d+)?'  # port
+            r'(?:/[-\w$.+!*(),;:@&=%~#?]*)'  # path
+            r'?',  # make path optional
+            re.IGNORECASE
+        )
+        
         urls = []
         seen = set()
-        exclude_domains = {
-            'w3.org', 'schema.org', 'example.com', 'mozilla.org',
-            'fonts.googleapis.com', 'googleapis.com'
-        }
-        # 图片和视频扩展名
-        media_extensions = {
-            '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.raw',
-            '.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm', '.wmv', '.mpeg', '.mpg', '.3gp', '.m4v', '.ts'
-        }
-        # 图片关键字
-        media_keywords = {
-            '/thumb/', '/image/', '/img/', '/cover/', '/poster/', '/gallery/',
-            'picture', 'photo', 'snapshot', 'preview', 'thumbnail'
-        }
-        # 资源文件关键字
-        resource_keywords = [
-            '/css', '/js', '/font', '/api', '/assets', 'static.', 'cdn.',
-            '.css', '.js', '.woff', '.ttf', '.svg'
+        
+        # 不需要的域名和路径模式
+        blacklist_patterns = [
+            'use.typekit.net',
+            'www.w3.org',
+            'fonts.googleapis.com',
+            'fonts.gstatic.com',
+            'schema.org',
+            'example.com',
+            'localhost',
+            'tracking.',
+            'analytics.',
+            'pixel.',
+            'beacon.',
+            '/wp-json/',
+            '/static/',
+            '/assets/',
+            '.png',
+            '.jpg',
+            '.gif',
+            '.css',
+            '.js',
+            '.woff',
+            '.woff2',
+            '.ttf',
+            '.eot'
         ]
-
-        for match in url_pattern.finditer(html):
-            raw_url = match.group(1)
-            # 清理可能残留的特殊字符
-            clean_url = re.sub(r'[{}|\\)(<>`]', '', raw_url.split('"')[0])
-            # 基本长度过滤
-            if not (10 < len(clean_url) <= 100):
+        
+        for match in url_pattern.finditer(cleaned_html):
+            raw_url = match.group(0)
+            
+            # 清理URL：移除尾部的空格和特殊字符
+            clean_url = raw_url.split()[0].rstrip()  # 推荐的清理方式
+            
+            # 检查URL有效性
+            from urllib.parse import urlparse
+            try:
+                parsed_url = urlparse(clean_url)
+                domain = parsed_url.netloc.lower()
+                path = parsed_url.path.lower()
+                
+                # 检查域名或路径是否匹配黑名单模式
+                if any(pattern in domain or pattern in path for pattern in blacklist_patterns):
+                    if DEBUG_MODE:
+                        logger.info(f"过滤黑名单域名: {domain}")
+                    continue
+                
+                # 检查URL是否包含空格（不完整的URL）
+                if ' ' in clean_url:
+                    if DEBUG_MODE:
+                        logger.info(f"过滤包含空格的URL: {clean_url}")
+                    continue
+                    
+                # 检查URL是否完整
+                if not parsed_url.netloc or not '.' in parsed_url.netloc:
+                    if DEBUG_MODE:
+                        logger.info(f"过滤不完整域名: {clean_url}")
+                    continue
+                    
+            except Exception as e:
+                if DEBUG_MODE:
+                    logger.warning(f"URL解析失败 {clean_url}: {e}")
                 continue
-            # 排除特定域名
-            if any(domain in clean_url for domain in exclude_domains):
-                continue
-            # 排除内联图片
-            if clean_url.startswith('data:image/'):
-                continue
-            # 排除图片和视频扩展名
-            if any(ext in clean_url.lower() for ext in media_extensions):
-                continue
-            # 排除图片/视频关键字
-            lower_url = clean_url.lower()
-            if any(kw in lower_url for kw in media_keywords):
-                continue
-            # 排除资源文件
-            if any(kw in lower_url for kw in resource_keywords):
-                continue
-            # 排除CDN和静态资源
-            if '/cdn/' in lower_url or '/static/' in lower_url or '/assets/' in lower_url:
-                continue
-            # 确保URL有路径部分（至少3个斜杠，排除纯域名）
-            if clean_url.count('/') < 3:
-                continue
-            # 检查是否重复
-            if clean_url not in seen:
+            
+            # 长度和内容检查
+            char_length = len(clean_url)
+            byte_length = len(clean_url.encode('utf-8'))
+            
+            # 更严格的过滤条件
+            if (10 <= byte_length <= 200 and
+            #    clean_url.count('/') >= 2 and
+           #     len(clean_url.split('/')) > 2 and
+          #      '.' in clean_url.split('/')[2] and
+                not any(font_ext in clean_url.lower() for font_ext in ['.woff', '.woff2', '.ttf', '.eot']) and
+                ' ' not in clean_url and  # 确保没有空格
+                clean_url not in seen):
+            
                 seen.add(clean_url)
                 urls.append(clean_url)
-        return urls[:3]  # 最多返回3个链接
+        
+        return urls[:3]
 
     @staticmethod
     def convert_html_to_text(html_bytes):
@@ -686,7 +741,7 @@ def clean_bill_data(input_data):
 class MessageFormatter:
     @staticmethod
     async def format_message(sender, subject, content):
-        """返回分离的header和body，添加主题翻译"""
+        """返回分离的header和body，主题翻译成功后只保留翻译主题"""
         realname, email_address = parseaddr(sender)
         
         clean_realname = re.sub(r'[|]', '', realname).strip()
@@ -700,9 +755,10 @@ class MessageFormatter:
                 logger.info("检测到非中文主题，开始翻译...")
             translated_subject = await translate_content_async(clean_subject)
             if translated_subject and translated_subject != clean_subject:
-                final_subject = f"{clean_subject} ({translated_subject})"
+                # 修改这里：翻译成功后只保留翻译主题，清除原主题
+                final_subject = translated_subject
                 if DEBUG_MODE:
-                    logger.info("主题翻译完成")
+                    logger.info(f"主题翻译完成: {clean_subject} -> {final_subject}")
         
         # 构建MarkdownV2格式的header部分
         sender_line = "✉️ "
