@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from feedparser import parse
 from telegram import Bot
 from telegram.error import BadRequest
+from telegram.ext import Application
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from md2tgmd import escape
@@ -673,6 +674,7 @@ def remove_html_tags(text):
     text = re.sub(r'【\s*】', '', text)
     text = re.sub(r'(?<!\S)#(?!\S)', '', text)
     text = re.sub(r'(?<!\S)：(?!\S)', '', text)
+    text = text.replace('.', '.\u200c')
     return text
 
 def get_entry_identifier(entry):
@@ -740,28 +742,42 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
         current_chunk = []
         current_length = 0
         paragraphs = text.split('\n\n')
+        
         for para in paragraphs:
-            para_length = len(para)  # 字符长度
+            para_length = len(para)
             if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
                 text_chunks.append('\n\n'.join(current_chunk))
                 current_chunk = []
                 current_length = 0
             current_chunk.append(para)
             current_length += para_length + 2
+            
         if current_chunk:
             text_chunks.append('\n\n'.join(current_chunk))
+            
         for chunk in text_chunks:
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
                 parse_mode='MarkdownV2',
-                disable_web_page_preview=disable_web_page_preview,
-                read_timeout=10,
-                write_timeout=10
+                disable_web_page_preview=disable_web_page_preview
+                # 移除 timeout 参数
             )
+            
     except BadRequest as e:
-        logger.error(f"消息发送失败(Markdown错误): {e} - 文本片段: {chunk[:200]}...")  # 修复这里
+        logger.error(f"消息发送失败(Markdown错误): {e} - 文本片段: {chunk[:200]}...")
+        # 可以尝试不使用 Markdown 重新发送
+        try:
+            for chunk in text_chunks:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    disable_web_page_preview=disable_web_page_preview
+                )
+        except Exception as fallback_error:
+            logger.error(f"纯文本回退发送也失败: {fallback_error}")
     except Exception as e:
+        logger.error(f"消息发送未知错误: {e}")
         raise
 
 @retry(

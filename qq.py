@@ -1,24 +1,39 @@
 import os
 import re
 import asyncio
+import psutil
 from datetime import datetime
 from typing import List, Optional, Tuple
+from functools import wraps
 from dotenv import load_dotenv
 from tencentcloud.common import credential
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.tmt.v20180321 import tmt_client, models
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 import aiosqlite
 import logging
+
+# 获取项目根目录路径
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(PROJECT_ROOT, 'qq.log')
 
 # 日志配置
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),  # 文件处理器
+        logging.StreamHandler()  # 控制台处理器（可选）
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# 可选：设置其他库的日志级别
+logging.getLogger('telegram').setLevel(logging.WARNING)
+logging.getLogger('tencentcloud').setLevel(logging.WARNING)
+logging.getLogger('aiosqlite').setLevel(logging.WARNING)
 
 load_dotenv()
 
@@ -189,9 +204,10 @@ class TencentTranslator:
 translator = TencentTranslator()
 
 def require_auth(func):
+    @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if update.message.chat.id not in config.AUTHORIZED_CHAT_IDS:
-            logger.warning(f"Unauthorized access: {update.message.chat.id}")
+        if update.effective_chat.id not in config.AUTHORIZED_CHAT_IDS:
+            logger.warning(f"Unauthorized access: {update.effective_chat.id}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -226,15 +242,75 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
         await update.message.reply_text(chunk)
         idx += chunk_size
 
-async def startup(app: Application):
+@require_auth
+async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """显示 VPS 系统状态信息"""
+    try:
+        # CPU 使用率
+        cpu_percent = psutil.cpu_percent(interval=1)
+        
+        # 内存使用情况
+        memory = psutil.virtual_memory()
+        memory_total_gb = memory.total / (1024 ** 3)
+        memory_used_gb = memory.used / (1024 ** 3)
+        memory_percent = memory.percent
+        
+        # 磁盘使用情况
+        disk = psutil.disk_usage('/')
+        disk_total_gb = disk.total / (1024 ** 3)
+        disk_used_gb = disk.used / (1024 ** 3)
+        disk_percent = disk.percent
+        
+        # 系统启动时间
+        boot_time = datetime.fromtimestamp(psutil.boot_time())
+        uptime = datetime.now() - boot_time
+        
+        # 网络 I/O
+        net_io = psutil.net_io_counters()
+        
+        # 构建系统状态消息
+        message = (
+            "🖥️ *VPS 系统状态*\n\n"
+            f"*CPU 使用率:* {cpu_percent}%\n"
+            f"*内存使用:* {memory_used_gb:.1f}GB / {memory_total_gb:.1f}GB ({memory_percent}%)\n"
+            f"*磁盘使用:* {disk_used_gb:.1f}GB / {disk_total_gb:.1f}GB ({disk_percent}%)\n"
+            f"*系统运行时间:* {str(uptime).split('.')[0]}\n"
+            f"*网络发送:* {net_io.bytes_sent / (1024 ** 2):.1f} MB\n"
+            f"*网络接收:* {net_io.bytes_recv / (1024 ** 2):.1f} MB\n\n"
+            f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Htop command error: {e}")
+        await update.message.reply_text(f"❌ 获取系统信息出错: {str(e)}")
+
+async def startup(application: Application):
     await cache.init_db()
     logger.info("Database initialized")
+    logger.info(f"Log file location: {LOG_FILE}")
+
+async def shutdown(application: Application):
+    logger.info("Bot is shutting down...")
 
 def main():
-    app = Application.builder().token(config.TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.post_init = startup
-    app.run_polling()
+    # 创建应用实例
+    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    
+    # 添加消息处理器
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # 添加命令处理器
+    application.add_handler(CommandHandler("htop", htop_command))
+    
+    # 设置启动和关闭处理
+    application.post_init = startup
+    application.post_shutdown = shutdown
+    
+    # 启动机器人
+    logger.info("Bot is starting...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()

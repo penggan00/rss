@@ -718,6 +718,7 @@ def remove_html_tags(text):
     text = re.sub(r'【\s*】', '', text)
     text = re.sub(r'(?<!\S)#(?!\S)', '', text)
     text = re.sub(r'(?<!\S)：(?!\S)', '', text)
+    text = text.replace('.', '.\u200c')
     return text
 
 def get_entry_identifier(entry):
