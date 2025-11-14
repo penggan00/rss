@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+#source rss_venv/bin/activate
+#pip install html2text requests pdfplumber beautifulsoup4 md2tgmd python-dotenv tencentcloud-sdk-python python-telegram-bot
+
 """
 邮件到Telegram机器人转发器
 支持多个聊天ID，使用md2tgmd进行转义，支持翻译功能

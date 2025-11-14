@@ -1,3 +1,5 @@
+#source rss_venv/bin/activate
+#pip install psutil python-dotenv tencentcloud-sdk-python python-telegram-bot aiosqlite
 import os
 import re
 import asyncio
