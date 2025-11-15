@@ -1828,46 +1828,6 @@ class EmailToTelegramBot:
         
         return result
 
-    def clean_ccb_bill_data(self, input_data):
-        """清理建设银行账单数据"""
-        cleaned_lines = []
-        for line in input_data.split('\n'):
-            if not line.strip():
-                cleaned_lines.append(line)
-                continue
-                
-            parts = [p.strip() for p in line.split('   ') if p.strip()]
-            
-            # 移除第二个日期（索引为1的部分）
-            if len(parts) > 1:
-                parts.pop(1)
-            
-            # 检查并移除重复的货币金额
-            # 查找货币代码出现的位置（CNY, USD等）
-            currency_indices = [i for i, part in enumerate(parts) 
-                            if part in ['CNY', 'USD', 'EUR', 'JPY']]  # 可以添加更多货币代码
-            
-            if len(currency_indices) > 1:
-                # 保留第一个货币和金额，移除后续重复
-                first_currency_index = currency_indices[0]
-                currency = parts[first_currency_index]
-                # amount_after_first = parts[first_currency_index + 1]  # 可选，暂未用到
-                
-                # 移除后续所有相同货币和金额
-                i = first_currency_index + 2
-                while i < len(parts):
-                    if parts[i] == currency:
-                        parts.pop(i)  # 移除货币
-                        if i < len(parts):
-                            parts.pop(i)  # 移除金额
-                    else:
-                        i += 1
-            
-            cleaned_line = '   '.join(parts)
-            cleaned_lines.append(cleaned_line)
-        
-        return '\n'.join(cleaned_lines)
-
     def is_ccb_credit_card_email(self, email_data):
         """检测是否是建设银行信用卡邮件"""
         subject = email_data.get('subject', '').lower()
@@ -1896,8 +1856,8 @@ class EmailToTelegramBot:
         return result
 
     def format_ccb_email_content(self, email_data, original_content):
-        """格式化建设银行邮件内容"""
-      #  print(f"\n🏦 开始格式化建设银行邮件内容")
+        """格式化建设银行邮件内容 - 添加统一的头部信息"""
+        print(f"\n🏦 开始格式化建设银行邮件内容")
         
         subject = email_data['subject']
         from_ = email_data['from']
@@ -1905,29 +1865,113 @@ class EmailToTelegramBot:
         # 解析发件人信息
         from_name, from_email = self._parse_sender_info(from_)
         
-        # 构建消息头
-        message = "🏦 **建设银行信用卡账单**\n\n"
+        # 构建消息头（与其他邮件保持一致）
+        message = ""
         
-        # 发件人信息
+        # 用户名（粗体）
         if from_name:
             message += f"**{from_name}**"
+        
+        # 邮箱地址（等宽）
         if from_email:
             if from_name:
-                message += " "
+                message += " "  # 用户名和邮箱之间加空格
             message += f"`{from_email}`"
+        
         message += "\n"
         
-        # 主题
+        # 主题（斜体）
         if subject:
             message += f"_{subject}_\n\n"
         
-        # 应用建设银行账单数据清理
-        cleaned_content = self.clean_ccb_bill_data(original_content)
+        # 彻底清理，只保留账单主体内容
+        cleaned_content = self.extract_ccb_bill_content(original_content)
         message += cleaned_content
         
         print(f"✅ 建设银行邮件格式化完成，总长度: {len(message)} 字符")
         
         return message
+
+    def extract_ccb_bill_content(self, input_data):
+        """提取建设银行账单主体内容，移除所有邮件头部信息"""
+        if not input_data:
+            return ""
+        
+        lines = input_data.split('\n')
+        bill_lines = []
+        in_bill_content = False
+        
+        # 关键词标识账单内容开始
+        bill_start_keywords = [
+            '交易日期', '记账日期', '人民币交易明细', 
+            '账单周期', '卡号', '信用额度'
+        ]
+        
+        for line in lines:
+            stripped_line = line.strip()
+            
+            # 检测账单内容开始
+            if not in_bill_content:
+                if any(keyword in stripped_line for keyword in bill_start_keywords):
+                    in_bill_content = True
+                else:
+                    continue  # 跳过头部信息
+            
+            # 一旦进入账单内容区域，开始收集
+            if in_bill_content:
+                if stripped_line:
+                    bill_lines.append(stripped_line)
+        
+        # 如果没有找到标准的关键词，返回原始清理内容
+        if not bill_lines:
+            return self.clean_ccb_bill_data(input_data)
+        
+        # 将收集到的账单内容合并并用 clean_ccb_bill_data 清理
+        bill_content = '\n'.join(bill_lines)
+        return self.clean_ccb_bill_data(bill_content)
+
+    def clean_ccb_bill_data(self, input_data):
+        """清理建设银行账单数据，只处理表格行"""
+        cleaned_lines = []
+        for line in input_data.split('\n'):
+            if not line.strip():
+                cleaned_lines.append(line)
+                continue
+            
+            # 只处理看起来像表格数据的行（包含多个空格分隔的部分）
+            # 跳过超链接和其他格式的行
+            if '   ' in line and not line.startswith('[') and '](' not in line:
+                parts = [p.strip() for p in line.split('   ') if p.strip()]
+                
+                # 移除第二个日期（索引为1的部分）
+                if len(parts) > 1:
+                    parts.pop(1)
+                
+                # 检查并移除重复的货币金额
+                currency_indices = [i for i, part in enumerate(parts) 
+                                if part in ['CNY', 'USD', 'EUR', 'JPY']]
+                
+                if len(currency_indices) > 1:
+                    first_currency_index = currency_indices[0]
+                    currency = parts[first_currency_index]
+                    
+                    i = first_currency_index + 2
+                    while i < len(parts):
+                        if parts[i] == currency:
+                            parts.pop(i)
+                            if i < len(parts):
+                                parts.pop(i)
+                        else:
+                            i += 1
+                
+                cleaned_line = '   '.join(parts)
+                cleaned_lines.append(cleaned_line)
+            else:
+                # 非表格行直接保留
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
+    
     def extract_and_parse_pdf_attachments(self, msg):
         """提取并解析PDF附件 - 增强版，包含完整终端输出"""
         pdf_content = ""
@@ -2135,26 +2179,29 @@ class EmailToTelegramBot:
         return result
 
     def create_pdf_message(self, email_data, pdf_content):
-        """创建包含PDF内容的邮件消息"""
+        """创建包含PDF内容的邮件消息 - 使用统一头部格式"""
         subject = email_data['subject']
         from_ = email_data['from']
         
         # 解析发件人信息
         from_name, from_email = self._parse_sender_info(from_)
         
-        # 构建消息头
-        message = "🏦 **中国银行信用卡账单**\n\n"
+        # 构建消息头（与其他邮件保持一致）
+        message = ""
         
-        # 发件人信息
+        # 用户名（粗体）
         if from_name:
             message += f"**{from_name}**"
+        
+        # 邮箱地址（等宽）
         if from_email:
             if from_name:
-                message += " "
+                message += " "  # 用户名和邮箱之间加空格
             message += f"`{from_email}`"
+        
         message += "\n"
         
-        # 主题
+        # 主题（斜体）
         if subject:
             message += f"_{subject}_\n\n"
         

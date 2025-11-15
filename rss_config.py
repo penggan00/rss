@@ -6,7 +6,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻",
         "urls": [
-            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+        #    'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
@@ -38,6 +38,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "国际新闻中文",
         "urls": [
             'https://www.ftchinese.com/rss/news',   # ft中文网
+            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 3590,      # 1小时
@@ -113,7 +114,7 @@ RSS_GROUPS = [ # RSS 组配置列表
           #  'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
          #   'https://www.huxiu.com/rss/0.xml',  # 虎嗅
          #   'https://sspai.com/feed', # 少数派
-            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+         #   'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
             'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
             'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
             'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报

@@ -1,11 +1,6 @@
-#source rss_venv/bin/activate
-#pip install python-dotenv python-telegram-bot Pillow google-generativeai md2tgmd aiohttp
 import asyncio
 import os
 import time
-import re
-import functools
-import logging
 import traceback
 import io
 import json
@@ -20,17 +15,6 @@ from md2tgmd import escape
 import aiohttp
 from aiohttp import ClientTimeout
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('gpt.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
 # 加载环境变量
 load_dotenv()
 
@@ -42,21 +26,17 @@ ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
 DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-2.5-flash")
 
 # 超时配置
-STREAM_UPDATE_INTERVAL = float(os.getenv("STREAM_UPDATE_INTERVAL", "1.5"))
-POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "30"))
-
-# 重试配置
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-RETRY_DELAY = float(os.getenv("RETRY_DELAY", "2.0"))
+STREAM_UPDATE_INTERVAL = float(os.getenv("STREAM_UPDATE_INTERVAL", "3"))
+POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
 AVAILABLE_MODELS = {
     "gemini-2.0-flash": "(长下文本)",
     "gemini-2.5-flash": "(平衡性能)",
-    "gemini-2.5-pro": "(最强能力)",
-    "deepseek-chat": "(通用对话)",
-    "deepseek-reasoner": "(推理专用)",
-    "deepseek-coder": "(编程专用)"
+    "gemini-2.5-pro":   "(最强能力)",
+    "deepseek-chat":    "(通用对话)",
+    "deepseek-reasoner":"(推理专用)",
+    "deepseek-coder":   "(编程专用)"
 }
 
 # 错误信息配置
@@ -68,15 +48,12 @@ DOWNLOAD_PIC_NOTIFY = "🤖Loading picture🤖"
 try:
     ALLOWED_USER_IDS = [int(user_id.strip()) for user_id in ALLOWED_USER_IDS_STR.split(",")] if ALLOWED_USER_IDS_STR else []
 except ValueError:
-    logger.error("ALLOWED_USER_IDS 必须是逗号分隔的整数列表。")
     exit(1)
 
 # 初始化Gemini
 try:
     genai.configure(api_key=GOOGLE_GEMINI_KEY)
-    logger.info("Gemini API initialized")
 except Exception as e:
-    logger.error(f"Error initializing Gemini API: {e}")
     exit(1)
 
 # 会话管理
@@ -92,23 +69,6 @@ class UserSession:
 # 会话字典
 user_sessions: Dict[int, UserSession] = {}
 
-# 重试装饰器
-def retry_on_exception(max_retries: int = MAX_RETRIES, delay: float = RETRY_DELAY):
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    logger.warning(f"尝试 {func.__name__} 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-                    await asyncio.sleep(delay * (attempt + 1))
-            return None
-        return wrapper
-    return decorator
-
 # 配置验证
 def validate_config():
     """验证配置"""
@@ -122,9 +82,6 @@ def validate_config():
         errors.append("TELEGRAM_CHAT_ID 未设置")
     
     if errors:
-        logger.error("配置错误:")
-        for error in errors:
-            logger.error(f"  - {error}")
         return False
     
     return True
@@ -144,7 +101,6 @@ def get_user_session(user_id: int, model_name: str = None) -> UserSession:
     # 清理过期会话（1小时）
     expired_users = [uid for uid, session in user_sessions.items() if now - session.last_activity > 3600]
     for uid in expired_users:
-        logger.info(f"清理过期会话: 用户 {uid}")
         del user_sessions[uid]
 
     if user_id not in user_sessions:
@@ -158,14 +114,10 @@ def get_user_session(user_id: int, model_name: str = None) -> UserSession:
         else:
             # DeepSeek模型
             user_sessions[user_id] = UserSession(model_name=model_name, deepseek_history=[])
-        
-        logger.info(f"创建新会话: 用户 {user_id}, 模型 {model_name}")
     else:
         # 如果切换了模型，应该创建新的会话
         current_session = user_sessions[user_id]
         if model_name and model_name != current_session.model_name:
-            logger.info(f"用户 {user_id} 切换模型: {current_session.model_name} -> {model_name}")
-            
             if model_name.startswith("gemini"):
                 model = genai.GenerativeModel(model_name)
                 chat = model.start_chat(history=[])
@@ -180,16 +132,12 @@ def get_user_session(user_id: int, model_name: str = None) -> UserSession:
         session = user_sessions[user_id]
         if session.chat_session and hasattr(session.chat_session, 'history'):
             history_length = len(session.chat_session.history)
-            
-            # 根据历史长度决定清理策略
             if history_length > 20:
                 keep_count = min(16, history_length)
                 session.chat_session.history = session.chat_session.history[-keep_count:]
-                logger.info(f"用户 {user_id} 上下文已清理: {history_length} -> {keep_count}")
             elif history_length > 15:
                 keep_count = min(12, history_length)
                 session.chat_session.history = session.chat_session.history[-keep_count:]
-                logger.info(f"用户 {user_id} 上下文已优化: {history_length} -> {keep_count}")
         
     return user_sessions[user_id]
 
@@ -219,9 +167,15 @@ async def call_deepseek_api(user_message: str, user_session: UserSession) -> str
     history = user_session.deepseek_history[-12:]  # 保留最近6轮
     messages.extend(history)
     
+    # 构建系统提示词，优化 Telegram Markdown V2 格式输出
+    system_prompt = """standard Markdown format"""
+    
+    # 如果是新对话，添加系统提示
+    if not history:
+        messages.insert(0, {"role": "system", "content": system_prompt})
+    
     # 添加当前用户消息
-    enhanced_message = f"请用中文回答以下问题：{user_message}"
-    messages.append({"role": "user", "content": enhanced_message})
+    messages.append({"role": "user", "content": user_message})
     
     # API请求数据
     data = {
@@ -266,7 +220,7 @@ async def call_deepseek_api(user_message: str, user_session: UserSession) -> str
                             continue
             
             # 更新对话历史
-            user_session.deepseek_history.append({"role": "user", "content": enhanced_message})
+            user_session.deepseek_history.append({"role": "user", "content": user_message})
             user_session.deepseek_history.append({"role": "assistant", "content": full_response})
             
             # 限制历史长度
@@ -291,7 +245,6 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
         try:
             user_session = get_user_session(user_id, model_type)
         except Exception as e:
-            logger.error(f"获取用户会话失败: {e}")
             clear_user_context(user_id)
             user_session = get_user_session(user_id, model_type)
         
@@ -302,7 +255,7 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
         # 3. 根据模型类型调用不同的API
         if model_type.startswith("gemini"):
             # Gemini模型
-            enhanced_message = f"请用中文回答以下问题：{user_message}"
+            enhanced_message = f"用中文回复：{user_message}"
             
             stream = user_session.chat_session.send_message(enhanced_message, stream=True)
             
@@ -326,8 +279,6 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
                                     chat_id=chat_id,
                                     message_id=sent_message.message_id
                                 )
-                            elif "message is not modified" not in str(e).lower():
-                                logger.warning(f"消息更新失败: {e}")
                         last_update = current_time
         else:
             # DeepSeek模型
@@ -367,10 +318,9 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
                             message_id=sent_message.message_id
                         )
                 except Exception:
-                    logger.error(f"最终消息更新失败: {e}")
+                    pass
 
     except asyncio.TimeoutError:
-        logger.error(f"用户 {user_id} 请求超时")
         if sent_message:
             await bot.edit_message_text(
                 "⏰ 请求超时，请稍后重试",
@@ -378,8 +328,6 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
                 message_id=sent_message.message_id
             )
     except Exception as e:
-        logger.error(f"AI处理错误: {e}")
-        traceback.print_exc()
         if sent_message:
             try:
                 await bot.edit_message_text(
@@ -395,7 +343,6 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
                 )
 
 # ==================== 图片处理功能 ====================
-@retry_on_exception(max_retries=2)
 async def download_image_with_retry(file_id: str, application: Application) -> Optional[bytes]:
     """带重试机制的图片下载"""
     try:
@@ -408,7 +355,6 @@ async def download_image_with_retry(file_id: str, application: Application) -> O
                 response.raise_for_status()
                 return await response.read()
     except Exception as e:
-        logger.error(f"图片下载失败: {e}")
         return None
 
 async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: str, photo_file: bytes, user_id: int):
@@ -423,8 +369,8 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
         # 获取用户会话（图片处理使用Gemini模型）
         user_session = get_user_session(user_id, "gemini-2.5-flash")
         
-        # 在用户消息前添加中文回答提示
-        enhanced_message = f"请用中文回答：{user_message}" if user_message else "请用中文描述这张图片"
+        # 在用户消息前回答提示
+        enhanced_message = f"用中文回复：{user_message}" if user_message else "用中文描述这张图片"
         
         # 准备内容（文本+图片）
         contents = [enhanced_message, image]
@@ -441,6 +387,7 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
                     await bot.send_message(chat_id, escape(text[:4000]), 
                                          parse_mode=ParseMode.MARKDOWN_V2,
                                          reply_to_message_id=message_id)
+                    await asyncio.sleep(0.5)
                     text = text[4000:]
                 if text:
                     await bot.send_message(chat_id, escape(text), 
@@ -455,7 +402,6 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
         await bot.delete_message(chat_id, processing_msg.message_id)
         
     except Exception as e:
-        logger.error(f"图片处理错误: {e}")
         traceback.print_exc()
         await bot.send_message(chat_id, f"{ERROR_INFO}\nError: {str(e)}", reply_to_message_id=message_id)
 
@@ -469,7 +415,7 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
 🤖 **AI 助手机器人**
 
 # 简化命令：
-`/new` - 开始新对话（清空上下文）
+`/new`   - 开始新对话（清空上下文）
 `/model` - 切换AI模型
 `/setup` - 设置选项
 
@@ -504,18 +450,20 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         model_text = f"""
 🔄 **模型切换**
 
-# 当前模型：
+**当前模型：**
 {current_model}
 
-# 一键切换命令：
-`/model gemini-2.0-flash` - (长上下文)
-`/model gemini-2.5-flash` - (平衡性能)
-`/model gemini-2.5-pro` - (最强能力)
-`/model deepseek-chat` - (通用对话)
-`/model deepseek-reasoner` - (推理专用)
-`/model deepseek-coder` - (编程专用)
+**gemini:**
+`/model gemini-2.0-flash`  (长上下文)
+`/model gemini-2.5-flash`  (平衡性能)
+`/model gemini-2.5-pro`       (最强能力)
 
-# 直接点击上面的命令即可切换
+**deekseek:**
+`/model deepseek-chat`          (通用对话)
+`/model deepseek-coder`        (编程专用)
+`/model deepseek-reasoner` (推理专用)
+
+**直接点击上面的命令即可切换**
         """
         await update.message.reply_text(prepare_markdown_segment(model_text), 
                                       parse_mode=ParseMode.MARKDOWN_V2)
@@ -542,7 +490,6 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         else:
             del user_sessions[user_id]
-            logger.info(f"用户 {user_id} 切换模型到 {model_name}")
     
     # 创建新会话
     try:
@@ -552,7 +499,6 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode=ParseMode.MARKDOWN_V2
         )
     except Exception as e:
-        logger.error(f"切换模型失败: {e}")
         await update.message.reply_text(
             prepare_markdown_segment(f"❌ 切换模型失败：{str(e)}"),
             parse_mode=ParseMode.MARKDOWN_V2
@@ -567,15 +513,17 @@ async def handle_setup_command(update: Update, context: ContextTypes.DEFAULT_TYP
 ⚙️ **设置选项**
 
 # 快捷操作：
-`/new` - 🆕 清空对话历史
+`/new`      - 🆕 清空对话历史
 `/model` - 🔄 切换AI模型
+`/clear` - 🔄 清空对话上下文
+`/start` - 🤖 显示帮助信息
 
-# 系统状态：
+** 系统状态：**
 • 默认模型：{model_info}
 • 流式输出：✅ 开启
 • 上下文管理：✅ 智能清理
 
-# 使用提示：
+**使用提示：**
 直接发送消息即可开始对话！
 发送图片可进行图像分析
     """.format(model_info=get_current_model_info(update.effective_user.id))
@@ -646,8 +594,6 @@ async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
     expired = [uid for uid, session in user_sessions.items() if now - session.last_activity > 3600]
     for uid in expired:
         del user_sessions[uid]
-    if expired:
-        logger.info(f"清理了 {len(expired)} 个过期会话")
 
 async def update_telegram_commands(application: Application):
     """更新Telegram机器人命令列表"""
@@ -660,20 +606,13 @@ async def update_telegram_commands(application: Application):
     
     try:
         await application.bot.set_my_commands(commands)
-        logger.info("✅ 机器人命令已更新")
     except Exception as e:
-        logger.error(f"❌ 命令更新失败: {e}")
+        pass
 
 def main():
     """主函数"""
     if not validate_config():
-        logger.error("配置验证失败，程序退出")
         return
-    
-    logger.info("Starting AI Assistant Bot...")
-    logger.info(f"可用模型: {', '.join(AVAILABLE_MODELS.keys())}")
-    logger.info(f"默认模型: {DEFAULT_MODEL}")
-    logger.info(f"流式更新间隔: {STREAM_UPDATE_INTERVAL}秒")
     
     # 创建Application
     application = Application.builder().token(TG_TOKEN).build()
@@ -700,7 +639,6 @@ def main():
     application.post_init = update_telegram_commands
     
     # 启动bot
-    logger.info("Bot started successfully!")
     application.run_polling(
         allowed_updates=["message", "callback_query"],
         timeout=POLLING_TIMEOUT
@@ -710,7 +648,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("程序被用户中断")
+        pass
     except Exception as e:
-        logger.error(f"程序异常退出: {e}")
         traceback.print_exc()
