@@ -1,5 +1,9 @@
 # rss_config.py
 import os
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 RSS_GROUPS = [ # RSS 组配置列表
     # ================== 国际新闻组 ==================False: 关闭 / True: 开启
