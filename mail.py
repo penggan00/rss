@@ -1,22 +1,13 @@
 #source rss_venv/bin/activate
 #pip install html2text requests pdfplumber beautifulsoup4 md2tgmd python-dotenv tencentcloud-sdk-python python-telegram-bot
-
-"""
-邮件到Telegram机器人转发器
-支持多个聊天ID，使用md2tgmd进行转义，支持翻译功能
-"""
-
 import html2text
 import re
-import requests
 import imaplib
 import email
 import pdfplumber
 import tempfile
 from email.header import decode_header
-import time
 import logging
-from datetime import datetime
 import sys
 import os
 from bs4 import BeautifulSoup
@@ -483,7 +474,7 @@ class EmailToTelegramBot:
                 # 翻译内容 - 使用安全翻译
                 translated_content = self.translate_content_sync_safe(content)
                 if translated_content and translated_content != content:
-                    content = translated_content
+                    content = translated_content.replace('_', 'ˍ')
                #     logging.info("内容安全翻译完成")
                 
             except Exception as e:
@@ -1389,14 +1380,15 @@ class EmailToTelegramBot:
         text = re.sub(r'_(.*?)_', r'\1', text)        # 下划线斜体
         
         # 4. 移除链接标记但保留文本
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # [文本](链接) -> 文本
+     #   text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # [文本](链接) -> 文本
         
         # 5. 移除可能引起问题的特殊字符（但保留基本标点）
-        problematic_chars = r'[\\`*_{}[\]()#+-.!|~>]'
+      #  problematic_chars = r'[\\`*_{}[\]()#+-.!|~>]'
+        problematic_chars = r'[\\#]'  # 只匹配反斜杠和井号
         text = re.sub(problematic_chars, ' ', text)
         
         # 6. 标准化空白（保留段落结构）
-        text = re.sub(r'[ \t]+', ' ', text)  # 合并多个空格
+       # text = re.sub(r'[ \t]+', ' ', text)  # 合并多个空格
         text = re.sub(r'\n[ \t]*\n[ \t]*\n+', '\n\n', text)  # 保留最多两个连续空行
         text = re.sub(r'^\n+', '', text)  # 移除开头的空行
         text = re.sub(r'\n+$', '', text)  # 移除结尾的空行

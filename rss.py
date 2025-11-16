@@ -54,7 +54,7 @@ semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
 
-RSS_GROUPS = []  # 将在main函数中从配置文件加载
+# RSS_GROUPS = []  # 将在main函数中从配置文件加载
 
 # ========== 数据库配置 ==========
 PG_URL = os.getenv("PG_URL")

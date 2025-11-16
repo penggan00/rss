@@ -1,3 +1,5 @@
+#source rss_venv/bin/activate
+#pip install python-dotenv python-telegram-bot Pillow google-generativeai md2tgmd aiohttp
 import asyncio
 import os
 import time
@@ -26,7 +28,7 @@ ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
 DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-2.5-flash")
 
 # 超时配置
-STREAM_UPDATE_INTERVAL = float(os.getenv("STREAM_UPDATE_INTERVAL", "3"))
+STREAM_UPDATE_INTERVAL = float(os.getenv("STREAM_UPDATE_INTERVAL", "1.5"))
 POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
@@ -254,37 +256,66 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
 
         # 3. 根据模型类型调用不同的API
         if model_type.startswith("gemini"):
-            # Gemini模型
+            # Gemini模型 - 修复流式处理
             enhanced_message = f"用中文回复：{user_message}"
             
-            stream = user_session.chat_session.send_message(enhanced_message, stream=True)
-            
-            for chunk in stream:
-                if hasattr(chunk, 'text') and chunk.text:
-                    full_response += chunk.text
-                    current_time = time.time()
-
-                    if current_time - last_update >= update_interval:
-                        try:
-                            await bot.edit_message_text(
-                                escape(full_response),
-                                chat_id=chat_id,
-                                message_id=sent_message.message_id,
-                                parse_mode=ParseMode.MARKDOWN_V2
-                            )
-                        except Exception as e:
-                            if "parse markdown" in str(e).lower() or "can't parse entities" in str(e).lower():
-                                await bot.edit_message_text(
-                                    full_response,
-                                    chat_id=chat_id,
-                                    message_id=sent_message.message_id
-                                )
-                        last_update = current_time
+            try:
+                stream = user_session.chat_session.send_message(enhanced_message, stream=True)
+                
+                has_content = False
+                for chunk in stream:
+                    try:
+                        # 安全地获取文本内容
+                        if hasattr(chunk, 'text') and chunk.text:
+                            chunk_text = chunk.text
+                            full_response += chunk_text
+                            has_content = True
+                            
+                            current_time = time.time()
+                            if current_time - last_update >= update_interval:
+                                try:
+                                    await bot.edit_message_text(
+                                        escape(full_response),
+                                        chat_id=chat_id,
+                                        message_id=sent_message.message_id,
+                                        parse_mode=ParseMode.MARKDOWN_V2
+                                    )
+                                except Exception as e:
+                                    if "parse markdown" in str(e).lower() or "can't parse entities" in str(e).lower():
+                                        await bot.edit_message_text(
+                                            full_response,
+                                            chat_id=chat_id,
+                                            message_id=sent_message.message_id
+                                        )
+                                last_update = current_time
+                    except Exception as chunk_error:
+                        # 忽略单个chunk的错误，继续处理后续内容
+                        print(f"Chunk processing error: {chunk_error}")
+                        continue
+                
+                # 检查是否完全没有内容
+                if not has_content:
+                    await bot.edit_message_text(
+                        "⚠️ 模型返回了空响应，可能是由于内容安全策略限制。请尝试重新表述您的问题。",
+                        chat_id=chat_id,
+                        message_id=sent_message.message_id
+                    )
+                    return
+                    
+            except Exception as stream_error:
+                # 处理整个流式请求的错误
+                error_msg = f"流式请求失败: {str(stream_error)}"
+                await bot.edit_message_text(
+                    f"{ERROR_INFO}\n{error_msg}",
+                    chat_id=chat_id,
+                    message_id=sent_message.message_id
+                )
+                return
+                
         else:
-            # DeepSeek模型
+            # DeepSeek模型（保持不变）
             full_response = await call_deepseek_api(user_message, user_session)
             
-            # DeepSeek API不支持真正的流式，直接发送完整响应
             try:
                 await bot.edit_message_text(
                     escape(full_response),
@@ -319,6 +350,28 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
                         )
                 except Exception:
                     pass
+
+    except asyncio.TimeoutError:
+        if sent_message:
+            await bot.edit_message_text(
+                "⏰ 请求超时，请稍后重试",
+                chat_id=chat_id,
+                message_id=sent_message.message_id
+            )
+    except Exception as e:
+        if sent_message:
+            try:
+                await bot.edit_message_text(
+                    f"{ERROR_INFO}\n错误详情: {str(e)}",
+                    chat_id=chat_id,
+                    message_id=sent_message.message_id
+                )
+            except Exception:
+                await bot.send_message(
+                    chat_id,
+                    f"{ERROR_INFO}\n错误详情: {str(e)}",
+                    reply_to_message_id=message_id
+                )
 
     except asyncio.TimeoutError:
         if sent_message:
@@ -456,12 +509,12 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
 **gemini:**
 `/model gemini-2.0-flash`  (长上下文)
 `/model gemini-2.5-flash`  (平衡性能)
-`/model gemini-2.5-pro`       (最强能力)
+`/model gemini-2.5-pro`      (最强能力)
 
 **deekseek:**
 `/model deepseek-chat`          (通用对话)
 `/model deepseek-coder`        (编程专用)
-`/model deepseek-reasoner` (推理专用)
+`/model deepseek-reasoner`  (推理专用)
 
 **直接点击上面的命令即可切换**
         """
@@ -513,7 +566,7 @@ async def handle_setup_command(update: Update, context: ContextTypes.DEFAULT_TYP
 ⚙️ **设置选项**
 
 # 快捷操作：
-`/new`      - 🆕 清空对话历史
+`/new`        - 🆕 清空对话历史
 `/model` - 🔄 切换AI模型
 `/clear` - 🔄 清空对话上下文
 `/start` - 🤖 显示帮助信息
