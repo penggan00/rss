@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-logger.info(f"日志文件路径: {log_file_path}")
+# logger.info(f"日志文件路径: {log_file_path}")
 
 # 翻译配置
 ENABLE_TRANSLATION = os.getenv('ENABLE_TRANSLATION', 'false').lower() == 'true'
@@ -298,7 +298,7 @@ class EmailToTelegramBot:
         # 清理聊天ID
         chat_id = str(chat_id).replace('"', '').replace("'", "").strip()
         
-        logging.info(f"使用的聊天ID: {chat_id}")
+     #   logging.info(f"使用的聊天ID: {chat_id}")
         return [chat_id]
     
     def _validate_config(self):
@@ -1428,7 +1428,7 @@ class EmailToTelegramBot:
                 await asyncio.sleep(1)
         
         if chat_success:
-            logging.info(f"消息成功发送到聊天 {chat_id}")
+            pass
         else:
             logging.error(f"消息发送到聊天 {chat_id} 失败")
         
@@ -2232,7 +2232,7 @@ class EmailToTelegramBot:
                 # 处理间隔，避免过快
                 await asyncio.sleep(2)
             
-            logging.info(f"邮件处理完成: 成功 {success_count}/{len(email_ids)}")
+          #  logging.info(f"邮件处理完成: 成功 {success_count}/{len(email_ids)}")
             return success_count > 0
             
         except Exception as e:
@@ -2423,7 +2423,7 @@ async def main_async():
     success = await processor.process_all_unread_emails_async()
     
     if success:
-        logging.info("=== 处理完成 ===")
+        pass
     else:
         logging.error("=== 处理过程中出现错误 ===")
     

@@ -38,6 +38,8 @@ echo "[7/10] 设置定时任务"
 #(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
 #(crontab -l | grep -q '~/rss/usa.py') || (crontab -l; echo "30 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
 #(crontab -l | grep -q '~/rss/rss.log.sh') || (crontab -l; echo "0 1 * * * /bin/bash ~/rss/rss.log.sh") | crontab -
+#(crontab -l | grep -q '~/rss/github.sh') || (crontab -l; echo "24 2 * * * 6-7 /bin/bash ~/rss/github.sh") | crontab -
+
 
 echo "[8/10] 2秒钟后编辑 /rss/.env"
 sleep 2

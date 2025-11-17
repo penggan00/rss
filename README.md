@@ -14,12 +14,19 @@ docker pull penggan0/rss-full-alpine:latest
 sudo docker-compose pull
 sudo docker-compose down
 sudo docker-compose up -d
+```
+# 一键更新
+```
+bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
 
 ```
 crontab -e
+24 2 * * * bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
 */10 * * * * /bin/bash ~/rss/rss.sh
 5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
 27 23 * * * /bin/bash ~/rss/rss.sh
+24 2 * * * /bin/bash ~/rss/ss.sh
+
 ```
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
@@ -62,48 +69,6 @@ SELECT * FROM rss_status LIMIT 5;
 CREATE DATABASE rss_status;
 \c rss_status
 ``` 
-```
-CREATE TABLE IF NOT EXISTS rss_status (
-    feed_group TEXT,
-    feed_url TEXT,
-    entry_url TEXT,
-    entry_content_hash TEXT,
-    entry_timestamp DOUBLE PRECISION,
-    PRIMARY KEY (feed_group, feed_url, entry_url)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash ON rss_status(feed_group, entry_content_hash);
-
-CREATE TABLE IF NOT EXISTS timestamps (
-    feed_group TEXT PRIMARY KEY,
-    last_run_time DOUBLE PRECISION
-);
-
-CREATE TABLE IF NOT EXISTS cleanup_timestamps (
-    feed_group TEXT PRIMARY KEY,
-    last_cleanup_time DOUBLE PRECISION
-);
-
-CREATE TABLE IF NOT EXISTS pending_messages (
-    feed_group TEXT,
-    feed_url TEXT,
-    entry_id TEXT,
-    content_hash TEXT,
-    title TEXT,
-    translated_title TEXT,
-    link TEXT,
-    summary TEXT,
-    entry_timestamp DOUBLE PRECISION,
-    sent INTEGER DEFAULT 0,
-    feed_title TEXT,
-    PRIMARY KEY (feed_group, feed_url, entry_id)
-);
-
-CREATE TABLE IF NOT EXISTS batch_timestamps (
-    feed_group TEXT PRIMARY KEY,
-    last_batch_sent_time DOUBLE PRECISION
-);
-```
 
 **youtube**
 ```

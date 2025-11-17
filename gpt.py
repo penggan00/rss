@@ -5,6 +5,7 @@ import os
 import time
 import traceback
 import io
+import re
 import json
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
@@ -28,7 +29,6 @@ ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
 DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-2.5-flash")
 
 # 超时配置
-STREAM_UPDATE_INTERVAL = float(os.getenv("STREAM_UPDATE_INTERVAL", "1.5"))
 POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
@@ -183,7 +183,7 @@ async def call_deepseek_api(user_message: str, user_session: UserSession) -> str
     data = {
         "model": user_session.model_name,
         "messages": messages,
-        "stream": True,
+        "stream": False,
         "max_tokens": 4000
     }
     
@@ -203,47 +203,127 @@ async def call_deepseek_api(user_message: str, user_session: UserSession) -> str
                 error_text = await response.text()
                 raise Exception(f"DeepSeek API 错误: {response.status} - {error_text}")
             
-            full_response = ""
-            async for line in response.content:
-                if line:
-                    line_text = line.decode('utf-8').strip()
-                    if line_text.startswith('data: '):
-                        json_str = line_text[6:]
-                        if json_str == '[DONE]':
-                            break
-                        try:
-                            data_chunk = json.loads(json_str)
-                            if 'choices' in data_chunk and len(data_chunk['choices']) > 0:
-                                delta = data_chunk['choices'][0].get('delta', {})
-                                if 'content' in delta:
-                                    content = delta['content']
-                                    full_response += content
-                        except json.JSONDecodeError:
-                            continue
+            result = await response.json()
+            full_response = result['choices'][0]['message']['content']
             
             # 更新对话历史
             user_session.deepseek_history.append({"role": "user", "content": user_message})
             user_session.deepseek_history.append({"role": "assistant", "content": full_response})
             
             # 限制历史长度
-            if len(user_session.deepseek_history) > 20:  # 最多10轮对话
+            if len(user_session.deepseek_history) > 20:
                 user_session.deepseek_history = user_session.deepseek_history[-20:]
             
             return full_response
 
-# ==================== 流式响应核心功能 ====================
-async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: str, model_type: str, user_id: int):
-    """统一的AI流式处理函数"""
+# ==================== 消息分割功能 ====================
+def split_messages(text: str) -> List[str]:
+    """
+    智能分割消息，确保：
+    1. 优先在段落边界分割
+    2. 不破坏代码块结构
+    3. 每段不超过3900字节
+    """
+    MAX_BYTES = 3900
+    chunks = []
+    current_chunk = ""
+
+    # 按段落分割
+    paragraphs = text.split('\n\n')
+    for para in paragraphs:
+        para_bytes_len = len(para.encode('utf-8'))
+        current_chunk_bytes_len = len(current_chunk.encode('utf-8'))
+
+        if current_chunk_bytes_len + 4 + para_bytes_len > MAX_BYTES:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = para
+        else:
+            current_chunk += '\n\n' + para if current_chunk else para
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    # 二次分割超长段落
+    final_chunks = []
+    for chunk in chunks:
+        chunk_bytes_len = len(chunk.encode('utf-8'))
+        if chunk_bytes_len <= MAX_BYTES:
+            final_chunks.append(chunk)
+        else:
+            sentences = re.split(r'(?<=[.!?])\s+', chunk)
+            current = ""
+            current_bytes_len = 0
+            for sent in sentences:
+                sent_bytes_len = len(sent.encode('utf-8'))
+                if current_bytes_len + 1 + sent_bytes_len > MAX_BYTES:
+                    if current:
+                        final_chunks.append(current)
+                    current = sent
+                    current_bytes_len = sent_bytes_len
+                else:
+                    current += ' ' + sent if current else sent
+                    current_bytes_len += (1 + sent_bytes_len) if current else sent_bytes_len
+            if current:
+                final_chunks.append(current)
+
+    return final_chunks
+
+async def send_segmented_message(bot, chat_id: int, message_id: int, text: str):
+    """分段发送消息 - 修复版本"""
+    chunks = split_messages(text)
+    
+    if not chunks:
+        return
+    
+    sent_messages = []
+    
+    # 发送所有段落
+    for i, chunk in enumerate(chunks):
+        try:
+            if i == 0:  # 第一段作为回复
+                sent_msg = await bot.send_message(
+                    chat_id,
+                    escape(chunk),
+                    reply_to_message_id=message_id,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            else:  # 后续段落作为新消息
+                sent_msg = await bot.send_message(
+                    chat_id,
+                    escape(chunk),
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            sent_messages.append(sent_msg)
+        except Exception as e:
+            # 如果Markdown发送失败，尝试普通文本
+            if i == 0:
+                sent_msg = await bot.send_message(
+                    chat_id,
+                    chunk,
+                    reply_to_message_id=message_id
+                )
+            else:
+                sent_msg = await bot.send_message(chat_id, chunk)
+            sent_messages.append(sent_msg)
+        
+        await asyncio.sleep(0.3)  # 避免发送过快
+    
+    return sent_messages
+
+# ==================== AI 处理函数 ====================
+async def ai_handler(bot, chat_id: int, message_id: int, user_message: str, model_type: str, user_id: int):
+    """统一的AI处理函数 - 优化版本"""
     sent_message = None
     try:
-        # 1. 先发送生成中提示
+        # 发送生成中提示
         sent_message = await bot.send_message(
             chat_id, 
             BEFORE_GENERATE_INFO,
             reply_to_message_id=message_id
         )
 
-        # 2. 获取或创建用户会话
+        # 获取或创建用户会话
         try:
             user_session = get_user_session(user_id, model_type)
         except Exception as e:
@@ -251,127 +331,50 @@ async def ai_stream_handler(bot, chat_id: int, message_id: int, user_message: st
             user_session = get_user_session(user_id, model_type)
         
         full_response = ""
-        last_update = time.time()
-        update_interval = STREAM_UPDATE_INTERVAL
 
-        # 3. 根据模型类型调用不同的API
+        # 根据模型类型调用不同的API
         if model_type.startswith("gemini"):
-            # Gemini模型 - 修复流式处理
             enhanced_message = f"用中文回复：{user_message}"
             
             try:
-                stream = user_session.chat_session.send_message(enhanced_message, stream=True)
-                
-                has_content = False
-                for chunk in stream:
-                    try:
-                        # 安全地获取文本内容
-                        if hasattr(chunk, 'text') and chunk.text:
-                            chunk_text = chunk.text
-                            full_response += chunk_text
-                            has_content = True
-                            
-                            current_time = time.time()
-                            if current_time - last_update >= update_interval:
-                                try:
-                                    await bot.edit_message_text(
-                                        escape(full_response),
-                                        chat_id=chat_id,
-                                        message_id=sent_message.message_id,
-                                        parse_mode=ParseMode.MARKDOWN_V2
-                                    )
-                                except Exception as e:
-                                    if "parse markdown" in str(e).lower() or "can't parse entities" in str(e).lower():
-                                        await bot.edit_message_text(
-                                            full_response,
-                                            chat_id=chat_id,
-                                            message_id=sent_message.message_id
-                                        )
-                                last_update = current_time
-                    except Exception as chunk_error:
-                        # 忽略单个chunk的错误，继续处理后续内容
-                        print(f"Chunk processing error: {chunk_error}")
-                        continue
-                
-                # 检查是否完全没有内容
-                if not has_content:
-                    await bot.edit_message_text(
-                        "⚠️ 模型返回了空响应，可能是由于内容安全策略限制。请尝试重新表述您的问题。",
-                        chat_id=chat_id,
-                        message_id=sent_message.message_id
-                    )
-                    return
-                    
-            except Exception as stream_error:
-                # 处理整个流式请求的错误
-                error_msg = f"流式请求失败: {str(stream_error)}"
+                response = user_session.chat_session.send_message(enhanced_message)
+                full_response = response.text
+            except Exception as e:
                 await bot.edit_message_text(
-                    f"{ERROR_INFO}\n{error_msg}",
+                    f"{ERROR_INFO}\n错误详情: {str(e)}",
                     chat_id=chat_id,
                     message_id=sent_message.message_id
                 )
                 return
                 
         else:
-            # DeepSeek模型（保持不变）
-            full_response = await call_deepseek_api(user_message, user_session)
+            enhanced_message = f"用中文回复：{user_message}"
+            full_response = await call_deepseek_api(enhanced_message, user_session)
+        
+        # 处理完整响应
+        if full_response:
+            response_bytes = len(full_response.encode('utf-8'))
             
-            try:
-                await bot.edit_message_text(
-                    escape(full_response),
-                    chat_id=chat_id,
-                    message_id=sent_message.message_id,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-            except Exception as e:
-                if "parse markdown" in str(e).lower() or "can't parse entities" in str(e).lower():
+            if response_bytes > 3900:
+                # 长消息：保留Generating提示，直接分段发送回复
+                await send_segmented_message(bot, chat_id, message_id, full_response)
+                # Generating提示保持显示，让用户知道生成已完成
+                    
+            else:
+                # 短消息：直接编辑Generating提示为最终回复
+                try:
+                    await bot.edit_message_text(
+                        escape(full_response),
+                        chat_id=chat_id,
+                        message_id=sent_message.message_id,
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                except Exception as e:
                     await bot.edit_message_text(
                         full_response,
                         chat_id=chat_id,
                         message_id=sent_message.message_id
                     )
-
-        # 4. 最终更新完整响应（Gemini模型）
-        if model_type.startswith("gemini") and full_response:
-            try:
-                await bot.edit_message_text(
-                    escape(full_response),
-                    chat_id=chat_id,
-                    message_id=sent_message.message_id,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-            except Exception as e:
-                try:
-                    if "parse markdown" in str(e).lower() or "can't parse entities" in str(e).lower():
-                        await bot.edit_message_text(
-                            full_response,
-                            chat_id=chat_id,
-                            message_id=sent_message.message_id
-                        )
-                except Exception:
-                    pass
-
-    except asyncio.TimeoutError:
-        if sent_message:
-            await bot.edit_message_text(
-                "⏰ 请求超时，请稍后重试",
-                chat_id=chat_id,
-                message_id=sent_message.message_id
-            )
-    except Exception as e:
-        if sent_message:
-            try:
-                await bot.edit_message_text(
-                    f"{ERROR_INFO}\n错误详情: {str(e)}",
-                    chat_id=chat_id,
-                    message_id=sent_message.message_id
-                )
-            except Exception:
-                await bot.send_message(
-                    chat_id,
-                    f"{ERROR_INFO}\n错误详情: {str(e)}",
-                    reply_to_message_id=message_id
-                )
 
     except asyncio.TimeoutError:
         if sent_message:
@@ -413,49 +416,27 @@ async def download_image_with_retry(file_id: str, application: Application) -> O
 async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: str, photo_file: bytes, user_id: int):
     """图片编辑处理函数"""
     try:
-        # 下载图片通知
         processing_msg = await bot.send_message(chat_id, DOWNLOAD_PIC_NOTIFY, reply_to_message_id=message_id)
         
-        # 处理图片
         image = Image.open(io.BytesIO(photo_file))
-        
-        # 获取用户会话（图片处理使用Gemini模型）
         user_session = get_user_session(user_id, "gemini-2.5-flash")
         
-        # 在用户消息前回答提示
         enhanced_message = f"用中文回复：{user_message}" if user_message else "用中文描述这张图片"
-        
-        # 准备内容（文本+图片）
         contents = [enhanced_message, image]
         
-        # 发送请求
         response = user_session.chat_session.send_message(contents)
         
-        # 处理响应
+        response_text = ""
         for part in response.parts:
             if hasattr(part, 'text') and part.text:
-                text = part.text
-                # 长文本分片处理
-                while len(text) > 4000:
-                    await bot.send_message(chat_id, escape(text[:4000]), 
-                                         parse_mode=ParseMode.MARKDOWN_V2,
-                                         reply_to_message_id=message_id)
-                    await asyncio.sleep(0.5)
-                    text = text[4000:]
-                if text:
-                    await bot.send_message(chat_id, escape(text), 
-                                         parse_mode=ParseMode.MARKDOWN_V2,
-                                         reply_to_message_id=message_id)
-            elif hasattr(part, 'inline_data') and part.inline_data:
-                # 处理生成的图片
-                photo_data = part.inline_data.data
-                await bot.send_photo(chat_id, photo_data, reply_to_message_id=message_id)
+                response_text += part.text
         
-        # 删除处理中的消息
         await bot.delete_message(chat_id, processing_msg.message_id)
         
+        if response_text:
+            await send_segmented_message(bot, chat_id, message_id, response_text)
+        
     except Exception as e:
-        traceback.print_exc()
         await bot.send_message(chat_id, f"{ERROR_INFO}\nError: {str(e)}", reply_to_message_id=message_id)
 
 # ==================== 命令处理函数 ====================
@@ -496,7 +477,6 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     user_id = update.effective_user.id
     
-    # 如果没有参数，显示模型切换界面
     if not context.args:
         current_model = get_current_model_info(user_id)
         
@@ -522,7 +502,6 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
                                       parse_mode=ParseMode.MARKDOWN_V2)
         return
     
-    # 处理模型切换
     model_name = context.args[0].strip()
     if model_name not in AVAILABLE_MODELS:
         available_models = "\n".join([f"• `{model}` - {desc}" for model, desc in AVAILABLE_MODELS.items()])
@@ -532,9 +511,7 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
     
-    # 切换模型会清空当前会话
     if user_id in user_sessions:
-        # 检查是否是相同的模型
         if user_sessions[user_id].model_name == model_name:
             await update.message.reply_text(
                 prepare_markdown_segment(f"ℹ️ 已经是 `{model_name}` 模型"),
@@ -544,7 +521,6 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             del user_sessions[user_id]
     
-    # 创建新会话
     try:
         get_user_session(user_id, model_name)
         await update.message.reply_text(
@@ -573,7 +549,6 @@ async def handle_setup_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 ** 系统状态：**
 • 默认模型：{model_info}
-• 流式输出：✅ 开启
 • 上下文管理：✅ 智能清理
 
 **使用提示：**
@@ -597,7 +572,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_user_allowed(update):
         return
     
-    # 下载图片
     file_id = update.message.photo[-1].file_id
     photo_data = await download_image_with_retry(file_id, context.application)
     
@@ -605,7 +579,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Failed to download image")
         return
     
-    # 获取描述文本
     user_message = update.message.caption or ""
     
     await gemini_edit_handler(
@@ -625,13 +598,12 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     user_message = update.message.text.strip()
     user_id = update.effective_user.id
     
-    # 使用当前会话的模型
     if user_id in user_sessions:
         model_type = user_sessions[user_id].model_name
     else:
         model_type = DEFAULT_MODEL
     
-    await ai_stream_handler(
+    await ai_handler(
         context.bot,
         update.effective_chat.id,
         update.message.message_id,
@@ -648,50 +620,28 @@ async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
     for uid in expired:
         del user_sessions[uid]
 
-async def update_telegram_commands(application: Application):
-    """更新Telegram机器人命令列表"""
-    commands = [
-        ("start", "开始使用"),
-        ("new", "开始新对话"),
-        ("model", "切换AI模型"),
-        ("setup", "设置选项")
-    ]
-    
-    try:
-        await application.bot.set_my_commands(commands)
-    except Exception as e:
-        pass
-
 def main():
     """主函数"""
     if not validate_config():
         return
     
-    # 创建Application
     application = Application.builder().token(TG_TOKEN).build()
     
-    # 添加处理器
     application.add_handler(CommandHandler("start", handle_start_command))
     application.add_handler(CommandHandler("new", handle_new_command))
     application.add_handler(CommandHandler("model", handle_model_command))
     application.add_handler(CommandHandler("setup", handle_setup_command))
     application.add_handler(CommandHandler("clear", handle_clear_command))
     
-    # 添加消息处理器
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
         handle_private_message
     ))
     
-    # 添加定时任务
     job_queue = application.job_queue
     job_queue.run_repeating(cleanup_task, interval=3600, first=10)
     
-    # 启动时更新命令
-    application.post_init = update_telegram_commands
-    
-    # 启动bot
     application.run_polling(
         allowed_updates=["message", "callback_query"],
         timeout=POLLING_TIMEOUT
