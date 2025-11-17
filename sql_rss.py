@@ -26,7 +26,6 @@ from tencentcloud.tmt.v20180321 import tmt_client, models
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
-from datetime import datetime, timezone
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
