@@ -1,5 +1,6 @@
 #source rss_venv/bin/activate
 #pip install python-dotenv python-telegram-bot Pillow google-generativeai md2tgmd aiohttp
+# sudo systemctl restart gpt.service
 import asyncio
 import os
 import time
