@@ -419,7 +419,7 @@ def remove_html_tags(text):
     text = re.sub(r'【\s*】', '', text)
     text = re.sub(r'(?<!\S)#(?!\S)', '', text)
     text = re.sub(r'(?<!\S)：(?!\S)', '', text)
-    text = text.replace('.', '.\u200c')
+ #   text = text.replace('.', '.\u200c')
     return text
 
 def get_entry_identifier(entry):
@@ -719,11 +719,7 @@ async def generate_group_message(feed_data, entries, processor):
         
         messages = []
         
-        # ✅ 检查模板是否需要摘要
         template_needs_summary = "{summary}" in processor["template"]
-        
-        # ✅ 现在可以安全地使用 template_needs_summary
-        logger.debug(f"[摘要处理] 组: {source_name}, 需要摘要: {template_needs_summary}")
         
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
@@ -731,11 +727,14 @@ async def generate_group_message(feed_data, entries, processor):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
+            
+            # 在转义之前添加零宽字符处理
+            translated_subject = translated_subject.replace('.', '.\u200c')
             safe_subject = escape(translated_subject)
+            
             raw_url = entry.link
             safe_url = escape(raw_url)
             
-            # ✅ 只在需要时处理摘要
             format_kwargs = {
                 "subject": safe_subject,
                 "source": safe_source,
@@ -745,6 +744,8 @@ async def generate_group_message(feed_data, entries, processor):
             if template_needs_summary:
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
+                # 摘要也添加零宽字符处理
+                cleaned_summary = cleaned_summary.replace('.', '.\u200c')
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
