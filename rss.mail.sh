@@ -4,9 +4,9 @@
 # 配置部分
 # ==============================================
 ENV_FILE="$HOME/rss/.env"
-LOG_FILE="$HOME/rss/rss.log"
+LOG_FILE="$HOME/rss/mail.log"
 MAX_MESSAGE_LENGTH=4000  # Telegram消息长度限制
-TIMESTAMP_FILE="$HOME/rss/rss.timestamp"  # 记录上次发送时间
+TIMESTAMP_FILE="$HOME/rss/mail.timestamp"  # 记录上次发送时间
 ARCHIVE_DIR="$HOME/rss/log_archive"  # 日志归档目录
 
 # ==============================================
@@ -68,13 +68,13 @@ fi
 
 # 1. 备份当前日志内容
 LOG_CONTENT=$(cat "$LOG_FILE")
-ARCHIVE_FILE="$ARCHIVE_DIR/rss_$(date +%Y-%m-%d_%H-%M-%S).log"
+ARCHIVE_FILE="$ARCHIVE_DIR/mail_$(date +%Y-%m-%d_%H-%M-%S).log"
 echo "$LOG_CONTENT" > "$ARCHIVE_FILE"
 echo "📦 日志已归档到: $ARCHIVE_FILE"
 
 # 2. 准备发送内容
 CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-MESSAGE_HEADER="🔄 RSS ($CURRENT_TIME)"
+MESSAGE_HEADER="🔄 Mail ($CURRENT_TIME)"
 FULL_MESSAGE="$MESSAGE_HEADER\n\n$LOG_CONTENT"
 
 # 3. 处理消息长度限制

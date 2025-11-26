@@ -120,7 +120,7 @@ RSS_GROUPS = [ # RSS 组配置列表
          #   'https://sspai.com/feed', # 少数派
          #   'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
             'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
-            'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
+        #    'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
             'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
             'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
