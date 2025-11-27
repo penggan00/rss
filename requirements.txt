@@ -1,5 +1,6 @@
 #pip freeze
 #source rss_venv/bin/activate
+# 安装依赖
 #python3 -m pip install -r requirements.txt
 # 生成依赖
 #pip freeze > requirements.txt

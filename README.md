@@ -14,20 +14,20 @@ docker pull penggan0/rss-full-alpine:latest
 sudo docker-compose pull
 sudo docker-compose down
 sudo docker-compose up -d
-```
-# 一键更新
-```
-bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
 
+```
+#一键更新
+cd
+~/rss
+bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
 ```
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
 */10 * * * * /bin/bash ~/rss/rss.sh
 5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
 27 23 * * * /bin/bash ~/rss/rss.sh
-24 2 * * * /bin/bash ~/rss/ss.sh
+22 2 * * * /bin/bash ~/rss/ss.sh
 
-```
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
 pip install aiosqlite
@@ -47,10 +47,10 @@ python3 usd.py
 source rss_venv/bin/activate
 python3 mail.py
 python3 gpt.py
+
+
 ```
-```
-```
-pip freeze
+#安装依赖
 python3 -m pip install -r requirements.txt
 ```
 ```

@@ -39,12 +39,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-telegram_bot_logger = logging.getLogger('telegram.bot')
-telegram_bot_logger.setLevel(logging.WARNING)
-urllib3_logger = logging.getLogger('urllib3.connectionpool')
-urllib3_logger.setLevel(logging.WARNING)
-telegram_ext_logger = logging.getLogger('telegram.ext')
-telegram_ext_logger.setLevel(logging.WARNING)
 # logger.info(f"日志文件路径: {log_file_path}")
 
 # 翻译配置
@@ -533,7 +527,7 @@ class EmailToTelegramBot:
         # 新增：安全替换特殊字符（保护URL、邮箱等格式）
        # markdown = self.replace_special_chars_safely(markdown)
         # 7. 新增：将点号替换为全角点号+Em空格（排除URL和等体字）
-    #    final_markdown = self.replace_dots_safely(final_markdown)
+        final_markdown = self.replace_dots_safely(final_markdown)
         return final_markdown
     
     def replace_dots_safely(self, text):
@@ -1006,45 +1000,18 @@ class EmailToTelegramBot:
         
         print(f"🔤 原始文本: {text}")
         
-        # 第一步：安全替换点号（在翻译后处理）
-        text = self.replace_dots_safely(text)
-        print(f"🔤 替换点号后: {text}")
-        
         # 新增：在转义之前清理符号
         text = re.sub(r'#+', '# ', text)
-        text = re.sub(r'\u200c+', '\u200c', text)
         
-        # 第二步：使用md2tgmd进行转义
+        # 先使用md2tgmd进行转义
         escaped_text = escape(text)
         print(f"🔄 转义后文本: {escaped_text}")
         
-        # 第三步：在转义之后，等体字处理之前，检查前3行并替换 \_ 为 _
-        def replace_underscore_escape_in_first_lines(text):
-            r"""替换前4行中的 \_ 为 _"""
-            lines = text.split('\n')
-            if len(lines) <= 3:
-                return text
-                
-            processed_lines = []
-            for i, line in enumerate(lines):
-                if i < 4:  # 只处理前4行
-                    # 将 \_ 替换为 _
-                    processed_line = line.replace('\\_', '_')
-                    if processed_line != line:
-                        print(f"📝 第{i+1}行替换 \\_ 为 _: '{line}' → '{processed_line}'")
-                    processed_lines.append(processed_line)
-                else:
-                    processed_lines.append(line)
-            return '\n'.join(processed_lines)
-        
-        # 执行前3行 \_ 替换
-        escaped_text = replace_underscore_escape_in_first_lines(escaped_text)
-        
-        # 第四步：专门处理等体字：清理反斜杠 + 修复URL
+        # 然后专门处理等体字：清理反斜杠 + 修复URL
         processed_text = self.clean_and_fix_monospace_urls(escaped_text)
         print(f"🔗 处理等体字后: {processed_text}")
         
-        # 第五步：修复：保护主题相关的下划线（包括整个主题）
+        # 修复：保护主题相关的下划线（包括整个主题）
         final_text = self.protect_theme_underscores_complete(processed_text)
         print(f"🎨 保护主题下划线后: {final_text}")
         

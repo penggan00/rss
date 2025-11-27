@@ -69,7 +69,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 10分钟 
-        "batch_send_interval": 1790,   # 批量推送
+        "batch_send_interval": 3590,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -203,7 +203,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,       # 4分钟 
-        "batch_send_interval": 1790,   # 批量推送
+        "batch_send_interval": 3590,   # 批量推送
         "history_days": 3,     # 新增，保留30天
         "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
         "processor": {

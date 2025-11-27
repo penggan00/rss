@@ -6,6 +6,7 @@ import imaplib
 import email
 import pdfplumber
 import tempfile
+import time
 from email.header import decode_header
 import logging
 import sys
@@ -39,12 +40,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-telegram_bot_logger = logging.getLogger('telegram.bot')
-telegram_bot_logger.setLevel(logging.WARNING)
-urllib3_logger = logging.getLogger('urllib3.connectionpool')
-urllib3_logger.setLevel(logging.WARNING)
-telegram_ext_logger = logging.getLogger('telegram.ext')
-telegram_ext_logger.setLevel(logging.WARNING)
 # logger.info(f"日志文件路径: {log_file_path}")
 
 # 翻译配置
@@ -434,82 +429,67 @@ class EmailToTelegramBot:
         }
     
     def convert_email_to_markdown(self, email_data):
-        """将邮件内容转换为Markdown格式"""
+        """分别处理邮件的各个部分，保持翻译顺序"""
         subject = email_data['subject']
         from_ = email_data['from']
-        date = email_data['date']
         
         # 解析发件人信息
         from_name, from_email = self._parse_sender_info(from_)
         
-        # 处理用户名中的点号
+        # 处理用户名中的点号（保持原顺序）
         if from_name:
-            from_name = from_name.replace('.', '.\u200c')
-        
-        # 处理主题：清理下划线并替换点号
+          #  from_name = from_name.replace('.', '.\u200c')
+            from_name = from_name.replace(r'\\', ' ')
+        # 处理主题：清理下划线并替换点号（保持原顺序）
         if subject:
-            subject = subject.replace('_', 'ˍ')  # 清理下划线
-            subject = subject.replace('.', '.\u200c')  # 替换点号
-            subject = subject.replace(r'\\', ' ') # 去除连续的反斜杠
-
-        # 处理邮箱地址：去除反斜杠
+         #   subject = subject.replace('_', 'ˍ')
+       #     subject = subject.replace('.', '.\u200c')
+            subject = subject.replace(r'\\', ' ')
+        
+        # 处理邮箱地址：去除反斜杠（保持原顺序）
         if from_email:
-            from_email = from_email.replace('\\', ' ')  # 去除反斜杠
-            
-        # 优先使用HTML内容，如果没有则使用纯文本
+            from_email = from_email.replace('\\', ' ')
+        
+        # 处理内容部分（保持原顺序）
         if email_data['html_content']:
-            # 在转换前先预处理HTML（包括移除空链接）
             content = self.convert_html_to_markdown(email_data['html_content'])
         elif email_data['plain_content']:
             content = email_data['plain_content']
         else:
             content = "【此邮件无正文内容】"
         
-        # 检测是否需要翻译
+        # 检测是否需要翻译（保持原顺序和逻辑）
         need_translation = ENABLE_TRANSLATION and not self.is_mainly_chinese(content)
         
         if need_translation:
-       #     logging.info("检测到非中文内容，开始安全翻译...")
+            logging.info("检测到非中文内容，开始安全翻译...")
             try:
-                # 翻译主题 - 使用安全翻译
+                # 翻译主题 - 使用安全翻译（保持原顺序）
                 translated_subject = self.translate_content_sync_safe(subject)
                 if translated_subject and translated_subject != subject:
                     subject = translated_subject
-               #     logging.info("主题安全翻译完成")
-                
-                # 翻译内容 - 使用安全翻译
+                    logging.info("主题安全翻译完成")
+                time.sleep(1)  # 延时1秒
+                # 翻译内容 - 使用安全翻译（保持原顺序）
                 translated_content = self.translate_content_sync_safe(content)
                 if translated_content and translated_content != content:
-                    content = translated_content.replace('_', 'ˍ')
-               #     logging.info("内容安全翻译完成")
-                
+                    content = translated_content
+                    logging.info("内容安全翻译完成")
+                    
             except Exception as e:
                 logging.error(f"安全翻译失败: {e}")
                 # 翻译失败时保留原文
         
-        # 构建符合要求的Markdown消息格式
-        markdown_message = ""
+        # 返回分开的部分
+        processed_parts = {
+            'from_name': from_name or "",
+            'from_email': from_email or "", 
+            'subject': subject or "",
+            'content': content or ""
+        }
         
-        # 用户名（粗体）
-        if from_name:
-            markdown_message += f"**{from_name}**"
-        
-        # 邮箱地址（等宽）
-        if from_email:
-            if from_name:
-                markdown_message += " "  # 用户名和邮箱之间加空格
-            markdown_message += f"`{from_email}`"
-        
-        markdown_message += "\n"
-        
-        # 主题（斜体）
-        if subject:
-            markdown_message += f"_{subject}_\n\n"
-
-        # 内容
-        markdown_message += content
-        
-        return markdown_message
+        return processed_parts
+    
 
     def convert_html_to_markdown(self, html_content):
         """将HTML转换为Markdown"""
@@ -530,10 +510,7 @@ class EmailToTelegramBot:
         
         # 6. 处理星号：保留开头的*，保留**，删除单独的*
         final_markdown = self.process_asterisks(final_markdown)
-        # 新增：安全替换特殊字符（保护URL、邮箱等格式）
-       # markdown = self.replace_special_chars_safely(markdown)
-        # 7. 新增：将点号替换为全角点号+Em空格（排除URL和等体字）
-    #    final_markdown = self.replace_dots_safely(final_markdown)
+
         return final_markdown
     
     def replace_dots_safely(self, text):
@@ -772,9 +749,6 @@ class EmailToTelegramBot:
         
         # 新增：将邮箱地址转换为等宽字体
         markdown = self.format_email_addresses(markdown)
-        
-        # 新增：清理序号间的空行（保持独立功能）
-        #  markdown = self.remove_blank_lines_between_sequences(markdown)
 
         # 新增：去除空的 [] 和 () 组合
         markdown = self.remove_empty_brackets(markdown)
@@ -998,102 +972,156 @@ class EmailToTelegramBot:
             processed_lines.append(line)
         
         return '\n'.join(processed_lines)
-    
-    def escape_markdown_v2(self, text):
-        """使用md2tgmd进行MarkdownV2格式转义，然后清理等体字中的反斜杠并修复等体字内的URL"""
-        if not text:
+
+    def escape_markdown_v2(self, from_name, from_email, subject, content):
+        """分别处理各个部分，然后统一转义"""
+        
+        print(f"🔤 开始分别处理各个部分...")
+        
+        # 第一步：分别处理各个部分的特殊字符
+        processed_parts = self.preprocess_individual_parts(from_name, from_email, subject, content)
+        
+        # 第二步：统一转义所有部分
+        escaped_parts = self.unified_escape_parts(processed_parts)
+        
+        # 第三步：整合成最终消息
+        final_message = self.assemble_escaped_message(escaped_parts)
+        
+        return final_message
+
+    def preprocess_individual_parts(self, from_name, from_email, subject, content):
+        """分别预处理各个部分"""
+        processed = {}
+        
+        # 处理用户名
+        if from_name:
+            # 保护点号，清理其他特殊字符
+            processed['from_name'] = from_name.replace('.', '.\u200c')
+            processed['from_name'] = processed['from_name'].replace('_', ' ')
+            processed['from_name'] = processed['from_name'].replace('`', ' ')
+            processed['from_name'] = processed['from_name'].replace(r'\\', ' ')
+        else:
+            processed['from_name'] = ""
+        
+        # 处理邮箱地址
+        if from_email:
+            # 清理反斜杠和其他特殊字符
+            processed['from_email'] = from_email.replace('\\', ' ')
+            processed['from_email'] = processed['from_email'].replace('_', '_')
+        else:
+            processed['from_email'] = ""
+        
+        # 处理主题
+        if subject:
+            # 保护点号，清理下划线
+            processed['subject'] = subject.replace('.', '.\u200c')
+            processed['subject'] = processed['subject'].replace('@', '＠')
+            processed['subject'] = processed['subject'].replace(r'\\', ' ')
+            processed['subject'] = processed['subject'].replace('_', ' ')
+            processed['subject'] = processed['subject'].replace('`', ' ')
+        else:
+            processed['subject'] = ""
+        
+        # 处理内容（基础清理）
+        if content:
+            # 基础清理，主要转义在后续步骤
+            processed['content'] = content.replace('_', '_')
+        else:
+            processed['content'] = "【此邮件无正文内容】"
+        
+        print(f"📝 预处理完成:")
+        print(f"   用户名: {processed['from_name']}")
+        print(f"   邮箱: {processed['from_email']}")
+        print(f"   主题: {processed['subject']}")
+        print(f"   内容长度: {len(processed['content'])}")
+        
+        return processed
+
+    def unified_escape_parts(self, parts):
+        """统一转义所有部分"""
+        escaped_parts = {}
+        
+        # 转义用户名（使用md2tgmd）
+        if parts['from_name']:
+            escaped_parts['from_name'] = escape(parts['from_name'])
+        else:
+            escaped_parts['from_name'] = ""
+        
+        # 转义邮箱地址（使用md2tgmd）
+        if parts['from_email']:
+            escaped_parts['from_email'] = escape(parts['from_email'])
+        else:
+            escaped_parts['from_email'] = ""
+        
+        # 转义主题（使用md2tgmd）
+        if parts['subject']:
+            escaped_parts['subject'] = escape(parts['subject'])
+        else:
+            escaped_parts['subject'] = ""
+        
+        # 转义内容（使用完整的现有转义流程）
+        escaped_parts['content'] = self.escape_content_complete(parts['content'])
+        
+        print(f"🔄 转义完成:")
+        print(f"   用户名转义: {escaped_parts['from_name']}")
+        print(f"   邮箱转义: {escaped_parts['from_email']}")
+        print(f"   主题转义: {escaped_parts['subject']}")
+        
+        return escaped_parts
+
+    def escape_content_complete(self, content):
+        """完整的内容转义流程（复用原有逻辑）"""
+        if not content:
             return ""
         
-        print(f"🔤 原始文本: {text}")
+        print(f"🔤 原始内容: {content[:100]}...")
         
-        # 第一步：安全替换点号（在翻译后处理）
-        text = self.replace_dots_safely(text)
-        print(f"🔤 替换点号后: {text}")
+        # 安全替换点号（在转义之前）
+        content = self.replace_dots_safely(content)
+        print(f"🔤 替换点号后: {content[:100]}...")
         
-        # 新增：在转义之前清理符号
-        text = re.sub(r'#+', '# ', text)
-        text = re.sub(r'\u200c+', '\u200c', text)
+        # 清理符号
+        content = re.sub(r'#+', '# ', content)
+        content = re.sub(r'\u200c+', '\u200c', content)
         
-        # 第二步：使用md2tgmd进行转义
-        escaped_text = escape(text)
-        print(f"🔄 转义后文本: {escaped_text}")
+        # 使用md2tgmd进行转义
+        escaped_text = escape(content)
+        print(f"🔄 内容转义后: {escaped_text[:100]}...")
         
-        # 第三步：在转义之后，等体字处理之前，检查前3行并替换 \_ 为 _
-        def replace_underscore_escape_in_first_lines(text):
-            r"""替换前4行中的 \_ 为 _"""
-            lines = text.split('\n')
-            if len(lines) <= 3:
-                return text
-                
-            processed_lines = []
-            for i, line in enumerate(lines):
-                if i < 4:  # 只处理前4行
-                    # 将 \_ 替换为 _
-                    processed_line = line.replace('\\_', '_')
-                    if processed_line != line:
-                        print(f"📝 第{i+1}行替换 \\_ 为 _: '{line}' → '{processed_line}'")
-                    processed_lines.append(processed_line)
-                else:
-                    processed_lines.append(line)
-            return '\n'.join(processed_lines)
-        
-        # 执行前3行 \_ 替换
-        escaped_text = replace_underscore_escape_in_first_lines(escaped_text)
-        
-        # 第四步：专门处理等体字：清理反斜杠 + 修复URL
+        # 处理等体字
         processed_text = self.clean_and_fix_monospace_urls(escaped_text)
-        print(f"🔗 处理等体字后: {processed_text}")
+        print(f"🔗 处理等体字后: {processed_text[:100]}...")
         
-        # 第五步：修复：保护主题相关的下划线（包括整个主题）
+        # 保护主题相关的下划线
         final_text = self.protect_theme_underscores_complete(processed_text)
-        print(f"🎨 保护主题下划线后: {final_text}")
+        print(f"🎨 保护主题下划线后: {final_text[:100]}...")
         
         return final_text
 
-    def protect_theme_underscores_complete(self, text):
-        """
-        完整保护主题下划线 - 清理整个主题两端的转义斜杠
-        """
-        if not text:
-            return text
+    def assemble_escaped_message(self, escaped_parts):
+        """整合转义后的各个部分，添加Markdown格式标记"""
+        markdown_message = ""
         
-        result = text
+        # 构建发件人信息 - 用户名（粗体） + 邮箱地址（等宽）
+        if escaped_parts['from_name'] and escaped_parts['from_email']:
+            markdown_message += f"**{escaped_parts['from_name']}** `{escaped_parts['from_email']}`"
+        elif escaped_parts['from_name']:
+            markdown_message += f"**{escaped_parts['from_name']}**"
+        elif escaped_parts['from_email']:
+            markdown_message += f"`{escaped_parts['from_email']}`"
         
-        # 1. 首先处理整个主题的斜体格式
-        # 匹配模式：主题前后的 \_...\_
-        # 例如：\_\[GitHub\] penggan 00/CF-Workers-Buttons中的"上游同步"工作流已被禁用\_
-        theme_pattern = r'\\_([^_]+)\\_'
+        markdown_message += "\n"
         
-        def restore_theme_handler(match):
-            content = match.group(1)
-            print(f"🛡️ 修复主题斜体: '{content}'")
-            return f"_{content}_"
+        # 添加主题（斜体）
+        if escaped_parts['subject']:
+            markdown_message += f"_{escaped_parts['subject']}_\n\n"
         
-        # 应用主题修复
-        result = re.sub(theme_pattern, restore_theme_handler, result)
+        # 添加内容（已经转义过的）
+        markdown_message += escaped_parts['content']
         
-        # 2. 处理特定格式的主题：主题：\_内容\_
-        specific_pattern = r'主题[：:]\s*\\_([^_]+)\\_'
+        print(f"📦 最终整合完成，总长度: {len(markdown_message)} 字符")
         
-        def restore_specific_handler(match):
-            content = match.group(1)
-            return f"主题：_{content}_"
-        
-        result = re.sub(specific_pattern, restore_specific_handler, result)
-        
-        # 3. 处理被错误转义的其他斜体内容
-        # 匹配单独的 \_ 转义（不在等体字内）
-        isolated_underscore_pattern = r'(?<!`)\\_(?!`)'
-        result = re.sub(isolated_underscore_pattern, '_', result)
-        
-        # 调试信息
-        theme_fixes = len(re.findall(theme_pattern, text))
-        specific_fixes = len(re.findall(specific_pattern, text))
-        
-        if theme_fixes + specific_fixes > 0:
-            print(f"🛡️ 主题下划线保护: 修复了 {theme_fixes} 个完整主题和 {specific_fixes} 个特定格式")
-        
-        return result
+        return markdown_message
     
     def clean_and_fix_monospace_urls(self, text):
         """专门处理等体字：安全清理反斜杠 + 修复URL - 只在等体字内操作"""
@@ -1304,7 +1332,50 @@ class EmailToTelegramBot:
         
         print(f"🚫 不是URL: '{text}'")
         return False
-    
+    def protect_theme_underscores_complete(self, text):
+        """
+        完整保护主题下划线 - 清理整个主题两端的转义斜杠
+        """
+        if not text:
+            return text
+        
+        result = text
+        
+        # 1. 首先处理整个主题的斜体格式
+        # 匹配模式：主题前后的 \_...\_
+        # 例如：\_\[GitHub\] penggan 00/CF-Workers-Buttons中的"上游同步"工作流已被禁用\_
+        theme_pattern = r'\\_([^_]+)\\_'
+        
+        def restore_theme_handler(match):
+            content = match.group(1)
+            print(f"🛡️ 修复主题斜体: '{content}'")
+            return f"_{content}_"
+        
+        # 应用主题修复
+        result = re.sub(theme_pattern, restore_theme_handler, result)
+        
+        # 2. 处理特定格式的主题：主题：\_内容\_
+        specific_pattern = r'主题[：:]\s*\\_([^_]+)\\_'
+        
+        def restore_specific_handler(match):
+            content = match.group(1)
+            return f"主题：_{content}_"
+        
+        result = re.sub(specific_pattern, restore_specific_handler, result)
+        
+        # 3. 处理被错误转义的其他斜体内容
+        # 匹配单独的 \_ 转义（不在等体字内）
+        isolated_underscore_pattern = r'(?<!`)\\_(?!`)'
+        result = re.sub(isolated_underscore_pattern, '_', result)
+        
+        # 调试信息
+        theme_fixes = len(re.findall(theme_pattern, text))
+        specific_fixes = len(re.findall(specific_pattern, text))
+        
+        if theme_fixes + specific_fixes > 0:
+            print(f"🛡️ 主题下划线保护: 修复了 {theme_fixes} 个完整主题和 {specific_fixes} 个特定格式")
+        
+        return result    
     def split_message(self, text, max_length=3800):
         """分割长消息以适应Telegram限制（考虑转义后的长度）"""
         if len(text) <= max_length:
@@ -1337,8 +1408,8 @@ class EmailToTelegramBot:
     async def send_to_telegram_async(self, markdown_content, chat_id):
         """使用python-telegram-bot发送Markdown内容"""
         
-        # 转义Markdown内容
-        escaped_content = self.escape_markdown_v2(markdown_content)
+        escaped_content = markdown_content  # 直接使用已经处理好的内容
+        
         escaped_content = re.sub(r'(\n\s*){3,}', '\n\n', escaped_content)
         escaped_content = re.sub(r'^\n+', '', escaped_content)
         escaped_content = re.sub(r'\n+$', '', escaped_content)
@@ -1364,7 +1435,7 @@ class EmailToTelegramBot:
                 parse_mode=ParseMode.MARKDOWN_V2,
                 disable_web_page_preview=True
             )
-      #      logging.info(f"消息成功发送到聊天 {chat_id} (MarkdownV2格式)")
+            logging.info(f"消息成功发送到聊天 {chat_id} (MarkdownV2格式)")
             return True
             
         except Exception as e:
@@ -1372,7 +1443,6 @@ class EmailToTelegramBot:
             
             # Markdown发送失败，降级到纯文本
             return await self._send_as_plaintext_async(markdown_content, chat_id)
-
     async def _send_as_plaintext_async(self, original_content, chat_id):
         """以纯文本格式发送消息"""
         try:
@@ -1392,6 +1462,41 @@ class EmailToTelegramBot:
             logging.error(f"纯文本发送也失败: {e}")
             return False
 
+    def _convert_to_plaintext(self, markdown_content):
+        """将Markdown内容转换为安全的纯文本"""
+        if not markdown_content:
+            return ""
+        
+        text = markdown_content
+        
+        # 分步骤清理Markdown语法
+        # 1. 移除代码块
+        text = re.sub(r'```.*?\n(.*?)\n```', r'\1', text, flags=re.DOTALL)
+        
+        # 2. 移除行内代码
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        
+        # 3. 移除粗体和斜体标记但保留内容
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # 粗体
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # 斜体
+        text = re.sub(r'__(.*?)__', r'\1', text)      # 下划线粗体
+        text = re.sub(r'_(.*?)_', r'\1', text)        # 下划线斜体
+        
+        # 4. 移除链接标记但保留文本
+     #   text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # [文本](链接) -> 文本
+        
+        # 5. 移除可能引起问题的特殊字符（但保留基本标点）
+      #  problematic_chars = r'[\\`*_{}[\]()#+-.!|~>]'
+        problematic_chars = r'[\\#]'  # 只匹配反斜杠和井号
+        text = re.sub(problematic_chars, ' ', text)
+        
+        # 6. 标准化空白（保留段落结构）
+       # text = re.sub(r'[ \t]+', ' ', text)  # 合并多个空格
+        text = re.sub(r'\n[ \t]*\n[ \t]*\n+', '\n\n', text)  # 保留最多两个连续空行
+        text = re.sub(r'^\n+', '', text)  # 移除开头的空行
+        text = re.sub(r'\n+$', '', text)  # 移除结尾的空行
+        
+        return text.strip()
     def _convert_to_plaintext(self, markdown_content):
         """将Markdown内容转换为安全的纯文本"""
         if not markdown_content:
@@ -1468,75 +1573,61 @@ class EmailToTelegramBot:
         return chat_success
 
     async def process_single_email_async(self, mail, email_id):
-        """异步处理单封邮件"""
         try:
             # 获取邮件数据
             status, msg_data = mail.fetch(email_id, '(RFC822)')
-            if status != 'OK':
-                logging.warning(f"获取邮件 {email_id} 内容失败")
-                return False
-            
-            # 解析邮件
             msg = email.message_from_bytes(msg_data[0][1])
             email_data = self.extract_email_content(msg)
             
-          #  print(f"\n📧 处理邮件:")
-         #   print(f"   主题: {email_data['subject']}")
-         #   print(f"   发件人: {email_data['from']}")
-         #   print(f"   日期: {email_data['date']}")
-            
-       #     logging.info(f"处理邮件 - 主题: {email_data['subject']}, 发件人: {email_data['from']}")
-            
-            # 检查是否是中国银行信用卡邮件
+            # === 新增：银行邮件特殊处理 ===
             if self.is_boc_credit_card_email(email_data):
-             #   print(f"\n🏦 检测到中国银行信用卡邮件，开始处理PDF附件")
+                print("🏦 检测到中国银行信用卡邮件，进行特殊处理")
                 pdf_content = self.extract_and_parse_pdf_attachments(msg)
-                
                 if pdf_content:
-                #    print(f"✅ 成功解析PDF附件，最终内容长度: {len(pdf_content)} 字符")
-                    markdown_content = self.create_pdf_message(email_data, pdf_content)
-                else:
-                    print(f"❌ 未找到PDF附件或解析失败，发送普通邮件内容")
-                    markdown_content = self.convert_email_to_markdown(email_data)
-                    markdown_content = "🏦 中国银行信用卡邮件（无PDF附件）\n\n" + markdown_content
-                
-                success = await self.send_to_all_chats_async(markdown_content)
+                    final_message = self.create_pdf_message(email_data, pdf_content)
+                    success = await self.send_to_all_chats_async(final_message)
+                    if success:
+                        self.mark_as_read(mail, email_id)
+                    return success
             
-            # 检查是否是建设银行信用卡邮件
+            # 检测并处理建设银行信用卡邮件
             elif self.is_ccb_credit_card_email(email_data):
-             #   print(f"\n🏦 检测到建设银行信用卡邮件，开始处理HTML内容")
-                original_markdown = self.convert_email_to_markdown(email_data)
-                markdown_content = self.format_ccb_email_content(email_data, original_markdown)
+                print("🏦 检测到建设银行信用卡邮件，进行特殊处理")
                 
-            #    print(f"\n📤 准备发送的完整消息:")
-                print("="*80)
-                print(markdown_content)
-                print("="*80)
+                # 修复：先转换为Markdown，再格式化
+                email_parts = self.convert_email_to_markdown(email_data)
+                final_message = self.escape_markdown_v2(
+                    from_name=email_parts['from_name'],
+                    from_email=email_parts['from_email'],
+                    subject=email_parts['subject'], 
+                    content=email_parts['content']
+                )
                 
-                success = await self.send_to_all_chats_async(markdown_content)
+                success = await self.send_to_all_chats_async(final_message)
+                if success:
+                    self.mark_as_read(mail, email_id)
+                return success
             
-            else:
-                # 正常处理其他邮件
-                print(f"📧 普通邮件，正常处理")
-                markdown_content = self.convert_email_to_markdown(email_data)
-                success = await self.send_to_all_chats_async(markdown_content)
+            # === 原有的一般邮件处理 ===
+            email_parts = self.convert_email_to_markdown(email_data)
+            final_message = self.escape_markdown_v2(
+                from_name=email_parts['from_name'],
+                from_email=email_parts['from_email'],
+                subject=email_parts['subject'], 
+                content=email_parts['content']
+            )
             
+            success = await self.send_to_all_chats_async(final_message)
+            
+            # 新增：发送成功后标记为已读
             if success:
-                # 标记为已读
-                mail.store(email_id, '+FLAGS', '\\Seen')
-                print(f"✅ 邮件 {email_id} 处理完成并标记为已读")
-            else:
-                print(f"❌ 邮件 {email_id} 发送到部分Telegram聊天失败")
+                self.mark_as_read(mail, email_id)
             
             return success
-            
         except Exception as e:
-            print(f"❌ 处理邮件 {email_id} 时发生错误: {e}")
-            import traceback
-            traceback.print_exc()
             logging.error(f"处理邮件 {email_id} 时发生错误: {e}")
             return False
-
+        
     def format_boc_statement(self, pdf_content):
         """格式化中国银行信用卡账单内容 - 修复交易明细显示"""
         try:
