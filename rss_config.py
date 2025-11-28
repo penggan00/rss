@@ -43,6 +43,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
             'https://www.ftchinese.com/rss/news',   # ft中文网
             'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 3590,      # 1小时
@@ -69,7 +70,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 10分钟 
-        "batch_send_interval": 3590,   # 批量推送
+        "batch_send_interval": 21590,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -91,7 +92,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FOURTH_RRSS_FEEDS",
         "interval": 700,       # 10分钟 
-        "batch_send_interval": 3590,   # 批量推送
+        "batch_send_interval": 21590,   # 批量推送
         "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -112,15 +113,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "综合资讯",
         "urls": [
-            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
-         #   'https://www.gcores.com/rss', # 游戏时光
-          #  'https://www.yystv.cn/rss/feed', # 游戏研究社
-          #  'https://www.ruanyifeng.com/blog/atom.xml',  # 阮一峰的网络日志
-         #   'https://www.huxiu.com/rss/0.xml',  # 虎嗅
-         #   'https://sspai.com/feed', # 少数派
          #   'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
-            'https://feeds.feedburner.com/rsscna/intworld', # 中央社国际
-        #    'https://feeds.feedburner.com/rsscna/mainland',      # 中央社国际 兩岸透視
             'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
             'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
@@ -170,7 +163,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "社交媒体",
         "urls": [
-            'https://rsshub.app/weibo/user/3194547262',  # 江西高速
+         #   'https://rsshub.app/weibo/user/3194547262',  # 江西高速
          #   'https://rsshub.app/weibo/user/1699432410',  # 新华社
         #    'https://rsshub.app/weibo/user/2656274875',  # 央视新闻
             'https://rsshub.app/weibo/user/2716786595',  # 聚萍乡
