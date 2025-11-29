@@ -47,7 +47,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 3590,      # 1小时
-        "batch_send_interval": 35990,   # 批量推送←加上即
+        "batch_send_interval": 21590,   # 批量推送←加上即
         "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -143,7 +143,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "ZONGHE_RSS_FEEDS",
         "interval": 3590,       # 60分钟
-        "batch_send_interval": 17990,   # 批量推送
+        "batch_send_interval": 21590,   # 批量推送
         "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
@@ -315,7 +315,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
         "interval": 3590,     # 1小时
-        "batch_send_interval": 35990,   # 批量推送
+        "batch_send_interval": 71990,   # 批量推送
         "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
@@ -345,7 +345,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
         "interval": 7000,    # 2小时
-        "batch_send_interval": 36000,   # 批量推送
+        "batch_send_interval": 71990,   # 批量推送
         "history_days": 300,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
         "processor": {
