@@ -720,16 +720,16 @@ async def generate_group_message(feed_data, entries, processor):
         
         messages = []
         
-        # 不限制总条目数，全部处理
         template_needs_summary = "{summary}" in processor["template"]
         
-        for entry in entries:  # 处理所有条目，不限制
+        for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
             if processor.get("translate", False):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
             
+            # 在转义之前添加零宽字符处理
             translated_subject = translated_subject.replace('.', '.\u200c')
             safe_subject = escape(translated_subject)
             
@@ -745,6 +745,7 @@ async def generate_group_message(feed_data, entries, processor):
             if template_needs_summary:
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
+                # 摘要也添加零宽字符处理
                 cleaned_summary = cleaned_summary.replace('.', '.\u200c')
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
@@ -752,7 +753,6 @@ async def generate_group_message(feed_data, entries, processor):
             message = processor["template"].format(**format_kwargs)
             messages.append(message)
         
-        # 在格式化阶段进行分段
         full_message = await _format_batch_message(header, messages, processor)
         return full_message
     except Exception as e:
@@ -760,32 +760,55 @@ async def generate_group_message(feed_data, entries, processor):
         return ""
 
 async def _format_batch_message(header, messages, processor):
-    """智能分段，每段最多40个条目"""
+    """改进的批量消息格式化，确保Markdown格式完整"""
     MAX_MESSAGE_LENGTH = 4096
-    MAX_ENTRIES_PER_SEGMENT = 45  # 每段最多45个条目
     
-    if len(messages) <= MAX_ENTRIES_PER_SEGMENT:
-        # 条目不多，正常发送
-        full_content = header + "\n\n".join(messages)
-        if processor.get("show_count", False):
-            full_content += f"\n\n✅ 新增 {len(messages)} 条内容"
+    if not messages:
+        return ""
+    
+    # 尝试构建完整消息
+    full_content = header + "\n\n".join(messages)
+    if processor.get("show_count", False):
+        full_content += f"\n\n✅ 新增 {len(messages)} 条内容"
+    
+    # 如果消息长度在限制内，直接返回
+    if len(full_content) <= MAX_MESSAGE_LENGTH:
         return full_content
     
-    # 条目过多，分段发送
+    # 消息过长，需要分段
     segments = []
-    total_segments = (len(messages) + MAX_ENTRIES_PER_SEGMENT - 1) // MAX_ENTRIES_PER_SEGMENT
+    current_segment = header
+    current_length = len(header)
     
-    for i in range(0, len(messages), MAX_ENTRIES_PER_SEGMENT):
-        segment_messages = messages[i:i + MAX_ENTRIES_PER_SEGMENT]
-        segment_header = header if i == 0 else f"📋 {header.strip()} (续)"
-        segment_content = segment_header + "\n\n".join(segment_messages)
+    for i, message in enumerate(messages):
+        # 新段的第一条消息不加分隔符，后续消息加分隔符
+        if current_segment == header:
+            message_with_separator = message
+        else:
+            message_with_separator = "\n\n" + message
         
+        # 检查添加这条消息是否会超过限制（预留100字符给计数信息）
+        if current_length + len(message_with_separator) > MAX_MESSAGE_LENGTH - 300:
+            # 完成当前段
+            if processor.get("show_count", False) and current_segment != header:
+                segment_msg_count = current_segment.count("\n\n") + 1
+                current_segment += f"\n\n✅ 本段包含 {segment_msg_count} 条内容"
+            segments.append(current_segment)
+            
+            # 开始新段，重新添加header
+            current_segment = header
+            current_length = len(header)
+            message_with_separator = message  # 新段的第一条消息不加分隔符
+        
+        current_segment += message_with_separator
+        current_length += len(message_with_separator)
+    
+    # 添加最后一段
+    if current_segment.strip() and current_segment != header:
         if processor.get("show_count", False):
-            segment_count = len(segment_messages)
-            current_segment = i // MAX_ENTRIES_PER_SEGMENT + 1
-            segment_content += f"\n\n📋 第 {current_segment}/{total_segments} 段 | 本段 {segment_count} 条 | 共 {len(messages)} 条"
-        
-        segments.append(segment_content)
+            segment_msg_count = current_segment.count("\n\n") + 1
+            current_segment += f"\n\n✅ 本段包含 {segment_msg_count} 条内容"
+        segments.append(current_segment)
     
     return segments
 
