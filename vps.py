@@ -108,7 +108,7 @@ class CloudConeMonitor:
         }
         
         # 处理 VPS 数据，只关注 Flash Sale
-        if 'vps_data' in data:
+        if 'vps_data' in data and isinstance(data['vps_data'], dict):
             for offer_id, offer in data['vps_data'].items():
                 # 检查是否是 Flash Sale
                 name = offer.get('name', '')
@@ -130,8 +130,8 @@ class CloudConeMonitor:
                         'order_url': offer.get('order_url', '')
                     }
         
-        # 处理 SC2 数据，只关注 Flash Sale
-        if 'sc2_data' in data:
+        # 处理 SC2 数据，只关注 Flash Sale - 如果是 false 就跳过
+        if 'sc2_data' in data and isinstance(data['sc2_data'], dict):
             for offer_id, offer in data['sc2_data'].items():
                 # 检查 SC2 是否有 Flash Sale
                 name = offer.get('name', '')
@@ -156,6 +156,8 @@ class CloudConeMonitor:
         hash_value = hashlib.md5(data_str.encode()).hexdigest()
         logging.info(f"生成的 Flash Sale 哈希: {hash_value}")
         return hash_value
+
+
     
     def fetch_offers(self):
         """获取优惠数据"""
@@ -181,86 +183,88 @@ class CloudConeMonitor:
         offers = {}
         
         # 解析 VPS 优惠，只保留 Flash Sale
-        vps_data = data.get('vps_data', {})
-        for offer_id, offer in vps_data.items():
-            # 检查是否是 Flash Sale - 更宽松的条件
-            name = offer.get('name', '')
-            is_flash_sale = (
-                'STL-BF' in name or 
-                'HFS' in name or 
-                'Flash' in str(offer) or
-                any(keyword in name for keyword in ['STL', 'HFS', 'FLASH', 'LA-BF'])
-            )
-            
-            # 调试日志
-            if is_flash_sale:
-                logging.info(f"检测到 VPS Flash Sale: {name}")
-            
-            # 只处理 Flash Sale 套餐
-            if is_flash_sale:
-                # 处理 CPU 数据，确保是整数
-                cpu = offer.get('cpu', 0)
-                if cpu is None:
-                    cpu = 0
-                elif isinstance(cpu, str):
-                    try:
-                        cpu = int(cpu)
-                    except (ValueError, TypeError):
-                        cpu = 0
+        if 'vps_data' in data and isinstance(data['vps_data'], dict):
+            vps_data = data['vps_data']
+            for offer_id, offer in vps_data.items():
+                # 检查是否是 Flash Sale - 更宽松的条件
+                name = offer.get('name', '')
+                is_flash_sale = (
+                    'STL-BF' in name or 
+                    'HFS' in name or 
+                    'Flash' in str(offer) or
+                    any(keyword in name for keyword in ['STL', 'HFS', 'FLASH', 'LA-BF'])
+                )
                 
-                offers[offer_id] = {
-                    'type': 'VPS',
-                    'name': name,
-                    'cpu': cpu,
-                    'ram': offer.get('ram', ''),
-                    'disk': offer.get('disk', 0),
-                    'bandwidth': offer.get('bandwidth', ''),
-                    'price': offer.get('usd_price', 0),
-                    'order_url': f"https://app.cloudcone.com{offer.get('order_url', '')}",
-                    'is_flash_sale': True
-                }
+                # 调试日志
+                if is_flash_sale:
+                    logging.info(f"检测到 VPS Flash Sale: {name}")
+                
+                # 只处理 Flash Sale 套餐
+                if is_flash_sale:
+                    # 处理 CPU 数据，确保是整数
+                    cpu = offer.get('cpu', 0)
+                    if cpu is None:
+                        cpu = 0
+                    elif isinstance(cpu, str):
+                        try:
+                            cpu = int(cpu)
+                        except (ValueError, TypeError):
+                            cpu = 0
+                    
+                    offers[offer_id] = {
+                        'type': 'VPS',
+                        'name': name,
+                        'cpu': cpu,
+                        'ram': offer.get('ram', ''),
+                        'disk': offer.get('disk', 0),
+                        'bandwidth': offer.get('bandwidth', ''),
+                        'price': offer.get('usd_price', 0),
+                        'order_url': f"https://app.cloudcone.com{offer.get('order_url', '')}",
+                        'is_flash_sale': True
+                    }
         
-        # 解析 SC2 优惠，只保留 Flash Sale
-        sc2_data = data.get('sc2_data', {})
-        for offer_id, offer in sc2_data.items():
-            # 检查 SC2 是否有 Flash Sale
-            name = offer.get('name', '')
-            is_flash_sale = (
-                'Flash' in str(offer) or 
-                'STL-BF' in name or
-                any(keyword in name for keyword in ['STL', 'FLASH'])
-            )
-            
-            if is_flash_sale:
-                logging.info(f"检测到 SC2 Flash Sale: {name}")
+        # 解析 SC2 优惠，只保留 Flash Sale - 如果是 false 就跳过
+        if 'sc2_data' in data and isinstance(data['sc2_data'], dict):
+            sc2_data = data['sc2_data']
+            for offer_id, offer in sc2_data.items():
+                # 检查 SC2 是否有 Flash Sale
+                name = offer.get('name', '')
+                is_flash_sale = (
+                    'Flash' in str(offer) or 
+                    'STL-BF' in name or
+                    any(keyword in name for keyword in ['STL', 'FLASH'])
+                )
                 
-                # 处理 SC2 的 CPU 数据
-                cpu = offer.get('cpu', 0)
-                if cpu is None:
-                    cpu = 0
-                elif isinstance(cpu, str):
-                    try:
-                        cpu = int(cpu)
-                    except (ValueError, TypeError):
+                if is_flash_sale:
+                    logging.info(f"检测到 SC2 Flash Sale: {name}")
+                    
+                    # 处理 SC2 的 CPU 数据
+                    cpu = offer.get('cpu', 0)
+                    if cpu is None:
                         cpu = 0
-                
-                # 如果 CPU 为 0，尝试从名称中提取
-                if cpu == 0 and 'SC2' in name:
-                    cpu_match = re.search(r'SC2-(\d+)', name)
-                    if cpu_match:
-                        cpu = int(cpu_match.group(1))
-                
-                offers[offer_id] = {
-                    'type': 'SC2',
-                    'name': name,
-                    'cpu': cpu,
-                    'ram': offer.get('ram', ''),
-                    'disk': offer.get('disk', 0),
-                    'bandwidth': offer.get('bandwidth', ''),
-                    'price': offer.get('usd_price', 0),
-                    'order_url': f"https://app.cloudcone.com{offer.get('order_url', '')}",
-                    'is_flash_sale': True
-                }
+                    elif isinstance(cpu, str):
+                        try:
+                            cpu = int(cpu)
+                        except (ValueError, TypeError):
+                            cpu = 0
+                    
+                    # 如果 CPU 为 0，尝试从名称中提取
+                    if cpu == 0 and 'SC2' in name:
+                        cpu_match = re.search(r'SC2-(\d+)', name)
+                        if cpu_match:
+                            cpu = int(cpu_match.group(1))
+                    
+                    offers[offer_id] = {
+                        'type': 'SC2',
+                        'name': name,
+                        'cpu': cpu,
+                        'ram': offer.get('ram', ''),
+                        'disk': offer.get('disk', 0),
+                        'bandwidth': offer.get('bandwidth', ''),
+                        'price': offer.get('usd_price', 0),
+                        'order_url': f"https://app.cloudcone.com{offer.get('order_url', '')}",
+                        'is_flash_sale': True
+                    }
         
         logging.info(f"总共找到 {len(offers)} 个 Flash Sale 套餐")
         return offers

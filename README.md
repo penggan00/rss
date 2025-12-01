@@ -27,7 +27,7 @@ crontab -e
 5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
 27 23 * * * /bin/bash ~/rss/rss.sh
 22 2 * * * /bin/bash ~/rss/ss.sh
-
+* * * * * /bin/bash ~/rss/vps.sh
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
 pip install aiosqlite
@@ -37,7 +37,7 @@ pip install html2text
 pip install frontend
 ```
 ```
-# 创建虚拟环境    pip install python-telegram-bot==22.5
+# 创建虚拟环境
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
@@ -45,7 +45,7 @@ python3 rss.py
 ```
 python3 usd.py
 source rss_venv/bin/activate
-python3 mail.py
+#python3 mail.py
 python3 gpt.py
 
 
