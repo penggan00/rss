@@ -1021,7 +1021,7 @@ async def main():
         await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
         await db_test.ensure_initialized()
         await db_test.close()
-        logger.info("✅ 数据库连接检查通过")
+    #    logger.info("✅ 数据库连接检查通过")
     except asyncio.TimeoutError:
         logger.error("❌ 数据库连接超时（60秒），程序退出")
         return

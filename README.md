@@ -19,10 +19,10 @@ sudo docker-compose up -d
 #一键更新
 cd
 ~/rss
-bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
 ```
 crontab -e
-24 2 * * * bash -c "$(curl -fsSL https://penggan00.github.io/my-blog/sh/github.sh)"
+24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
 */10 * * * * /bin/bash ~/rss/rss.sh
 5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
 27 23 * * * /bin/bash ~/rss/rss.sh
@@ -45,7 +45,7 @@ python3 rss.py
 ```
 python3 usd.py
 source rss_venv/bin/activate
-#python3 mail.py
+python3 mail.py
 python3 gpt.py
 
 
