@@ -23,7 +23,7 @@ sudo docker-compose up -d
 cd
 ~/rss
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/rss/github.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/github.sh)"
 ```
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
