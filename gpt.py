@@ -34,9 +34,7 @@ POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
 AVAILABLE_MODELS = {
-    "gemini-2.0-flash": "(长下文本)",
     "gemini-2.5-flash": "(平衡性能)",
-    "gemini-2.5-pro":   "(最强能力)",
     "deepseek-chat":    "(通用对话)",
     "deepseek-reasoner":"(推理专用)",
     "deepseek-coder":   "(编程专用)"
@@ -488,9 +486,7 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
 {current_model}
 
 **gemini:**
-`/model gemini-2.0-flash`  (长上下文)
 `/model gemini-2.5-flash`  (平衡性能)
-`/model gemini-2.5-pro`      (最强能力)
 
 **deekseek:**
 `/model deepseek-chat`          (通用对话)

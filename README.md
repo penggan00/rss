@@ -1,7 +1,10 @@
 ```
 git clone https://github.com/penggan00/rss.git
+git clone https://github.com/penggan00/penggan00.github.io.git
+
 # 安装
 /bin/bash ~/rss/setup.sh
+/bin/bash ~/rss/github.sh
 chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
 chmod +x ~/rss/ss.sh
 ```
