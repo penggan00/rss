@@ -137,7 +137,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "tg",
         "urls": [
             'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
-         #   'https://rsshub.app/telegram/channel/Aliyun_4K_Movies', 
+         #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
 
         ],
@@ -212,7 +212,7 @@ RSS_GROUPS = [ # RSS 组配置列表
      #           "scope": "all",       # 过滤标题+链接+摘要
      #           "scope": "title_summary",  # 过滤标题和摘要
      #           "scope": "link_summary",   # 过滤链接和摘要
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "折"]  # 本组关键词列表
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "netcup", "折"]  # 本组关键词列表
             },
             "preview": False,              # 禁止预览
             "show_count": False               # 计数
