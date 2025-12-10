@@ -192,30 +192,30 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "技术论坛",
         "urls": [
-            'https://rss.nodeseek.com',  # Nodeseek  
+            'https://rss.nodeseek.com',
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
-        "interval": 240,       # 4分钟 
-        "batch_send_interval": 3590,   # 批量推送
-        "history_days": 3,     # 新增，保留30天
-        "bot_token": os.getenv("RSS_SAN"), # Telegram Bot Token
+        "interval": 240,
+        "batch_send_interval": 3590,
+        "history_days": 3,
+        "bot_token": os.getenv("RSS_SAN"),
         "processor": {
-            "translate": False,                  #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "translate": False,
+            "header_template": "📢 *{source}*\n",
             "template": "*{subject}*\n[more]({url})", 
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "scope": "title",      # 只过滤标题
-     #           "scope": "link",      # 只过滤链接
-     #           "scope": "both",      # 同时过滤标题和链接
-     #           "scope": "all",       # 过滤标题+链接+摘要
-     #           "scope": "title_summary",  # 过滤标题和摘要
-     #           "scope": "link_summary",   # 过滤链接和摘要
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github",  "节",  "闪",  "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "netcup", "折"]  # 本组关键词列表
+            "filter": {  # 原有的过滤功能
+                "enable": False,     # True: 启用过滤 / False: 关闭过滤
+                "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "scope": "title",   # 过滤范围
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "netcup", "折"]
             },
-            "preview": False,              # 禁止预览
-            "show_count": False               # 计数
+            "highlight": {  # 新增的高亮（加粗）功能
+                "enable": True,     # True: 启用整体加粗 / False: 关闭加粗
+                "scope": "all",   # 检查范围主题或链接或全部：title/both/all
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "Oracle", "google", "netcup", "折"]
+            },
+            "preview": False,       # 禁止预览
+            "show_count": False     #计数
         }
     },
     # ================== vps 翻译 ==================

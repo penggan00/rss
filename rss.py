@@ -648,7 +648,6 @@ async def should_send_entry(entry, processor):
     # 记录过滤详情（调试用）
     logger.debug(f"[关键词过滤] 范围: {scope} | 标题: {title[:50]} | 链接: {link[:50]} | 关键词: {keywords} | 模式: {mode} | 命中: {has_keyword}")
     
-    # 根据模式决定是否发送
     if not keywords:  # 如果没有关键词，根据模式决定
         return mode != "allow"
     elif mode == "allow":
@@ -665,13 +664,10 @@ async def should_send_entry(entry, processor):
 async def auto_translate_text(text):
     cleaned_text = remove_html_tags(text).strip()
     
-    # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
-      #  logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
         return escape(cleaned_text)
     
     try:
-        # 首先尝试主密钥
         try:
             return await translate_with_credentials(
                 TENCENTCLOUD_SECRET_ID, 
@@ -680,16 +676,12 @@ async def auto_translate_text(text):
             )
         except TencentCloudSDKException as e:
             if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-             #   logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
                 return escape(cleaned_text)
             else:
-          #      logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
                 raise
                 
     except Exception as first_error:
-        # 只有在非语言识别错误的情况下才尝试备用密钥
         if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-        #    logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
             try:
                 return await translate_with_credentials(
                     TENCENT_SECRET_ID,
@@ -698,16 +690,12 @@ async def auto_translate_text(text):
                 )
             except TencentCloudSDKException as e:
                 if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                 #   logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
                     return escape(cleaned_text)
                 else:
-                #    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
                     raise
             except Exception as e:
-         #       logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
                 raise
         else:
-      #      logger.error("主翻译密钥失败，且未配置备用密钥")
             return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
@@ -724,14 +712,50 @@ async def generate_group_message(feed_data, entries, processor):
         
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
+            
+            # ========== 判断是否需要整体加粗 ==========
+            should_bold_whole_title = False
+            
+            # 检查高亮功能是否启用
+            highlight_config = processor.get("highlight", {})
+            if highlight_config.get("enable", False):
+                keywords = highlight_config.get("keywords", [])
+                scope = highlight_config.get("scope", "title")
+                
+                # 检查内容是否包含任何关键词
+                if keywords and scope == "title":
+                    content_to_check = raw_subject.lower()
+                    for keyword in keywords:
+                        if keyword.lower() in content_to_check:
+                            should_bold_whole_title = True
+                            break
+                
+                # 如果是both或all范围，也可以检查其他字段
+                if not should_bold_whole_title and scope in ["both", "all"]:
+                    # 检查摘要是否包含关键词
+                    summary = getattr(entry, "summary", "") or ""
+                    summary_text = remove_html_tags(summary).lower()
+                    for keyword in keywords:
+                        if keyword.lower() in summary_text:
+                            should_bold_whole_title = True
+                            break
+            
+            # ========== 原有的翻译处理 ==========
             if processor.get("translate", False):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
             
-            # 在转义之前添加零宽字符处理
+            # ========== 特殊字符处理 ==========
             translated_subject = translated_subject.replace('.', '.\u200c')
-            safe_subject = escape(translated_subject)
+            
+            # ========== 关键修改：整体加粗处理 ==========
+            if should_bold_whole_title:
+                # 对整个标题加粗
+                safe_subject = escape(f"**{translated_subject}**")
+            else:
+                # 正常显示（不加粗）
+                safe_subject = escape(translated_subject)
             
             raw_url = entry.link
             safe_url = escape(raw_url)
@@ -745,7 +769,6 @@ async def generate_group_message(feed_data, entries, processor):
             if template_needs_summary:
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
-                # 摘要也添加零宽字符处理
                 cleaned_summary = cleaned_summary.replace('.', '.\u200c')
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
@@ -760,50 +783,35 @@ async def generate_group_message(feed_data, entries, processor):
         return ""
 
 async def _format_batch_message(header, messages, processor):
-    """改进的批量消息格式化，确保Markdown格式完整"""
     MAX_MESSAGE_LENGTH = 4096
-    
     if not messages:
         return ""
-    
-    # 尝试构建完整消息
     full_content = header + "\n\n".join(messages)
     if processor.get("show_count", False):
         full_content += f"\n\n✅ 新增 {len(messages)} 条内容"
     
-    # 如果消息长度在限制内，直接返回
     if len(full_content) <= MAX_MESSAGE_LENGTH:
         return full_content
     
-    # 消息过长，需要分段
     segments = []
     current_segment = header
     current_length = len(header)
     
     for i, message in enumerate(messages):
-        # 新段的第一条消息不加分隔符，后续消息加分隔符
         if current_segment == header:
             message_with_separator = message
         else:
             message_with_separator = "\n\n" + message
-        
-        # 检查添加这条消息是否会超过限制（预留100字符给计数信息）
         if current_length + len(message_with_separator) > MAX_MESSAGE_LENGTH - 300:
-            # 完成当前段
             if processor.get("show_count", False) and current_segment != header:
                 segment_msg_count = current_segment.count("\n\n") + 1
                 current_segment += f"\n\n✅ 本段包含 {segment_msg_count} 条内容"
             segments.append(current_segment)
-            
-            # 开始新段，重新添加header
             current_segment = header
             current_length = len(header)
-            message_with_separator = message  # 新段的第一条消息不加分隔符
-        
+            message_with_separator = message 
         current_segment += message_with_separator
         current_length += len(message_with_separator)
-    
-    # 添加最后一段
     if current_segment.strip() and current_segment != header:
         if processor.get("show_count", False):
             segment_msg_count = current_segment.count("\n\n") + 1
@@ -813,26 +821,24 @@ async def _format_batch_message(header, messages, processor):
     return segments
 
 async def send_batch_messages(bot, chat_id, message_content, disable_web_page_preview=False):
-    """发送批量消息，处理分段"""
-    if isinstance(message_content, list):  # 分段消息
+    if isinstance(message_content, list): 
         for i, segment in enumerate(message_content):
-            if segment.strip():  # 确保段不为空
+            if segment.strip(): 
                 try:
                     await send_single_message(
                         bot, chat_id, segment, 
                         disable_web_page_preview=disable_web_page_preview
                     )
-                    if i < len(message_content) - 1:  # 不是最后一条
-                        await asyncio.sleep(1)  # 避免发送过快
+                    if i < len(message_content) - 1: 
+                        await asyncio.sleep(1) 
                 except Exception as e:
                     logger.error(f"发送分段消息失败: {e}")
-    else:  # 单条消息
+    else:
         await send_single_message(
             bot, chat_id, message_content,
             disable_web_page_preview=disable_web_page_preview
         )
 
-# 修改批量发送函数中的调用
 async def process_batch_send(group, db: RSSDatabase):
     group_key = group["group_key"]
     bot_token = group["bot_token"]
@@ -852,7 +858,6 @@ async def process_batch_send(group, db: RSSDatabase):
         await db.save_last_batch_sent_time(group_key, now)
         return
 
-    # 按 feed_url 分组消息
     feed_url_to_msgs = defaultdict(list)
     for row in pending:
         feed_url_to_msgs[row["feed_url"]].append(row)
@@ -862,8 +867,6 @@ async def process_batch_send(group, db: RSSDatabase):
     
     for feed_url, msgs in feed_url_to_msgs.items():
         feed_title = (msgs[0].get("feed_title") or group.get("name") or feed_url)
-        
-        # 创建模拟的feed和entry对象
         class DummyFeed:
             feed = {'title': feed_title}
             
@@ -875,26 +878,21 @@ async def process_batch_send(group, db: RSSDatabase):
         entries = [Entry(row) for row in msgs]
         
         try:
-            # 生成消息内容
             feed_message = await generate_group_message(
                 DummyFeed, entries, {**processor, "translate": False}
             )
             
             if feed_message:
-                # 发送消息（支持分段）
                 await send_batch_messages(
                     bot,
                     TELEGRAM_CHAT_ID[0],
                     feed_message,
                     disable_web_page_preview=not processor.get("preview", True)
                 )
-                # 记录已发送的消息ID
                 sent_entry_ids.extend([row["entry_id"] for row in msgs])
                 
         except Exception as e:
             logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
-    
-    # 标记已发送的消息
     if sent_entry_ids:
         await db.mark_pending_as_sent(group_key, sent_entry_ids)
     
@@ -934,26 +932,25 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                 processed_ids = global_status.get(canonical_url, set())
                 new_entries = []
                 seen_in_batch = set()
-                new_hashes_in_batch = set()  # 当前批次的内容哈希去重
+                new_hashes_in_batch = set() 
 
                 for entry in feed_data.entries:
                     entry_id = get_entry_identifier(entry)
                     content_hash = get_entry_content_hash(entry)
                     
-                    # 统一使用内容哈希去重（主要修复）
                     if await db.has_content_hash(group_key, content_hash):
                         continue
                         
                     if entry_id in processed_ids or entry_id in seen_in_batch:
                         continue
                         
-                    # 在当前批次中也用内容哈希去重
+
                     if content_hash in new_hashes_in_batch:
                         continue  
-                        
-                    # ✅ 过滤检查
+
+                    # ========== 原有的过滤逻辑保持不变 ==========
                     if not await should_send_entry(entry, processor):
-                        continue  # 跳过不符合过滤条件的条目
+                        continue 
 
                     seen_in_batch.add(entry_id)
                     new_hashes_in_batch.add(content_hash)
@@ -961,13 +958,14 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     
                 if new_entries:
                     if batch_send_interval:
-                        # 批量发送模式：存入待发送队列
                         for entry, content_hash, entry_id in new_entries:
                             raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
+                            
+                            # 注意：高亮加粗在generate_group_message中处理
+                            # 这里只处理翻译
+                            translated_subject = raw_subject
                             if processor["translate"] and is_need_translate(raw_subject):
                                 translated_subject = await auto_translate_text(raw_subject)
-                            else:
-                                translated_subject = raw_subject
                                 
                             await db.add_pending_message(
                                 group_key, 
@@ -975,7 +973,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                 entry_id, 
                                 content_hash,
                                 getattr(entry, "title", ""), 
-                                translated_subject, 
+                                translated_subject,  # 这里不加粗
                                 getattr(entry, "link", ""), 
                                 getattr(entry, "summary", ""),
                                 get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
@@ -986,7 +984,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                             
                         global_status[canonical_url] = processed_ids
                     else:
-                        # 立即发送模式
+                        # 高亮加粗逻辑在generate_group_message中处理
                         feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
                         if feed_message:
                             try:
@@ -1014,14 +1012,11 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
 
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
-    
-    # 快速数据库连接检查（60秒超时）
     try:
         db_test = RSSDatabase()
         await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
         await db_test.ensure_initialized()
         await db_test.close()
-    #    logger.info("✅ 数据库连接检查通过")
     except asyncio.TimeoutError:
         logger.error("❌ 数据库连接超时（60秒），程序退出")
         return
@@ -1037,7 +1032,7 @@ async def main():
         try:
             await run_main_logic()
             logger.info(f"✅ RSS Bot 执行完成，耗时: {time.time() - start_time:.2f}秒")
-            break  # 成功执行则退出循环
+            break
         except Exception as e:
             logger.error(f"主程序运行失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
@@ -1052,7 +1047,6 @@ async def run_main_logic():
     db = RSSDatabase()
     
     try:
-        # 获取文件锁
         lock_file = open(LOCK_FILE, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         logger.info("🔒 成功获取文件锁")
@@ -1064,13 +1058,11 @@ async def run_main_logic():
         return
         
     try:
-        # 数据库连接（由于在main()中已经检查过，这里直接连接）
         logger.info("🔗 正在连接数据库...")
-        await db.open()  # 直接连接，不再重试
+        await db.open() 
         await db.ensure_initialized()
         logger.info("✅ 数据库连接成功")
         
-        # 清理历史记录
         logger.info("🧹 正在清理历史记录...")
         for group in RSS_GROUPS:
             days = group.get("history_days", 30)
@@ -1079,7 +1071,6 @@ async def run_main_logic():
             except Exception as e:
                 logger.error(f"清理历史记录异常: 组={group['group_key']}, 错误={e}")
                 
-        # 主处理逻辑
         logger.info("🚀 开始处理 RSS 订阅...")
         async with aiohttp.ClientSession() as session:
             status = await db.load_status()
@@ -1097,7 +1088,6 @@ async def run_main_logic():
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             
-            # 批量发送任务
             batch_tasks = [
                 process_batch_send(group, db) 
                 for group in RSS_GROUPS 
@@ -1110,13 +1100,11 @@ async def run_main_logic():
         logger.warning("⏹️ 任务被取消")
     except Exception as e:
         logger.error(f"主逻辑执行异常: {str(e)}")
-        raise  # 重新抛出以便外层捕获
+        raise 
     finally:
-        # 确保资源清理
         await cleanup_resources(db, lock_file)
 
 async def cleanup_resources(db, lock_file):
-    """清理资源"""
     try:
         if db:
             await db.close()
