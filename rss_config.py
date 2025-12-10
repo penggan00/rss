@@ -211,7 +211,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             },
             "highlight": {  # 新增的高亮（加粗）功能
                 "enable": True,     # True: 启用整体加粗 / False: 关闭加粗
-                "scope": "all",   # 检查范围：title/all (只检查标题和摘要)
+                "scope": "title",   # 检查范围：title/all (只检查标题和摘要)
                 "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"]
             },
             "preview": False,       # 禁止预览
