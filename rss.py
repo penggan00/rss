@@ -720,25 +720,29 @@ async def generate_group_message(feed_data, entries, processor):
             highlight_config = processor.get("highlight", {})
             if highlight_config.get("enable", False):
                 keywords = highlight_config.get("keywords", [])
-                scope = highlight_config.get("scope", "title")
+                scope = highlight_config.get("scope", "title")  # 获取检查范围
                 
-                # 检查内容是否包含任何关键词
-                if keywords and scope == "title":
-                    content_to_check = raw_subject.lower()
-                    for keyword in keywords:
-                        if keyword.lower() in content_to_check:
+                if keywords:
+                    # 将关键词转为小写用于比较
+                    keywords_lower = [k.lower() for k in keywords]
+                    
+                    # 检查标题（主题）
+                    title_lower = raw_subject.lower()
+                    for keyword in keywords_lower:
+                        if keyword in title_lower:
                             should_bold_whole_title = True
                             break
-                
-                # 如果是both或all范围，也可以检查其他字段
-                if not should_bold_whole_title and scope in ["both", "all"]:
-                    # 检查摘要是否包含关键词
-                    summary = getattr(entry, "summary", "") or ""
-                    summary_text = remove_html_tags(summary).lower()
-                    for keyword in keywords:
-                        if keyword.lower() in summary_text:
-                            should_bold_whole_title = True
-                            break
+                    
+                    # 如果标题没有关键词，且 scope 是 "all"，检查摘要（内容）
+                    if not should_bold_whole_title and scope == "all":
+                        summary = getattr(entry, "summary", "") or ""
+                        if summary:
+                            summary_text = remove_html_tags(summary)
+                            summary_lower = summary_text.lower()
+                            for keyword in keywords_lower:
+                                if keyword in summary_lower:
+                                    should_bold_whole_title = True
+                                    break
             
             # ========== 原有的翻译处理 ==========
             if processor.get("translate", False):
