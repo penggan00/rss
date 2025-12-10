@@ -720,7 +720,7 @@ async def generate_group_message(feed_data, entries, processor):
             highlight_config = processor.get("highlight", {})
             if highlight_config.get("enable", False):
                 keywords = highlight_config.get("keywords", [])
-                scope = highlight_config.get("scope", "title")  # 读取配置中的scope
+                scope = highlight_config.get("scope", "title")
                 
                 if keywords:
                     # 获取完整的内容三元组（与过滤逻辑相同）
@@ -743,14 +743,12 @@ async def generate_group_message(feed_data, entries, processor):
                         content_parts = [title, summary]
                     elif scope == "link_summary":
                         content_parts = [link, summary]
-                    else:  # 默认只检查标题
+                    else:
                         content_parts = [title]
                     
-                    # 合并内容并检查
                     content = " ".join(content_parts).lower()
                     keywords_lower = [kw.lower() for kw in keywords if isinstance(kw, str)]
                     
-                    # 检查是否包含任何关键词
                     for keyword in keywords_lower:
                         if keyword in content:
                             should_bold_whole_title = True
@@ -766,20 +764,21 @@ async def generate_group_message(feed_data, entries, processor):
             # ========== 特殊字符处理 ==========
             translated_subject = translated_subject.replace('.', '.\u200c')
             
-            # ========== 关键修改：整体加粗处理 ==========
+            # ========== 关键修改：使用统一的转义策略 ==========
             if should_bold_whole_title:
-                # 对整个标题加粗
+                # 加粗文本：先转义内容，再加粗符号
+                escaped_subject = escape(translated_subject)
+                subject_to_format = f"**{escaped_subject}**"
                 logger.info(f"[加粗处理] 标题加粗: {translated_subject}")
-                safe_subject = escape(f"**{translated_subject}**")
             else:
-                # 正常显示（不加粗）
-                safe_subject = escape(translated_subject)
+                # 不加粗：直接转义
+                subject_to_format = escape(translated_subject)
             
             raw_url = entry.link
             safe_url = escape(raw_url)
             
             format_kwargs = {
-                "subject": safe_subject,
+                "subject": subject_to_format,  # 这里已经是转义后的
                 "source": safe_source,
                 "url": safe_url
             }
@@ -791,6 +790,7 @@ async def generate_group_message(feed_data, entries, processor):
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
+            # 生成消息 - 这里不需要再转义，因为subject已经转义了
             message = processor["template"].format(**format_kwargs)
             messages.append(message)
         
