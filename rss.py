@@ -720,29 +720,37 @@ async def generate_group_message(feed_data, entries, processor):
             highlight_config = processor.get("highlight", {})
             if highlight_config.get("enable", False):
                 keywords = highlight_config.get("keywords", [])
-                scope = highlight_config.get("scope", "title")  # 获取检查范围
+                scope = highlight_config.get("scope", "title")  # 这里会读取配置中的"all"
                 
                 if keywords:
-                    # 将关键词转为小写用于比较
-                    keywords_lower = [k.lower() for k in keywords]
+                    # 预处理：将所有关键词转为小写用于比较
+                    keywords_lower = []
+                    for keyword in keywords:
+                        if isinstance(keyword, str) and keyword.strip():
+                            keywords_lower.append(keyword.strip().lower())
                     
-                    # 检查标题（主题）
-                    title_lower = raw_subject.lower()
-                    for keyword in keywords_lower:
-                        if keyword in title_lower:
-                            should_bold_whole_title = True
-                            break
-                    
-                    # 如果标题没有关键词，且 scope 是 "all"，检查摘要（内容）
-                    if not should_bold_whole_title and scope == "all":
-                        summary = getattr(entry, "summary", "") or ""
-                        if summary:
-                            summary_text = remove_html_tags(summary)
-                            summary_lower = summary_text.lower()
-                            for keyword in keywords_lower:
-                                if keyword in summary_lower:
-                                    should_bold_whole_title = True
-                                    break
+                    if keywords_lower:
+                        # 将标题转为小写进行比较
+                        title_lower = raw_subject.lower()
+                        
+                        # 检查标题
+                        for keyword_lower in keywords_lower:
+                            if keyword_lower in title_lower:
+                                should_bold_whole_title = True
+                                logger.info(f"[高亮匹配] 标题匹配: '{keyword_lower}' -> '{raw_subject}'")
+                                break
+                        
+                        # 如果标题没有找到且 scope 是 "all"，检查摘要
+                        if not should_bold_whole_title and scope == "all":  # 这里改为 scope == "all"
+                            summary = getattr(entry, "summary", "") or ""
+                            if summary:
+                                summary_text = remove_html_tags(summary)
+                                summary_lower = summary_text.lower()
+                                for keyword_lower in keywords_lower:
+                                    if keyword_lower in summary_lower:
+                                        should_bold_whole_title = True
+                                        logger.info(f"[高亮匹配] 摘要匹配: '{keyword_lower}' -> '{summary_text[:50]}...'")
+                                        break
             
             # ========== 原有的翻译处理 ==========
             if processor.get("translate", False):
@@ -756,6 +764,7 @@ async def generate_group_message(feed_data, entries, processor):
             # ========== 关键修改：整体加粗处理 ==========
             if should_bold_whole_title:
                 # 对整个标题加粗
+                logger.info(f"[加粗处理] 标题加粗: {translated_subject}")
                 safe_subject = escape(f"**{translated_subject}**")
             else:
                 # 正常显示（不加粗）
