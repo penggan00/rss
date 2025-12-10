@@ -207,15 +207,15 @@ RSS_GROUPS = [ # RSS 组配置列表
                 "enable": False,     # True: 启用过滤 / False: 关闭过滤
                 "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "scope": "title",   # 过滤范围
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "圣诞", "netcup", "折"]
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"]
             },
-            "highlight": {  # 新增的高亮（加粗）功能
-                "enable": True,     # True: 启用整体加粗 / False: 关闭加粗
+            "highlight": {  # 新增的关键词加粗功能
+                "enable": True,     # True: 启用关键词加粗 / False: 关闭加粗
                 "scope": "title",   # 检查范围：title/all (只检查标题和摘要)
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "圣诞", "折"]
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"]
             },
-            "preview": False,       # 禁止预览
-            "show_count": False     #计数
+            "preview": False,
+            "show_count": False
         }
     },
     # ================== vps 翻译 ==================
