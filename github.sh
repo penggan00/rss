@@ -136,8 +136,7 @@ check_dependencies() {
 ensure_download_dir() {
     local dir="$1"
     if [ ! -d "$dir" ]; then
-        echo "创建目录: $dir"
-        mkdir -p "$dir"
+        mkdir -p "$dir" > /dev/null 2>&1
         if [ $? -ne 0 ]; then
             echo "错误: 无法创建目录 $dir"
             return 1
@@ -203,15 +202,11 @@ download_single_file() {
     local temp_file="$target_dir/$filename.tmp"
     local final_file="$target_dir/$filename"
     
-    echo "下载文件: $filename 到目录: $target_dir"
-    
     if curl -s -o "$temp_file" "$url"; then
-        mv "$temp_file" "$final_file"
-        echo "完成: $filename"
+        mv "$temp_file" "$final_file" > /dev/null 2>&1
         return 0
     else
-        rm -f "$temp_file"
-        echo "失败: $filename"
+        rm -f "$temp_file" > /dev/null 2>&1
         return 1
     fi
 }
@@ -222,7 +217,12 @@ download_github_directory() {
     local target_dir="$2"
     local item_name="$3"
     
-    echo "开始下载: $item_name 到 $target_dir"
+    # 统计变量 - 使用全局变量来统计
+    local file_count=0
+    local success_count=0
+    local new_count=0
+    local update_count=0
+    local skip_count=0
     
     # 获取目录内容
     local api_response
@@ -234,52 +234,54 @@ download_github_directory() {
     
     # 检查是否获取成功
     if [[ $(echo "$api_response" | jq -r 'type') != "array" ]]; then
-        echo "错误: 无法获取目录内容 $item_name (URL: $api_url)"
+        # 尝试作为单个文件处理
         return 1
     fi
     
-    local file_count=0
-    local success_count=0
-    
     # 遍历目录中的每个项目
-    echo "$api_response" | jq -c '.[]' | while read -r item; do
+    while read -r item; do
         local item_type=$(echo "$item" | jq -r '.type')
         local item_filename=$(echo "$item" | jq -r '.name')
         local item_path=$(echo "$item" | jq -r '.path')
         local download_url=$(echo "$item" | jq -r '.download_url // ""')
         local sha=$(echo "$item" | jq -r '.sha')
         
-        ((file_count++))
-        
         if [[ "$item_type" == "file" && -n "$download_url" ]]; then
+            ((file_count++))
+            
             # 文件下载
             local local_file="$target_dir/$item_filename"
             
             # 确保目标目录存在
-            ensure_download_dir "$(dirname "$local_file")"
+            ensure_download_dir "$(dirname "$local_file")" > /dev/null 2>&1
             
             # 获取本地文件的Git SHA1哈希
             local local_sha=$(get_local_git_sha "$local_file")
             
-            if [[ -z "$local_sha" ]] || [[ "$local_sha" != "$sha" ]]; then
-                echo "  > 下载: $item_filename"
+            if [[ -z "$local_sha" ]]; then
+                # 新文件
                 if curl -s -o "$local_file" "$download_url"; then
                     ((success_count++))
-                else
-                    echo "  ! 失败: $item_filename"
+                    ((new_count++))
+                fi
+            elif [[ "$local_sha" != "$sha" ]]; then
+                # 需要更新
+                if curl -s -o "$local_file" "$download_url"; then
+                    ((success_count++))
+                    ((update_count++))
                 fi
             else
-                echo "  = 最新: $item_filename"
+                # 已是最新
                 ((success_count++))
+                ((skip_count++))
             fi
             
         elif [[ "$item_type" == "dir" ]]; then
             # 递归下载子目录
-            echo "  + 进入子目录: $item_filename"
             
             # 对于子目录，需要在target_dir下创建对应的子目录
             local subdir_path="$target_dir/$item_filename"
-            ensure_download_dir "$subdir_path"
+            ensure_download_dir "$subdir_path" > /dev/null 2>&1
             
             # 构建正确的子目录API URL
             local repo_base_url="https://api.github.com/repos"
@@ -307,53 +309,77 @@ download_github_directory() {
                 fi
                 
                 # 递归调用
-                download_github_directory "$subdir_api_url" "$subdir_path" "$item_filename"
-            else
-                echo "  ! 无法解析仓库URL: $api_url"
+                local sub_result=$(download_github_directory "$subdir_api_url" "$subdir_path" "$item_filename")
+                # 累加子目录的统计
+                if [[ -n "$sub_result" ]]; then
+                    local sub_file_count=$(echo "$sub_result" | cut -d':' -f1)
+                    local sub_success_count=$(echo "$sub_result" | cut -d':' -f2)
+                    local sub_new_count=$(echo "$sub_result" | cut -d':' -f3)
+                    local sub_update_count=$(echo "$sub_result" | cut -d':' -f4)
+                    local sub_skip_count=$(echo "$sub_result" | cut -d':' -f5)
+                    
+                    ((file_count += sub_file_count))
+                    ((success_count += sub_success_count))
+                    ((new_count += sub_new_count))
+                    ((update_count += sub_update_count))
+                    ((skip_count += sub_skip_count))
+                fi
             fi
         fi
-    done
+    done < <(echo "$api_response" | jq -c '.[]')
     
-    echo "目录 $item_name 下载完成: $success_count/$file_count 个文件"
+    # 返回统计信息
+    echo "$file_count:$success_count:$new_count:$update_count:$skip_count"
     return 0
 }
 
 # 主检查函数
 check_and_update_files() {
-    echo "检查文件和目录更新..."
+    echo "检查更新..."
     
-    # 显示当前使用的认证方式
-    if [[ -n "$GITHUB_TOKEN" ]]; then
-        echo "使用GitHub Token认证"
-    else
-        echo "使用匿名访问"
-    fi
-    
-    local updated_count=0
-    local total_count=0
+    local total_updated_count=0
+    local total_new_count=0
+    local total_skip_count=0
+    local total_failed_count=0
+    local total_items=${#DOWNLOAD_TARGETS[@]}
+    local processed_items=0
     
     for entry in "${DOWNLOAD_TARGETS[@]}"; do
         read -r url target_dir <<< "$(parse_file_entry "$entry")"
         
-        ((total_count++))
+        ((processed_items++))
         
         # 确保目标目录存在
-        if ! ensure_download_dir "$target_dir"; then
-            echo "跳过项目 (目录创建失败)"
+        if ! ensure_download_dir "$target_dir" > /dev/null 2>&1; then
+            ((total_failed_count++))
             continue
         fi
         
         # 判断是文件还是目录
         if is_directory_url "$url"; then
             # 目录下载
-            echo ""
-            # 从URL获取一个描述性的名字
             local item_name=$(get_filename_from_url "$url")
-            echo "处理目录: $item_name"
-            echo "目标目录: $target_dir"
             
-            download_github_directory "$url" "$target_dir" "$item_name"
-            ((updated_count++))
+            # 调用目录下载函数并获取统计信息
+            local dir_stats=$(download_github_directory "$url" "$target_dir" "$item_name")
+            
+            if [[ -n "$dir_stats" ]]; then
+                local file_count=$(echo "$dir_stats" | cut -d':' -f1)
+                local success_count=$(echo "$dir_stats" | cut -d':' -f2)
+                local new_count=$(echo "$dir_stats" | cut -d':' -f3)
+                local update_count=$(echo "$dir_stats" | cut -d':' -f4)
+                local skip_count=$(echo "$dir_stats" | cut -d':' -f5)
+                
+                ((total_new_count += new_count))
+                ((total_updated_count += update_count))
+                ((total_skip_count += skip_count))
+                
+                if [[ $success_count -lt $file_count ]]; then
+                    ((total_failed_count += (file_count - success_count)))
+                fi
+            else
+                ((total_failed_count++))
+            fi
         else
             # 单个文件下载
             local filename=$(get_filename_from_url "$url")
@@ -368,7 +394,7 @@ check_and_update_files() {
             fi
             
             if [[ -z "$github_sha" ]]; then
-                echo "错误: 无法获取 $filename 的GitHub SHA"
+                ((total_failed_count++))
                 continue
             fi
             
@@ -377,28 +403,43 @@ check_and_update_files() {
             
             if [[ -z "$local_sha" ]]; then
                 # 本地文件不存在，下载文件
-                echo "下载新文件: $filename 到 $target_dir"
                 if download_single_file "$filename" "$url" "$target_dir"; then
-                    ((updated_count++))
+                    ((total_new_count++))
+                else
+                    ((total_failed_count++))
                 fi
             elif [[ "$local_sha" != "$github_sha" ]]; then
                 # 哈希不匹配，需要更新
-                echo "更新文件: $filename 在 $target_dir"
                 if download_single_file "$filename" "$url" "$target_dir"; then
-                    ((updated_count++))
+                    ((total_updated_count++))
+                else
+                    ((total_failed_count++))
                 fi
             else
                 # 文件已是最新
-                echo "文件最新: $filename (位置: $target_dir)"
+                ((total_skip_count++))
             fi
         fi
     done
     
     echo ""
-    if [ $updated_count -eq 0 ]; then
-        echo "所有项目都是最新版本"
-    else
-        echo "更新完成: 处理了 $total_count 个项目"
+    echo "更新完成!"
+    echo "总项目数: $total_items"
+    
+    if [[ $total_new_count -gt 0 ]]; then
+        echo "新下载: $total_new_count"
+    fi
+    
+    if [[ $total_updated_count -gt 0 ]]; then
+        echo "更新: $total_updated_count"
+    fi
+    
+    if [[ $total_skip_count -gt 0 ]]; then
+        echo "已是最新: $total_skip_count"
+    fi
+    
+    if [[ $total_failed_count -gt 0 ]]; then
+        echo "失败: $total_failed_count"
     fi
 }
 
