@@ -725,24 +725,17 @@ async def generate_group_message(feed_data, entries, processor):
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
             
-            # ========== 新增：关键词加粗处理 ==========
-            # 检查是否启用关键词加粗功能
+            # ========== 关键词加粗检查 ==========
+            should_bold_whole_title = False
+            
+            # 检查是否启用关键词加粗
             highlight_config = processor.get("highlight", {})
-            should_bold_keywords = highlight_config.get("enable", False)
-            
-            # 如果没有开启翻译，直接使用原始标题
-            if processor.get("translate", False):
-                translated_subject = await auto_translate_text(raw_subject)
-            else:
-                translated_subject = raw_subject
-            
-            # ========== 关键词加粗处理 ==========
-            if should_bold_keywords:
+            if highlight_config.get("enable", False):
                 keywords = highlight_config.get("keywords", [])
                 scope = highlight_config.get("scope", "title")
                 
                 if keywords:
-                    # 获取完整的内容三元组（与过滤逻辑相同）
+                    # 获取完整的内容三元组
                     title = raw_subject
                     link = getattr(entry, "link", "") or ""
                     summary = getattr(entry, "summary", "") or ""
@@ -769,31 +762,29 @@ async def generate_group_message(feed_data, entries, processor):
                     keywords_lower = [kw.lower() for kw in keywords if isinstance(kw, str)]
                     
                     # 检查是否包含任何关键词
-                    found_keyword = False
                     for keyword in keywords_lower:
                         if keyword in content:
-                            found_keyword = True
+                            should_bold_whole_title = True
                             break
-                    
-                    # 如果找到关键词，对整个标题加粗
-                    if found_keyword:
-                        # 对整个标题加粗
-                        logger.info(f"[关键词加粗] 标题包含关键词，加粗显示: {translated_subject}")
-                        # 转义内容，然后加粗
-                        escaped_subject = escape(translated_subject)
-                        safe_subject = f"**{escaped_subject}**"
-                    else:
-                        # 没有关键词，正常显示（不加粗）
-                        safe_subject = escape(translated_subject)
-                else:
-                    # 没有关键词配置，正常显示
-                    safe_subject = escape(translated_subject)
-            else:
-                # 未启用关键词加粗功能，正常显示
-                safe_subject = escape(translated_subject)
             
-            # ========== 特殊字符处理 ==========
-            translated_subject_for_format = translated_subject.replace('.', '.\u200c')
+            # ========== 翻译处理 ==========
+            if processor.get("translate", False):
+                translated_subject = await auto_translate_text(raw_subject)
+            else:
+                translated_subject = raw_subject
+            
+            # ========== 零宽字符处理 ==========
+            translated_subject = translated_subject.replace('.', '.\u200c')
+            
+            # ========== 关键词加粗处理 ==========
+            if should_bold_whole_title:
+                # 对整个标题加粗
+                escaped_subject = escape(translated_subject)  # 先转义
+                safe_subject = f"**{escaped_subject}**"       # 再加粗
+                logger.info(f"[关键词加粗] 标题加粗: {translated_subject}")
+            else:
+                # 正常显示（不加粗）
+                safe_subject = escape(translated_subject)
             
             raw_url = entry.link
             safe_url = escape(raw_url)
