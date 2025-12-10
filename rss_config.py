@@ -202,7 +202,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "processor": {
             "translate": False,
             "header_template": "📢 *{source}*\n",
-            "template": "*{subject}*\n[more]({url})", 
+            "template": "{subject}\n[more]({url})", 
             "filter": {  # 原有的过滤功能
                 "enable": False,     # True: 启用过滤 / False: 关闭过滤
                 "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送

@@ -770,7 +770,7 @@ async def generate_group_message(feed_data, entries, processor):
             if should_bold_whole_title:
                 # 对整个标题加粗
                 logger.info(f"[加粗处理] 标题加粗: {translated_subject}")
-                safe_subject = escape(f"**{translated_subject}**")
+                safe_subject = escape(f"*{translated_subject}*")
             else:
                 # 正常显示（不加粗）
                 safe_subject = escape(translated_subject)
