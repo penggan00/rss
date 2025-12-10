@@ -720,71 +720,54 @@ async def generate_group_message(feed_data, entries, processor):
         
         messages = []
         
-        template_needs_summary = "{summary}" in processor["template"]
+        # 获取模板配置
+        if "templates" in processor:
+            templates = processor["templates"]
+            normal_template = templates.get("normal", "{subject}\n[more]({url})")
+            highlight_enabled = processor.get("highlight", {}).get("enable", False)
+            if highlight_enabled:
+                highlight_template = templates.get(processor["highlight"].get("use_template", "highlight"), normal_template)
+        else:
+            # 向后兼容：如果只有单个template
+            normal_template = processor.get("template", "{subject}\n[more]({url})")
+            highlight_template = normal_template
+            highlight_enabled = False
+        
+        # 获取高亮配置
+        highlight_config = processor.get("highlight", {})
+        highlight_scope = highlight_config.get("scope", "title")
+        highlight_keywords = highlight_config.get("keywords", [])
         
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
             
-            # ========== 关键词加粗检查 ==========
-            should_bold_whole_title = False
-            
-            # 检查是否启用关键词加粗
-            highlight_config = processor.get("highlight", {})
-            if highlight_config.get("enable", False):
-                keywords = highlight_config.get("keywords", [])
-                scope = highlight_config.get("scope", "title")
-                
-                if keywords:
-                    # 获取完整的内容三元组
-                    title = raw_subject
-                    link = getattr(entry, "link", "") or ""
-                    summary = getattr(entry, "summary", "") or ""
-                    
-                    # 根据范围配置构建检查内容
-                    content_parts = []
-                    
-                    if scope == "title":
-                        content_parts = [title]
-                    elif scope == "link":
-                        content_parts = [link]
-                    elif scope == "both":
-                        content_parts = [title, link]
-                    elif scope == "all":
-                        content_parts = [title, link, summary]
-                    elif scope == "title_summary":
-                        content_parts = [title, summary]
-                    elif scope == "link_summary":
-                        content_parts = [link, summary]
-                    else:
-                        content_parts = [title]
-                    
-                    content = " ".join(content_parts).lower()
-                    keywords_lower = [kw.lower() for kw in keywords if isinstance(kw, str)]
-                    
-                    # 检查是否包含任何关键词
-                    for keyword in keywords_lower:
-                        if keyword in content:
-                            should_bold_whole_title = True
-                            break
-            
-            # ========== 翻译处理 ==========
+            # 检查是否需要翻译
             if processor.get("translate", False):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
             
-            # ========== 零宽字符处理 ==========
-            translated_subject = translated_subject.replace('.', '.\u200c')
+            # 决定使用哪个模板
+            selected_template = normal_template
+            if highlight_enabled and highlight_keywords:
+                # 检查标题中是否包含关键词
+                subject_lower = translated_subject.lower()
+                has_keyword_in_subject = any(keyword.lower() in subject_lower for keyword in highlight_keywords)
+                
+                # 根据scope配置检查摘要
+                has_keyword_in_summary = False
+                if highlight_scope == "all":
+                    raw_summary = getattr(entry, "summary", "") or ""
+                    summary_text = remove_html_tags(raw_summary).lower()
+                    has_keyword_in_summary = any(keyword.lower() in summary_text for keyword in highlight_keywords)
+                
+                # 如果标题或摘要（根据scope）包含关键词，使用加粗模板
+                if has_keyword_in_subject or has_keyword_in_summary:
+                    selected_template = highlight_template
             
-            # ========== 关键词加粗处理 ==========
-            if should_bold_whole_title:
-                # 对整个标题加粗
-                escaped_subject = escape(translated_subject)  # 先转义
-                safe_subject = f"**{escaped_subject}**"       # 再加粗
-                logger.info(f"[关键词加粗] 标题加粗: {translated_subject}")
-            else:
-                # 正常显示（不加粗）
-                safe_subject = escape(translated_subject)
+            # 在转义之前添加零宽字符处理
+            translated_subject = translated_subject.replace('.', '.\u200c')
+            safe_subject = escape(translated_subject)
             
             raw_url = entry.link
             safe_url = escape(raw_url)
@@ -795,14 +778,16 @@ async def generate_group_message(feed_data, entries, processor):
                 "url": safe_url
             }
             
-            if template_needs_summary:
+            # 检查模板是否需要summary字段
+            if "{summary}" in selected_template:
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
                 cleaned_summary = cleaned_summary.replace('.', '.\u200c')
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
-            message = processor["template"].format(**format_kwargs)
+            # 使用选择的模板生成消息
+            message = selected_template.format(**format_kwargs)
             messages.append(message)
         
         full_message = await _format_batch_message(header, messages, processor)
