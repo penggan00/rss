@@ -30,7 +30,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增
@@ -52,7 +52,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": False,       #翻译 False: 关闭 / True: 开启
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增
@@ -75,7 +75,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,            # 禁止预览
             "show_count": False          #计数
@@ -97,15 +97,25 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "allow",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["比亚迪", "比特币", "美元", "失守", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"]  # 本组关键词列表
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
+            "templates": {  # 改为 templates（复数），支持多种模板
+                "normal": "{subject}\n[more]({url})",  # 普通模板
+                "highlight": "*{subject}*\n[more]({url})"  # 加粗模板
             },
-            "template": "*{subject}*\n[more]({url})",
-            "preview": False,            # 禁止预览
-            "show_count": False          #计数
+            "filter": {
+                "enable": False,     # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
+                "keywords": ["比亚迪", "比特币", "美元", "失守", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"] 
+            },
+            "highlight": {
+                "enable": True,
+                "scope": "title",  # 检查范围：title/all (只检查标题或标题+摘要)
+                "keywords": ["比亚迪", "比特币", "美元", "失守", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"] ,
+                "use_template": "highlight"  # 指定使用哪个模板
+            },
+            "preview": False,
+            "show_count": False
         }
     },
 
@@ -126,7 +136,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,            # 禁止预览
             "show_count": False          #计数
@@ -148,7 +158,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "[{subject}]({url})",
             "filter": {
                 "enable": True,  # 过滤开关     False: 关闭 / True: 开启
@@ -180,7 +190,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{summary}*\n[more]({url})",
             "preview": False,        # 禁止预览
@@ -201,20 +211,20 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,
-            "header_template": "📢 *{source}*\n",
+            "header_template": "📢 _{source}_\n",
             "templates": {  # 改为 templates（复数），支持多种模板
                 "normal": "{subject}\n[more]({url})",  # 普通模板
                 "highlight": "*{subject}*\n[more]({url})"  # 加粗模板
             },
             "filter": {
-                "enable": False,
-                "mode": "allow",
-                "scope": "title",
+                "enable": False,    # 过滤开关     False: 关闭 / True: 开启
+                "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+                "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
                 "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"]
             },
             "highlight": {
-                "enable": True,
-                "scope": "title",  # 检查范围：title/all (只检查标题或标题+摘要)
+                "enable": True,     # 过滤开关     False: 关闭 / True: 开启
+                "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
                 "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"],
                 "use_template": "highlight"  # 指定使用哪个模板
             },
@@ -236,7 +246,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增
@@ -276,7 +286,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
         "processor": {
             "translate": False,                    #翻译关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": True,                # 预览
             "show_count": False               #计数
@@ -324,7 +334,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
         "translate": False,                    #翻译关
-        "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+        "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
             "filter": {
@@ -354,7 +364,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
         "processor": {
             "translate": True,          #翻译开
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{subject}*\n[more]({url})",
             "preview": True,        # 预览
@@ -376,7 +386,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
             "translate": False,                        #翻译开关
-            "header_template": "📢 *{source}*\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,                             # 禁止预览
             "show_count": False                       #计数
