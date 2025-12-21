@@ -23,18 +23,12 @@ DOWNLOAD_TARGETS=(
      "https://raw.githubusercontent.com/penggan00/rss/main/qq.py|$HOME/rss"
      "https://raw.githubusercontent.com/penggan00/rss/main/mail.py|$HOME/rss"
 #blog
-     "https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/index.html|$HOME/myblog/blog"
+  #   "https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/index.html|$HOME/myblog/blog"
     # GitHub整个目录下载
-   # "https://api.github.com/repos/penggan00/rss/contents/|$HOME/rss"
-   # "https://api.github.com/repos/penggan00/penggan00.github.io/contents/|$HOME/myblog/blog"
-    "https://api.github.com/repos/penggan00/penggan00.github.io/contents/linux|$HOME/myblog/blog/linux"
-    "https://api.github.com/repos/penggan00/penggan00.github.io/contents/my-blog|$HOME/myblog/blog/my-blog"
-    "https://api.github.com/repos/penggan00/penggan00.github.io/contents/static|$HOME/myblog/blog/static"
-    # "https://api.github.com/repos/penggan00/penggan00.github.io/contents/tv|$HOME/myblog/blog/tv"
+  #  "https://api.github.com/repos/penggan00/penggan00.github.io/contents/linux|$HOME/myblog/blog/linux"
+   # "https://api.github.com/repos/penggan00/penggan00.github.io/contents/my-blog|$HOME/myblog/blog/my-blog"
+   # "https://api.github.com/repos/penggan00/penggan00.github.io/contents/static|$HOME/myblog/blog/static"
 
-    # "https://api.github.com/repos/penggan00/rss/contents/configs|$HOME/rss/configs"
-    # "https://api.github.com/repos/penggan00/rss/contents/scripts|$HOME/rss/scripts"
-    # "https://api.github.com/repos/penggan00/rss/contents/data|$HOME/rss/data"
 )
 
 # 显示使用说明

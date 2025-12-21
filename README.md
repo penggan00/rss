@@ -1,6 +1,6 @@
 ```
 git clone https://github.com/penggan00/rss.git
-git clone https://github.com/penggan00/penggan00.github.io.git
+git clone https://github.com/EdNovas/dongguaTV.git
 
 # 安装
 /bin/bash ~/rss/setup.sh
@@ -50,7 +50,7 @@ python3 rss.py
 python3 usd.py
 source rss_venv/bin/activate
 python3 mail.py
-python3 gpt.py
+python3 qq.py
 
 
 ```
