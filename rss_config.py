@@ -225,7 +225,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "highlight": {
                 "enable": True,     # 过滤开关     False: 关闭 / True: 开启
                 "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"],
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "wawo", "hk", "1元", "sg", "折"],
                 "use_template": "highlight"  # 指定使用哪个模板
             },
             "preview": False,
