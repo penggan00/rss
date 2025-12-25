@@ -212,7 +212,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "translate": False,
             "header_template": "📢 _{source}_\n",
             "templates": {  # 改为 templates（复数），支持多种模板
-                "normal": "\[{subject}]({url})",  # 普通模板
+                "normal": "[{subject}]({url})",  # 普通模板
                 "highlight": "*{subject}*\n[more]({url})"  # 加粗模板
             },
             "filter": {
