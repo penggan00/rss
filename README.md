@@ -5,7 +5,7 @@ git clone https://github.com/EdNovas/dongguaTV.git
 # 安装
 /bin/bash ~/rss/setup.sh
 /bin/bash ~/rss/github.sh
-chmod +x ~/rss/{rss.sh,call.sh,usd.sh,mail.sh,rss2.sh,tt.sh}
+chmod +x ~/rss/{rss.sh,ssh.sh,usd.sh,mail.sh}
 chmod +x ~/rss/ss.sh
 ```
 ```
@@ -27,11 +27,13 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/githu
 ```
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
-*/10 * * * * /bin/bash ~/rss/rss.sh
-5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
-27 23 * * * /bin/bash ~/rss/rss.sh
-22 2 * * * /bin/bash ~/rss/ss.sh
-* * * * * /bin/bash ~/rss/vps.sh
+
+*/5 * * * * /bin/bash ~/rss/mail.sh
+#10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh
+#10 06 * * 6-7 /bin/bash ~/rss/usd.sh
+30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh
+30 06 * * 6-7 /bin/bash ~/rss/usd.sh
+#22 2 * * * /bin/bash ~/rss/rssmail.sh
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
 pip install aiosqlite
@@ -50,7 +52,7 @@ python3 rss.py
 python3 usd.py
 source rss_venv/bin/activate
 python3 mail.py
-python3 qq.py
+python3 gpt.py
 
 
 ```
