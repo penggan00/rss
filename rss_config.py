@@ -16,7 +16,7 @@ RSS_GROUPS = [ # RSS 组配置列表
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
         #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
         #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
-           'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
+         #  'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
         #    'https://www.ft.com/?format=rss',                 # 金融时报
        #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
        #     'http://rss.cnn.com/rss/cnn_topstories.rss',   # cnn
@@ -41,9 +41,9 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻中文",
         "urls": [
-            'https://www.ftchinese.com/rss/news',   # ft中文网
+         #   'https://www.ftchinese.com/rss/news',   # ft中文网
             'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
-            'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
+         #   'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 3590,      # 1小时
@@ -123,7 +123,6 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "综合资讯",
         "urls": [
-         #   'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
             'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
             'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
