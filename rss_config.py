@@ -123,7 +123,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "综合资讯",
         "urls": [
-            'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
+          #  'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
             'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
             'https://www.v2ex.com/index.xml',  # V2EX
