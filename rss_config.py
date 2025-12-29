@@ -376,7 +376,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
             'https://rsshub.app/guancha/headline', # 观察者网 头条
             'https://rsshub.app/guancha', # 观察者网全部
-            'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
+            #'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 3590,      # 1小时
