@@ -205,30 +205,30 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,
-        "batch_send_interval": 890,
+   #     "batch_send_interval": 890,
         "history_days": 3,
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,
             "header_template": "📢 _{source}_\n",
             "templates": {  # 改为 templates（复数），支持多种模板
-                "normal": "[{subject}]({url})",  # 普通模板
+                "normal": "{subject}\n[more]({url})",  # 普通模板
                 "highlight": "*{subject}*\n[more]({url})"  # 加粗模板
             },
             "filter": {
-                "enable": False,    # 过滤开关     False: 关闭 / True: 开启
+                "enable": True,    # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "折"]
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "香港", "奖", "新加坡", "wawo", "hk", "1元", "sg", "折"]
             },
             "highlight": {
-                "enable": True,     # 过滤开关     False: 关闭 / True: 开启
+                "enable": False,     # 过滤开关     False: 关闭 / True: 开启
                 "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
-                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "wawo", "hk", "1元", "sg", "折"],
+                "keywords": ["免", "cf", "cl", "黑", "低", "小", "卡", "年", "bug", "白", "github", "节", "闪", "cc", "rn", "动", "cloudcone", "脚本", "代码", "docker", "剩", "gcp", "aws", "oracle", "google", "netcup", "香港", "奖", "新加坡", "wawo", "hk", "1元", "sg", "折"],
                 "use_template": "highlight"  # 指定使用哪个模板
             },
-            "preview": False,
-            "show_count": False
+            "preview": False,      # 禁止预览
+            "show_count": False    # ✅新增
         }
     },
     # ================== vps 翻译 ==================
@@ -376,7 +376,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
             'https://rsshub.app/guancha/headline', # 观察者网 头条
             'https://rsshub.app/guancha', # 观察者网全部
-            #'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
+        #    'https://rsshub.app/zaobao/znews/china', # 联合早报 中国
         ],
         "group_key": "THIRD_RSS_FEEDS",
         "interval": 3590,      # 1小时

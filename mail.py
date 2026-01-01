@@ -885,7 +885,7 @@ class EmailToTelegramBot:
             logging.warning(f"URL修复失败 {original_url}: {e}")
             return original_url
     
-    def remove_long_urls(self, text, max_url_length=150):  # 降低到100字符更安全
+    def remove_long_urls(self, text, max_url_length=300):  # 降低到300字符更安全
         """
         增强版URL清理 - 更彻底地移除长链接
         """
@@ -998,6 +998,33 @@ class EmailToTelegramBot:
             processed_lines.append(line)
         
         return '\n'.join(processed_lines)
+   
+    def normalize_essential_symbols(self, text):
+        """只处理MarkdownV2必须处理的符号"""
+        translation_map = str.maketrans({
+            # 必须处理的（影响Markdown语法）
+            '（': '(',  # 括号
+            '）': ')',
+            '【': '[',
+            '】': ']',
+            '＃': '#',  # 井号
+            
+            # 建议处理的
+            '：': ':',  # 冒号
+            '！': '!',  # 感叹号
+        })
+        
+        text = text.translate(translation_map)
+        
+        # 额外的正则处理
+        import re
+        # 处理 ] 和 ( 之间的空格
+        text = re.sub(r'\]\s*\(', '](', text)
+        # 处理 [ 和 ] 之间的空格
+        text = re.sub(r'\[\s*', '[', text)
+        text = re.sub(r'\s*\]', ']', text)
+        
+        return text
     
     def escape_markdown_v2(self, text):
         """使用md2tgmd进行MarkdownV2格式转义，然后清理等体字中的反斜杠并修复等体字内的URL"""
@@ -1014,6 +1041,8 @@ class EmailToTelegramBot:
         text = re.sub(r'#+', '# ', text)
         text = re.sub(r'\u200c+', '\u200c', text)
         
+        text = self.normalize_essential_symbols(text)
+
         # 第二步：使用md2tgmd进行转义
         escaped_text = escape(text)
         print(f"🔄 转义后文本: {escaped_text}")
