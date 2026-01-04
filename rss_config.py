@@ -127,6 +127,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
             'https://www.v2ex.com/index.xml',  # V2EX
+            'https://www.52pojie.cn/forum.php?mod=rss',  # 吾爱破解
         ],
         "group_key": "TOURTH_RSS_FEEDS",
         "interval": 1790,       # 30分钟

@@ -1,4 +1,5 @@
 ```
+mkdir ~/rss
 git clone https://github.com/penggan00/rss.git
 git clone https://github.com/EdNovas/dongguaTV.git
 
@@ -18,6 +19,7 @@ sudo docker-compose pull
 sudo docker-compose down
 sudo docker-compose up -d
 
+systemctl restart docker # 重启 Docker
 ```
 #一键更新
 cd

@@ -1035,7 +1035,7 @@ class EmailToTelegramBot:
         
         # 第一步：安全替换点号（在翻译后处理）
         text = self.replace_dots_safely(text)
-        print(f"🔤 替换点号后: {text}")
+   #     print(f"🔤 替换点号后: {text}")
         
         # 新增：在转义之前清理符号
         text = re.sub(r'#+', '# ', text)
