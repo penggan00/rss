@@ -795,7 +795,118 @@ async def generate_group_message(feed_data, entries, processor):
     except Exception as e:
         logger.error(f"生成消息失败: {str(e)}")
         return ""
+async def generate_single_messages(feed_data, entries, processor):
+    """为每个条目生成单独的消息"""
+    try:
+        source_name = feed_data.feed.get('title', "未知来源")
+        safe_source = escape(source_name)
+        
+        messages = []
+        
+        # 获取模板配置
+        if "templates" in processor:
+            templates = processor["templates"]
+            normal_template = templates.get("normal", "{subject}\n[more]({url})")
+            highlight_enabled = processor.get("highlight", {}).get("enable", False)
+            if highlight_enabled:
+                highlight_template = templates.get(processor["highlight"].get("use_template", "highlight"), normal_template)
+        else:
+            normal_template = processor.get("template", "{subject}\n[more]({url})")
+            highlight_template = normal_template
+            highlight_enabled = False
+        
+        # 获取高亮配置
+        highlight_config = processor.get("highlight", {})
+        highlight_scope = highlight_config.get("scope", "title")
+        highlight_keywords = highlight_config.get("keywords", [])
+        
+        for entry in entries:
+            raw_subject = remove_html_tags(entry.title or "无标题")
+            
+            # 检查是否需要翻译
+            if processor.get("translate", False):
+                translated_subject = await auto_translate_text(raw_subject)
+            else:
+                translated_subject = raw_subject
+            
+            # 检查是否需要添加header
+            header = ""
+            if "header_template" in processor:
+                header = processor["header_template"].format(source=safe_source) + "\n"
+            
+            # 决定使用哪个模板
+            selected_template = normal_template
+            if highlight_enabled and highlight_keywords:
+                # 检查标题中是否包含关键词
+                subject_lower = translated_subject.lower()
+                has_keyword_in_subject = any(keyword.lower() in subject_lower for keyword in highlight_keywords)
+                
+                # 根据scope配置检查摘要
+                has_keyword_in_summary = False
+                if highlight_scope == "all":
+                    raw_summary = getattr(entry, "summary", "") or ""
+                    summary_text = remove_html_tags(raw_summary).lower()
+                    has_keyword_in_summary = any(keyword.lower() in summary_text for keyword in highlight_keywords)
+                
+                # 如果标题或摘要（根据scope）包含关键词，使用加粗模板
+                if has_keyword_in_subject or has_keyword_in_summary:
+                    selected_template = highlight_template
+            
+            # 在转义之前添加零宽字符处理
+            translated_subject = translated_subject.replace('.', '.\u200c')
+            safe_subject = escape(translated_subject)
+            
+            raw_url = entry.link
+            safe_url = escape(raw_url)
+            
+            format_kwargs = {
+                "subject": safe_subject,
+                "source": safe_source,
+                "url": safe_url
+            }
+            
+            # 检查模板是否需要summary字段
+            if "{summary}" in selected_template:
+                raw_summary = getattr(entry, "summary", "") or ""
+                cleaned_summary = remove_html_tags(raw_summary)
+                cleaned_summary = cleaned_summary.replace('.', '.\u200c')
+                safe_summary = escape(cleaned_summary)
+                format_kwargs["summary"] = safe_summary
+            
+            # 使用选择的模板生成消息
+            message_content = selected_template.format(**format_kwargs)
+            
+            # 添加header到每条消息
+            full_message = header + message_content
+            
+            messages.append({
+                "content": full_message,
+                "entry": entry
+            })
+        
+        return messages
+    except Exception as e:
+        logger.error(f"生成单条消息失败: {str(e)}")
+        return []
 
+async def send_single_messages_separately(bot, chat_id, messages_data, processor):
+    """单独发送每条消息"""
+    sent_count = 0
+    for msg_data in messages_data:
+        try:
+            await send_single_message(
+                bot,
+                chat_id,
+                msg_data["content"],
+                disable_web_page_preview=not processor.get("preview", True)
+            )
+            sent_count += 1
+            # 在消息之间添加短暂延迟，避免发送过快
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"发送单条消息失败: {e}")
+    
+    return sent_count
 async def _format_batch_message(header, messages, processor):
     """改进的批量消息格式化，确保Markdown格式完整"""
     MAX_MESSAGE_LENGTH = 4096
@@ -951,6 +1062,8 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
     processor = group_config["processor"]
     bot_token = group_config["bot_token"]
     batch_send_interval = group_config.get("batch_send_interval", None)
+    # 新增：是否单独发送每条消息
+    send_separately = group_config.get("send_separately", False)
     
     try:
         last_run = await db.load_last_run_time(group_key)
@@ -997,7 +1110,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     new_entries.append((entry, content_hash, entry_id))
                     
                 if new_entries:
-                    if batch_send_interval:
+                    if batch_send_interval and not send_separately:
                         # 批量发送模式：存入待发送队列
                         for entry, content_hash, entry_id in new_entries:
                             raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
@@ -1022,8 +1135,42 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                             processed_ids.add(entry_id)
                             
                         global_status[canonical_url] = processed_ids
+                    elif send_separately:
+                        # 单独发送模式：每条消息单独发送
+                        messages_data = await generate_single_messages(
+                            feed_data, 
+                            [e for e,_,_ in new_entries], 
+                            processor
+                        )
+                        
+                        if messages_data:
+                            sent_count = await send_single_messages_separately(
+                                bot,
+                                TELEGRAM_CHAT_ID[0],
+                                messages_data,
+                                processor
+                            )
+                            
+                            # 保存已发送的消息状态
+                            for i, (entry, content_hash, entry_id) in enumerate(new_entries):
+                                if i < sent_count:  # 只保存成功发送的消息
+                                    await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                    processed_ids.add(entry_id)
+                            global_status[canonical_url] = processed_ids
+                            
+                            if processor.get("show_count", False):
+                                summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
+                                try:
+                                    await send_single_message(
+                                        bot,
+                                        TELEGRAM_CHAT_ID[0],
+                                        summary_msg,
+                                        disable_web_page_preview=True
+                                    )
+                                except:
+                                    pass
                     else:
-                        # 立即发送模式
+                        # 立即批量发送模式（原来的逻辑）
                         feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
                         if feed_message:
                             try:
@@ -1048,7 +1195,6 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         
     except Exception as e:
         logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
-
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
     

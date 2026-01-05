@@ -25,15 +25,16 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "RSS_FEEDS",
         "interval": 3590,      # 60分钟 
-        "batch_send_interval": 14390,   # 4小时批量推送
+      #  "batch_send_interval": 14390,   # 4小时批量推送
+        "send_separately": True,  # 新增：设置为True时，每条消息单独发送
         "history_days": 180,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": False,         # 禁止预览
-            "show_count": False        # ✅新增
+            "preview": True,         # False 禁止预览  True 允许预览
+            "show_count": True         # ✅新增
         }
     },
 
