@@ -42,7 +42,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "国际新闻中文",
         "urls": [
          #   'https://www.ftchinese.com/rss/news',   # ft中文网
-            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+       #     'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
          #   'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
@@ -99,17 +99,18 @@ RSS_GROUPS = [ # RSS 组配置列表
             "translate": False,     #翻译开关
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "templates": {  # 改为 templates（复数），支持多种模板
-                "normal": "{subject}\n[more]({url})",  # 普通模板
+          #      "normal": "{subject}\n[more]({url})",  # 普通模板
+                "normal": "*{subject}*\n[more]({url})",  # 普通模板
                 "highlight": "*{subject}*\n[more]({url})"  # 加粗模板
             },
             "filter": {
-                "enable": False,     # 过滤开关     False: 关闭 / True: 开启
+                "enable": True,     # 过滤开关     False: 关闭 / True: 开启
                 "mode": "allow",    # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "scope": "title",   # 检查范围：title/all (只检查标题或标题+摘要)
                 "keywords": ["比亚迪", "比特币", "美元", "历史",  "走强",  "失守",  "恒生指数", "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"] 
             },
             "highlight": {
-                "enable": True,
+                "enable": False,
                 "scope": "title",  # 检查范围：title/all (只检查标题或标题+摘要)
                 "keywords": ["比亚迪", "比特币", "美元", "历史",  "走强",  "失守",  "恒生指数",  "高开", "涨停", "低开", "涨超", "黄金", "油", "汇率",  "跌停", "跌超", "突发", "重大", "人民币"] ,
                 "use_template": "highlight"  # 指定使用哪个模板
