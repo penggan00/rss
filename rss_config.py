@@ -24,7 +24,7 @@ RSS_GROUPS = [ # RSS 组配置列表
       #      'https://www.theverge.com/rss/index.xml',   # The Verge:
         ],
         "group_key": "RSS_FEEDS",
-        "interval": 3590,      # 60分钟 
+        "interval": 60,      # 60分钟 
       #  "batch_send_interval": 14390,   # 4小时批量推送
         "send_separately": True,  # 新增：设置为True时，每条消息单独发送
         "history_days": 180,     # 新增，保留30天
