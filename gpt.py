@@ -355,9 +355,32 @@ async def ai_handler(bot, chat_id: int, message_id: int, user_message: str, mode
             response_bytes = len(full_response.encode('utf-8'))
             
             if response_bytes > 3900:
-                # 长消息：保留Generating提示，直接分段发送回复
-                await send_segmented_message(bot, chat_id, message_id, full_response)
-                # Generating提示保持显示，让用户知道生成已完成
+                # 长消息：编辑Generating提示为"正在分段发送..."
+                try:
+                    await bot.edit_message_text(
+                        "📤 正在分段发送响应...",
+                        chat_id=chat_id,
+                        message_id=sent_message.message_id
+                    )
+                except Exception as e:
+                    print(f"编辑消息失败: {e}")
+                
+                # 分段发送回复
+                sent_messages = await send_segmented_message(bot, chat_id, message_id, full_response)
+                
+                # 发送完成后，删除或更新"正在分段发送..."提示
+                if sent_messages and len(sent_messages) > 0:
+                    try:
+                        await bot.delete_message(chat_id, sent_message.message_id)
+                    except:
+                        try:
+                            await bot.edit_message_text(
+                                "✅ 响应已发送完成",
+                                chat_id=chat_id,
+                                message_id=sent_message.message_id
+                            )
+                        except:
+                            pass
                     
             else:
                 # 短消息：直接编辑Generating提示为最终回复
