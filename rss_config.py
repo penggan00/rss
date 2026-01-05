@@ -10,7 +10,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻",
         "urls": [
-        #    'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报

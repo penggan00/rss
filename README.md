@@ -53,7 +53,7 @@ python3 rss.py
 ```
 python3 usd.py
 source rss_venv/bin/activate
-python3 mail.py
+python3 rss.py
 python3 gpt.py
 
 
