@@ -24,11 +24,11 @@ systemctl restart docker # 重启 Docker
 #一键更新
 cd
 ~/rss
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/github.sh)"
 ```
 crontab -e
-24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/my-blog/sh/github.sh)"
+24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 
 */5 * * * * /bin/bash ~/rss/mail.sh
 #10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh
