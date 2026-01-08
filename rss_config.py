@@ -10,7 +10,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻",
         "urls": [
-            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+       #     'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
             'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
@@ -126,7 +126,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "综合资讯",
         "urls": [
           #  'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
-            'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
+          #  'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
             'https://www.v2ex.com/index.xml',  # V2EX
             'https://www.52pojie.cn/forum.php?mod=rss',  # 吾爱破解
@@ -151,6 +151,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
+          #  'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
 
         ],
         "group_key": "ZONGHE_RSS_FEEDS",
@@ -357,7 +358,8 @@ RSS_GROUPS = [ # RSS 组配置列表
         #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
          #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
         #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
+            'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
+        #    'https://www.youtube.com/feeds/videos.xml?channel_id=UCQeRaTukNYft1_6AZPACnog',  # Asmongold
 
         ],
         "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
