@@ -110,9 +110,9 @@ view_rules() {
     echo "========================================"
 }
 
-# 开放端口
+# 开放端口（同时支持IPv4和IPv6）
 open_port() {
-    echo -e "${BLUE}[INFO]${NC} 开放端口"
+    echo -e "${BLUE}[INFO]${NC} 开放端口（同时支持IPv4/IPv6, TCP/UDP）"
     echo "请输入要开放的端口（多个端口用空格分隔，如：80 443 222）:"
     read -r ports
     
@@ -123,22 +123,21 @@ open_port() {
     
     for port in $ports; do
         if [[ $port =~ ^[0-9]+$ ]]; then
-            echo -e "${BLUE}[INFO]${NC} 开放端口 $port (TCP/UDP IPv4/IPv6)..."
+            echo -e "${BLUE}[INFO]${NC} 开放端口 $port..."
             
-            # 开放TCP和UDP
-            ufw allow $port/tcp
-            ufw allow $port/udp
+            # 方法1：使用ufw allow命令（会自动创建IPv4和IPv6规则）
+            ufw allow $port
+            echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 已开放（IPv4/IPv6, TCP/UDP）"
             
-            echo -e "${GREEN}[SUCCESS]${NC} 端口 $port (TCP/UDP) 已开放"
         else
             echo -e "${RED}[ERROR]${NC} 无效的端口号: $port"
         fi
     done
 }
 
-# 关闭/删除特定端口
+# 关闭/删除端口（清理所有相关规则）
 close_port() {
-    echo -e "${BLUE}[INFO]${NC} 关闭/删除端口"
+    echo -e "${BLUE}[INFO]${NC} 关闭/删除端口（会删除所有IPv4/IPv6, TCP/UDP规则）"
     echo "请输入要关闭的端口（多个端口用空格分隔）:"
     read -r ports
     
@@ -147,35 +146,59 @@ close_port() {
         return
     fi
     
+    # 获取当前规则列表
+    rules_file=$(mktemp)
+    ufw status numbered > "$rules_file"
+    
     for port in $ports; do
         if [[ $port =~ ^[0-9]+$ ]]; then
-            echo -e "${BLUE}[INFO]${NC} 关闭端口 $port..."
+            echo -e "${BLUE}[INFO]${NC} 正在清理端口 $port 的所有规则..."
+            deleted_count=0
             
-            # 删除TCP规则
-            if ufw status | grep -q "$port/tcp"; then
-                echo -e "${BLUE}[INFO]${NC} 删除TCP规则..."
-                ufw delete allow $port/tcp
-                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port/tcp 已关闭"
-            fi
+            # 查找并删除所有与端口相关的规则
+            while true; do
+                # 查找包含该端口的规则行
+                rule_line=$(grep -n " $port/" "$rules_file" | head -1)
+                
+                if [ -z "$rule_line" ]; then
+                    # 也查找旧格式的规则（没有协议后缀）
+                    rule_line=$(grep -n " $port " "$rules_file" | head -1)
+                fi
+                
+                if [ -z "$rule_line" ]; then
+                    break  # 没有更多相关规则
+                fi
+                
+                # 提取规则编号（在方括号中的数字）
+                rule_num=$(echo "$rule_line" | sed -n 's/.*\[\([0-9]*\)\].*/\1/p')
+                
+                if [ -n "$rule_num" ]; then
+                    echo -e "${YELLOW}[INFO]${NC} 删除规则 #$rule_num: $(echo "$rule_line" | cut -d: -f2-)"
+                    
+                    # 删除规则
+                    echo "y" | ufw delete $rule_num
+                    ((deleted_count++))
+                    
+                    # 更新规则文件
+                    ufw status numbered > "$rules_file"
+                else
+                    break
+                fi
+            done
             
-            # 删除UDP规则
-            if ufw status | grep -q "$port/udp"; then
-                echo -e "${BLUE}[INFO]${NC} 删除UDP规则..."
-                ufw delete allow $port/udp
-                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port/udp 已关闭"
-            fi
-            
-            # 尝试删除可能存在的旧规则格式
-            if ufw status | grep -q " $port "; then
-                echo -e "${BLUE}[INFO]${NC} 删除旧格式规则..."
-                ufw delete allow $port
-                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 旧格式规则已删除"
+            if [ $deleted_count -gt 0 ]; then
+                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 的 $deleted_count 条规则已删除"
+            else
+                echo -e "${YELLOW}[WARNING]${NC} 未找到端口 $port 的规则"
             fi
             
         else
             echo -e "${RED}[ERROR]${NC} 无效的端口号: $port"
         fi
     done
+    
+    # 清理临时文件
+    rm -f "$rules_file"
 }
 
 # 删除规则（按编号）
@@ -265,29 +288,52 @@ delete_ip_rule() {
         return
     fi
     
-    # 查找相关的规则
+    # 获取当前规则列表
+    rules_file=$(mktemp)
+    ufw status numbered > "$rules_file"
+    
     echo -e "${BLUE}[INFO]${NC} 查找与 $ip 相关的规则..."
+    deleted_count=0
     
-    # 查找白名单规则
-    if ufw status | grep -q "ALLOW.*$ip"; then
-        echo -e "${YELLOW}[INFO]${NC} 找到白名单规则，正在删除..."
-        ufw delete allow from $ip
-        echo -e "${GREEN}[SUCCESS]${NC} $ip 白名单规则已删除"
-    fi
+    # 查找并删除所有与IP相关的规则
+    while true; do
+        # 查找包含该IP的规则行
+        rule_line=$(grep -n "from $ip" "$rules_file" | head -1)
+        
+        if [ -z "$rule_line" ]; then
+            # 也查找其他可能的格式
+            rule_line=$(grep -n "$ip" "$rules_file" | grep -E "(ALLOW|DENY)" | head -1)
+        fi
+        
+        if [ -z "$rule_line" ]; then
+            break  # 没有更多相关规则
+        fi
+        
+        # 提取规则编号
+        rule_num=$(echo "$rule_line" | sed -n 's/.*\[\([0-9]*\)\].*/\1/p')
+        
+        if [ -n "$rule_num" ]; then
+            echo -e "${YELLOW}[INFO]${NC} 删除规则 #$rule_num: $(echo "$rule_line" | cut -d: -f2-)"
+            
+            # 删除规则
+            echo "y" | ufw delete $rule_num
+            ((deleted_count++))
+            
+            # 更新规则文件
+            ufw status numbered > "$rules_file"
+        else
+            break
+        fi
+    done
     
-    # 查找黑名单规则
-    if ufw status | grep -q "DENY.*$ip"; then
-        echo -e "${YELLOW}[INFO]${NC} 找到黑名单规则，正在删除..."
-        ufw delete deny from $ip
-        echo -e "${GREEN}[SUCCESS]${NC} $ip 黑名单规则已删除"
-    fi
-    
-    if ! ufw status | grep -q "$ip"; then
-        echo -e "${GREEN}[SUCCESS]${NC} 所有与 $ip 相关的规则已删除"
+    if [ $deleted_count -gt 0 ]; then
+        echo -e "${GREEN}[SUCCESS]${NC} 删除了 $deleted_count 条与 $ip 相关的规则"
     else
-        echo -e "${YELLOW}[WARNING]${NC} 可能还有与 $ip 相关的规则存在"
-        echo -e "${BLUE}[INFO]${NC} 请手动检查: ufw status | grep '$ip'"
+        echo -e "${YELLOW}[WARNING]${NC} 未找到与 $ip 相关的规则"
     fi
+    
+    # 清理临时文件
+    rm -f "$rules_file"
 }
 
 # 重置全部规则并设置默认
@@ -297,7 +343,7 @@ reset_rules() {
     echo "是否继续？ (y/N):"
     read -r confirm
     
-    if [[ $confirm != "y" && $confirm != "Y" ]]; then
+    if [[ $confirm != "y" && $confirm != "Y" ]; then
         echo -e "${BLUE}[INFO]${NC} 操作已取消"
         return
     fi
@@ -307,19 +353,18 @@ reset_rules() {
     # 禁用UFW
     ufw --force disable
     
-    # 重置规则
+    # 重置规则（这会删除所有规则）
     ufw --force reset
     
     # 设置默认策略
     ufw default deny incoming
     ufw default allow outgoing
     
-    # 开放默认端口
+    # 开放默认端口（使用简单的allow命令，会自动处理IPv4/IPv6）
     echo -e "${BLUE}[INFO]${NC} 开放默认端口 (80, 443, 222)..."
     
     for port in 80 443 222; do
-        ufw allow $port/tcp
-        ufw allow $port/udp
+        ufw allow $port
     done
     
     # 启用UFW
@@ -327,6 +372,19 @@ reset_rules() {
     
     echo -e "${GREEN}[SUCCESS]${NC} 防火墙规则已重置"
     echo -e "${GREEN}[INFO]${NC} 当前仅开放端口: 80, 443, 222"
+}
+
+# 显示IPv6设置状态
+show_ipv6_status() {
+    echo -e "${BLUE}[INFO]${NC} IPv6设置状态:"
+    
+    if grep -q "IPV6=yes" /etc/default/ufw 2>/dev/null; then
+        echo -e "  IPv6: ${GREEN}启用${NC}"
+    elif grep -q "IPV6=no" /etc/default/ufw 2>/dev/null; then
+        echo -e "  IPv6: ${RED}禁用${NC}"
+    else
+        echo -e "  IPv6: ${YELLOW}未知${NC}"
+    fi
 }
 
 # 显示菜单
@@ -338,76 +396,4 @@ show_menu() {
     echo "========================================${NC}"
     echo ""
     echo -e "操作系统: ${GREEN}$OS${NC}"
-    echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用${NC}"; else echo -e "${RED}禁用${NC}"; fi)"
-    echo ""
-    echo "请选择操作:"
-    echo -e "  ${GREEN}1${NC}) 开放端口（自动开放TCP/UDP）"
-    echo -e "  ${GREEN}2${NC}) 关闭防火墙"
-    echo -e "  ${GREEN}3${NC}) 关闭/删除端口（删除TCP和UDP）"
-    echo -e "  ${GREEN}4${NC}) 删除规则（按编号）"
-    echo -e "  ${GREEN}5${NC}) 查看规则"
-    echo -e "  ${GREEN}6${NC}) 添加IP到白名单"
-    echo -e "  ${GREEN}7${NC}) 添加IP到黑名单"
-    echo -e "  ${GREEN}8${NC}) 删除IP规则"
-    echo -e "  ${GREEN}9${NC}) 重置全部规则（默认只开放80,443,222）"
-    echo -e "  ${GREEN}10${NC}) 启用防火墙"
-    echo -e "  ${GREEN}11${NC}) 退出"
-    echo ""
-}
-
-# 主函数
-main() {
-    # 检测系统
-    detect_os
-    
-    # 检查并安装UFW
-    install_ufw
-    
-    # 主循环
-    while true; do
-        show_menu
-        
-        read -r -p "请输入选项 [1-11]: " choice
-        
-        case $choice in
-            1)
-                open_port
-                ;;
-            2)
-                disable_ufw
-                ;;
-            3)
-                close_port
-                ;;
-            4)
-                delete_rule
-                ;;
-            5)
-                view_rules
-                ;;
-            6)
-                whitelist_ip
-                ;;
-            7)
-                blacklist_ip
-                ;;
-            8)
-                delete_ip_rule
-                ;;
-            9)
-                reset_rules
-                ;;
-            10)
-                enable_ufw
-                ;;
-            11)
-                echo -e "${BLUE}[INFO]${NC} 再见！"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}[ERROR]${NC} 无效选项"
-                ;;
-        esac
-        
-        echo ""
-        echo
+    echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用$
