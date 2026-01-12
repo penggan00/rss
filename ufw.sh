@@ -1,13 +1,13 @@
 #!/bin/sh
 
-# 检查 root 权限
+# 檢查 root 權限
 if [ "$(id -u)" -ne 0 ]; then
-    echo "错误: 必须以 root 权限运行！"
+    echo "錯誤: 必須以 root 權限執行！"
     exit 1
 fi
 
-# 1. 环境检查与安装
-install_ufw() {
+# 1. 環境檢查與自動配置
+install_and_init() {
     if [ -f /etc/alpine-release ]; then
         apk add ufw
         modprobe ip_tables iptable_filter ip6table_filter
@@ -16,107 +16,112 @@ install_ufw() {
         apt update && apt install -y ufw
     fi
     
-    # 确保 ufw 配置文件中启用了 IPv6
+    # 強制開啟 IPv6 支持
     if [ -f /etc/default/ufw ]; then
         sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw
     fi
-}
 
-# 2. 初始化核心规则
-init_ufw() {
-    echo "[*] 初始化策略: 默认拒绝所有入站 (IPv4/IPv6)..."
+    echo "[*] 正在初始化嚴格策略 (默認拒絕入站)..."
     ufw --force reset
     ufw default deny incoming
     ufw default allow outgoing
     
-    # 默认开放核心端口 (双栈)
-    for p in 80 443; do
-        ufw allow "$p"/tcp
-    done
-    
-    # SSH 222 端口限流防爆破
-    ufw limit 222/tcp
+    # 預設開放 80, 443, 222 (雙棧)
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw limit 222/tcp  # 222 端口防爆破
     
     ufw --force enable
+    echo "[OK] 初始化完成。"
 }
 
-# 3. 核心处理函数 (支持批量与双栈)
+# 2. 核心清理函數 (重點：同時刪除 TCP/UDP/v4/v6)
+clean_port_rule() {
+    local target=$1
+    # 嘗試刪除多種可能的組合，確保清空
+    ufw delete allow "$target" >/dev/null 2>&1
+    ufw delete deny "$target" >/dev/null 2>&1
+    ufw delete limit "$target" >/dev/null 2>&1
+    ufw delete allow "$target/tcp" >/dev/null 2>&1
+    ufw delete allow "$target/udp" >/dev/null 2>&1
+    ufw delete deny "$target/tcp" >/dev/null 2>&1
+    ufw delete deny "$target/udp" >/dev/null 2>&1
+}
+
+# 3. 處理函數
 manage_port() {
     action=$1
-    input_list=$2  # 端口或 IP:端口
+    input=$2
     
-    # 转换逗号为内容循环
-    items=$(echo "$input_list" | tr ',' ' ')
+    # 處理逗號分隔並去除空格
+    items=$(echo "$input" | tr ',' ' ')
     
     for item in $items; do
         case $action in
             "allow")
-                # 如果包含冒号且不是纯端口，判断为 IPv6 地址操作
-                if echo "$item" | grep -q ":"; then
-                    ufw allow from "$item"
-                    echo "  [+] 已允许来自 IPv6 地址的访问: $item"
-                else
-                    ufw allow "$item"
-                    echo "  [+] 已开放端口 (IPv4/IPv6): $item"
-                fi
+                # 默認開放 TCP/UDP 雙協議
+                ufw allow "$item"
+                echo "  [+] 已開放 (TCP/UDP/v4/v6): $item"
                 ;;
             "deny")
                 ufw deny "$item"
-                echo "  [-] 已阻断端口/IP: $item"
+                echo "  [-] 已阻止: $item"
                 ;;
             "delete")
-                # ufw delete 会自动匹配并删除对应的 v4 和 v6 规则
-                # 循环两次确保尝试删除所有关联规则
-                ufw delete allow "$item" >/dev/null 2>&1
-                ufw delete deny "$item" >/dev/null 2>&1
-                ufw delete limit "$item" >/dev/null 2>&1
-                echo "  [x] 已完全清除 $item 的所有规则 (v4/v6)"
+                # 執行深度清理
+                clean_port_rule "$item"
+                echo "  [x] 已徹底清理 $item (含 TCP/UDP/v4/v6)"
                 ;;
         esac
     done
 }
 
-# --- 主交互界面 ---
+# --- 菜單界面 ---
 
 if ! command -v ufw > /dev/null; then
-    install_ufw
-    init_ufw
+    install_and_init
 fi
 
 while true; do
+    echo ""
     echo "=========================================="
-    echo "      UFW 双栈管理工具 (IPv4 & IPv6)"
-    echo "  默认开启: 80, 443, 222(Limit)"
+    echo "      UFW 深度管理工具 (Debian/Alpine)"
+    echo "  策略: 默認拒絕入站 | 預設: 80,443,222"
     echo "=========================================="
-    echo "1) 开放 (支持端口如 '80' 或 IPv6地址)"
-    echo "2) 阻止 (Deny)"
-    echo "3) 删除 (同时删除 v4/v6 规则)"
-    echo "4) 查看当前详细规则 (Status)"
-    echo "5) 仅针对特定 IPv6 开放端口"
+    echo "1) 批量開放端口 (TCP/UDP)"
+    echo "2) 批量阻止端口"
+    echo "3) 批量刪除規則 (自動清理 TCP/UDP/v4/v6)"
+    echo "4) 查看詳細規則 (帶編號)"
+    echo "5) 按編號刪除 (精確刪除特定規則)"
+    echo "6) 添加 IP 白名单 (最高優先級)"
     echo "q) 退出"
-    read -p "选择操作: " opt
+    read -p "請選擇操作: " opt
 
     case $opt in
         1)
-            read -p "输入端口号 (如 8080) 或 IP: " val
-            manage_port "allow" "$val"
+            read -p "請輸入端口: " ps
+            manage_port "allow" "$ps"
             ;;
         2)
-            read -p "输入要阻止的端口或 IP: " val
-            manage_port "deny" "$val"
+            read -p "請輸入端口: " ps
+            manage_port "deny" "$ps"
             ;;
         3)
-            read -p "输入要删除规则的端口或 IP: " val
-            manage_port "delete" "$val"
+            read -p "請輸入端口: " ps
+            manage_port "delete" "$ps"
             ;;
         4)
             ufw status numbered
             ;;
         5)
-            read -p "输入 IPv6 地址: " ip6
-            read -p "输入端口号: " p6
-            ufw allow from "$ip6" to any port "$p6"
-            echo "  [+] 已绑定: 只有 $ip6 可以访问端口 $p6"
+            ufw status numbered
+            read -p "請輸入要刪除的規則編號: " num
+            ufw --force delete "$num"
+            ;;
+        6)
+            read -p "請輸入白名單 IP: " wip
+            ufw insert 1 allow from "$wip"
+            echo "  [OK] IP $wip 已加入最高優先級白名單。"
             ;;
         q) break ;;
     esac
