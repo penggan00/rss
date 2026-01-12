@@ -1,128 +1,341 @@
-#!/bin/sh
+#!/bin/bash
 
-# 檢查 root 權限
-if [ "$(id -u)" -ne 0 ]; then
-    echo "錯誤: 必須以 root 權限執行！"
-    exit 1
-fi
+# 交互式UFW管理脚本
+# 支持Debian 12 和 Alpine
+# 作者: 助手
 
-# 1. 環境檢查與自動配置
-install_and_init() {
-    if [ -f /etc/alpine-release ]; then
-        apk add ufw
-        modprobe ip_tables iptable_filter ip6table_filter
-        rc-update add ufw default
-    elif [ -f /etc/debian_version ]; then
-        apt update && apt install -y ufw
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 系统检测
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    elif [ -f /etc/alpine-release ]; then
+        OS="alpine"
+    else
+        OS=$(uname -s)
+    fi
+}
+
+# 检查并安装UFW
+install_ufw() {
+    echo -e "${BLUE}[INFO]${NC} 检查UFW安装状态..."
+    
+    if command -v ufw &> /dev/null; then
+        echo -e "${GREEN}[SUCCESS]${NC} UFW已安装"
+        return 0
     fi
     
-    # 強制開啟 IPv6 支持
-    if [ -f /etc/default/ufw ]; then
-        sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw
+    echo -e "${YELLOW}[WARNING]${NC} UFW未安装，正在安装..."
+    
+    case $OS in
+        "debian"|"ubuntu")
+            apt-get update
+            apt-get install -y ufw
+            ;;
+        "alpine")
+            apk update
+            apk add ufw
+            ;;
+        *)
+            echo -e "${RED}[ERROR]${NC} 不支持的操作系统: $OS"
+            exit 1
+            ;;
+    esac
+    
+    if command -v ufw &> /dev/null; then
+        echo -e "${GREEN}[SUCCESS]${NC} UFW安装成功"
+        return 0
+    else
+        echo -e "${RED}[ERROR]${NC} UFW安装失败"
+        exit 1
     fi
+}
 
-    echo "[*] 正在初始化嚴格策略 (默認拒絕入站)..."
-    ufw --force reset
+# 检查UFW状态
+check_ufw_status() {
+    if ufw status | grep -q "Status: active"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 启用UFW
+enable_ufw() {
+    echo -e "${BLUE}[INFO]${NC} 启用UFW..."
+    
+    # 设置默认策略
     ufw default deny incoming
     ufw default allow outgoing
     
-    # 預設開放 80, 443, 222 (雙棧)
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw limit 222/tcp  # 222 端口防爆破
+    # 启用UFW
+    echo "y" | ufw enable
     
-    ufw --force enable
-    echo "[OK] 初始化完成。"
+    if check_ufw_status; then
+        echo -e "${GREEN}[SUCCESS]${NC} UFW已启用"
+    else
+        echo -e "${RED}[ERROR]${NC} UFW启用失败"
+    fi
 }
 
-# 2. 核心清理函數 (重點：同時刪除 TCP/UDP/v4/v6)
-clean_port_rule() {
-    local target=$1
-    # 嘗試刪除多種可能的組合，確保清空
-    ufw delete allow "$target" >/dev/null 2>&1
-    ufw delete deny "$target" >/dev/null 2>&1
-    ufw delete limit "$target" >/dev/null 2>&1
-    ufw delete allow "$target/tcp" >/dev/null 2>&1
-    ufw delete allow "$target/udp" >/dev/null 2>&1
-    ufw delete deny "$target/tcp" >/dev/null 2>&1
-    ufw delete deny "$target/udp" >/dev/null 2>&1
+# 禁用UFW
+disable_ufw() {
+    echo -e "${BLUE}[INFO]${NC} 禁用UFW..."
+    
+    ufw disable
+    
+    if ! check_ufw_status; then
+        echo -e "${GREEN}[SUCCESS]${NC} UFW已禁用"
+    else
+        echo -e "${RED}[ERROR]${NC} UFW禁用失败"
+    fi
 }
 
-# 3. 處理函數
-manage_port() {
-    action=$1
-    input=$2
+# 查看防火墙规则
+view_rules() {
+    echo -e "${BLUE}[INFO]${NC} 当前防火墙规则:"
+    echo "========================================"
+    ufw status verbose
+    echo "========================================"
+    echo -e "\n${BLUE}[INFO]${NC} 详细规则列表:"
+    echo "========================================"
+    ufw status numbered
+    echo "========================================"
+}
+
+# 开放端口
+open_port() {
+    echo -e "${BLUE}[INFO]${NC} 开放端口"
+    echo "请输入要开放的端口（多个端口用空格分隔，如：80 443 222）:"
+    read -r ports
     
-    # 處理逗號分隔並去除空格
-    items=$(echo "$input" | tr ',' ' ')
+    if [ -z "$ports" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入端口"
+        return
+    fi
     
-    for item in $items; do
-        case $action in
-            "allow")
-                # 默認開放 TCP/UDP 雙協議
-                ufw allow "$item"
-                echo "  [+] 已開放 (TCP/UDP/v4/v6): $item"
-                ;;
-            "deny")
-                ufw deny "$item"
-                echo "  [-] 已阻止: $item"
-                ;;
-            "delete")
-                # 執行深度清理
-                clean_port_rule "$item"
-                echo "  [x] 已徹底清理 $item (含 TCP/UDP/v4/v6)"
-                ;;
-        esac
+    for port in $ports; do
+        if [[ $port =~ ^[0-9]+$ ]]; then
+            echo -e "${BLUE}[INFO]${NC} 开放端口 $port (TCP/UDP IPv4/IPv6)..."
+            
+            # 开放TCP和UDP，IPv4和IPv6
+            ufw allow $port/tcp
+            ufw allow $port/udp
+            
+            # 对于IPv6，需要明确指定
+            ufw allow proto tcp from any to any port $port
+            ufw allow proto udp from any to any port $port
+            
+            echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 已开放"
+        else
+            echo -e "${RED}[ERROR]${NC} 无效的端口号: $port"
+        fi
     done
 }
 
-# --- 菜單界面 ---
+# 删除规则
+delete_rule() {
+    view_rules
+    
+    echo -e "\n${BLUE}[INFO]${NC} 删除规则"
+    echo "请输入要删除的规则编号（多个编号用空格分隔）:"
+    read -r rule_numbers
+    
+    if [ -z "$rule_numbers" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入规则编号"
+        return
+    fi
+    
+    # 反转规则编号顺序，避免删除时编号变化
+    sorted_numbers=$(echo $rule_numbers | tr ' ' '\n' | sort -rn)
+    
+    for number in $sorted_numbers; do
+        if [[ $number =~ ^[0-9]+$ ]]; then
+            echo -e "${BLUE}[INFO]${NC} 删除规则 #$number..."
+            echo "y" | ufw delete $number
+            echo -e "${GREEN}[SUCCESS]${NC} 规则 #$number 已删除"
+        else
+            echo -e "${RED}[ERROR]${NC} 无效的规则编号: $number"
+        fi
+    done
+}
 
-if ! command -v ufw > /dev/null; then
-    install_and_init
+# 白名单IP
+whitelist_ip() {
+    echo -e "${BLUE}[INFO]${NC} 添加IP到白名单"
+    echo "请输入IP地址或CIDR（多个用空格分隔，如：192.168.1.1 10.0.0.0/24）:"
+    read -r ips
+    
+    if [ -z "$ips" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入IP地址"
+        return
+    fi
+    
+    for ip in $ips; do
+        if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] || [[ $ip =~ ^([0-9a-fA-F:]+)(/[0-9]+)?$ ]]; then
+            echo -e "${BLUE}[INFO]${NC} 添加白名单IP: $ip..."
+            ufw allow from $ip
+            echo -e "${GREEN}[SUCCESS]${NC} IP $ip 已添加到白名单"
+        else
+            echo -e "${RED}[ERROR]${NC} 无效的IP地址格式: $ip"
+        fi
+    done
+}
+
+# 黑名单IP
+blacklist_ip() {
+    echo -e "${BLUE}[INFO]${NC} 添加IP到黑名单"
+    echo "请输入IP地址或CIDR（多个用空格分隔）:"
+    read -r ips
+    
+    if [ -z "$ips" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入IP地址"
+        return
+    fi
+    
+    for ip in $ips; do
+        if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] || [[ $ip =~ ^([0-9a-fA-F:]+)(/[0-9]+)?$ ]]; then
+            echo -e "${BLUE}[INFO]${NC} 添加黑名单IP: $ip..."
+            ufw deny from $ip
+            echo -e "${GREEN}[SUCCESS]${NC} IP $ip 已添加到黑名单"
+        else
+            echo -e "${RED}[ERROR]${NC} 无效的IP地址格式: $ip"
+        fi
+    done
+}
+
+# 重置全部规则并设置默认
+reset_rules() {
+    echo -e "${YELLOW}[WARNING]${NC} 即将重置所有防火墙规则！"
+    echo -e "${YELLOW}[WARNING]${NC} 这将关闭所有端口，然后只开放80, 443, 222端口"
+    echo "是否继续？ (y/N):"
+    read -r confirm
+    
+    if [[ $confirm != "y" && $confirm != "Y" ]]; then
+        echo -e "${BLUE}[INFO]${NC} 操作已取消"
+        return
+    fi
+    
+    echo -e "${BLUE}[INFO]${NC} 重置所有规则..."
+    
+    # 禁用UFW
+    ufw --force disable
+    
+    # 重置规则
+    ufw --force reset
+    
+    # 设置默认策略
+    ufw default deny incoming
+    ufw default allow outgoing
+    
+    # 开放默认端口
+    echo -e "${BLUE}[INFO]${NC} 开放默认端口 (80, 443, 222)..."
+    
+    for port in 80 443 222; do
+        ufw allow $port/tcp
+        ufw allow $port/udp
+        ufw allow proto tcp from any to any port $port
+        ufw allow proto udp from any to any port $port
+    done
+    
+    # 启用UFW
+    echo "y" | ufw enable
+    
+    echo -e "${GREEN}[SUCCESS]${NC} 防火墙规则已重置"
+    echo -e "${GREEN}[INFO]${NC} 当前仅开放端口: 80, 443, 222"
+}
+
+# 显示菜单
+show_menu() {
+    clear
+    echo -e "${BLUE}========================================"
+    echo "       UFW防火墙管理脚本"
+    echo "       支持Debian 12和Alpine"
+    echo "========================================${NC}"
+    echo ""
+    echo -e "操作系统: ${GREEN}$OS${NC}"
+    echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用${NC}"; else echo -e "${RED}禁用${NC}"; fi)"
+    echo ""
+    echo "请选择操作:"
+    echo -e "  ${GREEN}1${NC}) 开放端口"
+    echo -e "  ${GREEN}2${NC}) 关闭防火墙"
+    echo -e "  ${GREEN}3${NC}) 删除规则"
+    echo -e "  ${GREEN}4${NC}) 查看规则"
+    echo -e "  ${GREEN}5${NC}) 添加IP到白名单"
+    echo -e "  ${GREEN}6${NC}) 添加IP到黑名单"
+    echo -e "  ${GREEN}7${NC}) 重置全部规则（默认只开放80,443,222）"
+    echo -e "  ${GREEN}8${NC}) 启用防火墙"
+    echo -e "  ${GREEN}9${NC}) 退出"
+    echo ""
+}
+
+# 主函数
+main() {
+    # 检测系统
+    detect_os
+    
+    # 检查并安装UFW
+    install_ufw
+    
+    # 主循环
+    while true; do
+        show_menu
+        
+        read -r -p "请输入选项 [1-9]: " choice
+        
+        case $choice in
+            1)
+                open_port
+                ;;
+            2)
+                disable_ufw
+                ;;
+            3)
+                delete_rule
+                ;;
+            4)
+                view_rules
+                ;;
+            5)
+                whitelist_ip
+                ;;
+            6)
+                blacklist_ip
+                ;;
+            7)
+                reset_rules
+                ;;
+            8)
+                enable_ufw
+                ;;
+            9)
+                echo -e "${BLUE}[INFO]${NC} 再见！"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}[ERROR]${NC} 无效选项"
+                ;;
+        esac
+        
+        echo ""
+        echo -e "按回车键继续..."
+        read -r
+    done
+}
+
+# 检查是否为root用户
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}[ERROR]${NC} 请使用root用户运行此脚本"
+    echo "请使用: sudo bash $0"
+    exit 1
 fi
 
-while true; do
-    echo ""
-    echo "=========================================="
-    echo "      UFW 深度管理工具 (Debian/Alpine)"
-    echo "  策略: 默認拒絕入站 | 預設: 80,443,222"
-    echo "=========================================="
-    echo "1) 批量開放端口 (TCP/UDP)"
-    echo "2) 批量阻止端口"
-    echo "3) 批量刪除規則 (自動清理 TCP/UDP/v4/v6)"
-    echo "4) 查看詳細規則 (帶編號)"
-    echo "5) 按編號刪除 (精確刪除特定規則)"
-    echo "6) 添加 IP 白名单 (最高優先級)"
-    echo "q) 退出"
-    read -p "請選擇操作: " opt
-
-    case $opt in
-        1)
-            read -p "請輸入端口: " ps
-            manage_port "allow" "$ps"
-            ;;
-        2)
-            read -p "請輸入端口: " ps
-            manage_port "deny" "$ps"
-            ;;
-        3)
-            read -p "請輸入端口: " ps
-            manage_port "delete" "$ps"
-            ;;
-        4)
-            ufw status numbered
-            ;;
-        5)
-            ufw status numbered
-            read -p "請輸入要刪除的規則編號: " num
-            ufw --force delete "$num"
-            ;;
-        6)
-            read -p "請輸入白名單 IP: " wip
-            ufw insert 1 allow from "$wip"
-            echo "  [OK] IP $wip 已加入最高優先級白名單。"
-            ;;
-        q) break ;;
-    esac
-done
+# 运行主函数
+main
