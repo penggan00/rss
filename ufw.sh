@@ -396,4 +396,120 @@ show_menu() {
     echo "========================================${NC}"
     echo ""
     echo -e "操作系统: ${GREEN}$OS${NC}"
-    echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用$
+    echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用${NC}"; else echo -e "${RED}禁用${NC}"; fi)"
+    show_ipv6_status
+    echo ""
+    echo "请选择操作:"
+    echo -e "  ${GREEN}1${NC}) 开放端口（IPv4/IPv6, TCP/UDP）"
+    echo -e "  ${GREEN}2${NC}) 关闭防火墙"
+    echo -e "  ${GREEN}3${NC}) 关闭/删除端口（删除所有相关规则）"
+    echo -e "  ${GREEN}4${NC}) 删除规则（按编号）"
+    echo -e "  ${GREEN}5${NC}) 查看规则"
+    echo -e "  ${GREEN}6${NC}) 添加IP到白名单"
+    echo -e "  ${GREEN}7${NC}) 添加IP到黑名单"
+    echo -e "  ${GREEN}8${NC}) 删除IP规则"
+    echo -e "  ${GREEN}9${NC}) 重置全部规则（默认只开放80,443,222）"
+    echo -e "  ${GREEN}10${NC}) 启用防火墙"
+    echo -e "  ${GREEN}11${NC}) 完全禁用IPv6规则"
+    echo -e "  ${GREEN}12${NC}) 退出"
+    echo ""
+}
+
+# 完全禁用IPv6规则
+disable_ipv6_rules() {
+    echo -e "${YELLOW}[WARNING]${NC} 这将禁用所有IPv6规则，只保留IPv4规则"
+    echo "是否继续？ (y/N):"
+    read -r confirm
+    
+    if [[ $confirm != "y" && $confirm != "Y" ]; then
+        echo -e "${BLUE}[INFO]${NC} 操作已取消"
+        return
+    fi
+    
+    echo -e "${BLUE}[INFO]${NC} 禁用IPv6规则..."
+    
+    # 方法1：禁用UFW中的IPv6支持
+    if [ -f /etc/default/ufw ]; then
+        sed -i 's/IPV6=yes/IPV6=no/' /etc/default/ufw
+        echo -e "${GREEN}[SUCCESS]${NC} 已在配置中禁用IPv6"
+    fi
+    
+    # 方法2：重新加载UFW
+    ufw disable
+    ufw enable
+    
+    echo -e "${GREEN}[SUCCESS]${NC} IPv6规则已禁用，现在只使用IPv4规则"
+}
+
+# 主函数
+main() {
+    # 检测系统
+    detect_os
+    
+    # 检查并安装UFW
+    install_ufw
+    
+    # 主循环
+    while true; do
+        show_menu
+        
+        read -r -p "请输入选项 [1-12]: " choice
+        
+        case $choice in
+            1)
+                open_port
+                ;;
+            2)
+                disable_ufw
+                ;;
+            3)
+                close_port
+                ;;
+            4)
+                delete_rule
+                ;;
+            5)
+                view_rules
+                ;;
+            6)
+                whitelist_ip
+                ;;
+            7)
+                blacklist_ip
+                ;;
+            8)
+                delete_ip_rule
+                ;;
+            9)
+                reset_rules
+                ;;
+            10)
+                enable_ufw
+                ;;
+            11)
+                disable_ipv6_rules
+                ;;
+            12)
+                echo -e "${BLUE}[INFO]${NC} 再见！"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}[ERROR]${NC} 无效选项"
+                ;;
+        esac
+        
+        echo ""
+        echo -e "按回车键继续..."
+        read -r
+    done
+}
+
+# 检查是否为root用户
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}[ERROR]${NC} 请使用root用户运行此脚本"
+    echo "请使用: sudo bash $0"
+    exit 1
+fi
+
+# 运行主函数
+main
