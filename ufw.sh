@@ -125,22 +125,60 @@ open_port() {
         if [[ $port =~ ^[0-9]+$ ]]; then
             echo -e "${BLUE}[INFO]${NC} 开放端口 $port (TCP/UDP IPv4/IPv6)..."
             
-            # 开放TCP和UDP，IPv4和IPv6
+            # 开放TCP和UDP
             ufw allow $port/tcp
             ufw allow $port/udp
             
-            # 对于IPv6，需要明确指定
-            ufw allow proto tcp from any to any port $port
-            ufw allow proto udp from any to any port $port
-            
-            echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 已开放"
+            echo -e "${GREEN}[SUCCESS]${NC} 端口 $port (TCP/UDP) 已开放"
         else
             echo -e "${RED}[ERROR]${NC} 无效的端口号: $port"
         fi
     done
 }
 
-# 删除规则
+# 关闭/删除特定端口
+close_port() {
+    echo -e "${BLUE}[INFO]${NC} 关闭/删除端口"
+    echo "请输入要关闭的端口（多个端口用空格分隔）:"
+    read -r ports
+    
+    if [ -z "$ports" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入端口"
+        return
+    fi
+    
+    for port in $ports; do
+        if [[ $port =~ ^[0-9]+$ ]]; then
+            echo -e "${BLUE}[INFO]${NC} 关闭端口 $port..."
+            
+            # 删除TCP规则
+            if ufw status | grep -q "$port/tcp"; then
+                echo -e "${BLUE}[INFO]${NC} 删除TCP规则..."
+                ufw delete allow $port/tcp
+                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port/tcp 已关闭"
+            fi
+            
+            # 删除UDP规则
+            if ufw status | grep -q "$port/udp"; then
+                echo -e "${BLUE}[INFO]${NC} 删除UDP规则..."
+                ufw delete allow $port/udp
+                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port/udp 已关闭"
+            fi
+            
+            # 尝试删除可能存在的旧规则格式
+            if ufw status | grep -q " $port "; then
+                echo -e "${BLUE}[INFO]${NC} 删除旧格式规则..."
+                ufw delete allow $port
+                echo -e "${GREEN}[SUCCESS]${NC} 端口 $port 旧格式规则已删除"
+            fi
+            
+        else
+            echo -e "${RED}[ERROR]${NC} 无效的端口号: $port"
+        fi
+    done
+}
+
+# 删除规则（按编号）
 delete_rule() {
     view_rules
     
@@ -159,6 +197,11 @@ delete_rule() {
     for number in $sorted_numbers; do
         if [[ $number =~ ^[0-9]+$ ]]; then
             echo -e "${BLUE}[INFO]${NC} 删除规则 #$number..."
+            
+            # 获取规则详细信息
+            rule_info=$(ufw status numbered | grep "^\[$number\]")
+            echo -e "${YELLOW}[INFO]${NC} 正在删除: $rule_info"
+            
             echo "y" | ufw delete $number
             echo -e "${GREEN}[SUCCESS]${NC} 规则 #$number 已删除"
         else
@@ -211,6 +254,42 @@ blacklist_ip() {
     done
 }
 
+# 删除IP规则
+delete_ip_rule() {
+    echo -e "${BLUE}[INFO]${NC} 删除IP规则"
+    echo "请输入要删除的IP地址或CIDR:"
+    read -r ip
+    
+    if [ -z "$ip" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} 未输入IP地址"
+        return
+    fi
+    
+    # 查找相关的规则
+    echo -e "${BLUE}[INFO]${NC} 查找与 $ip 相关的规则..."
+    
+    # 查找白名单规则
+    if ufw status | grep -q "ALLOW.*$ip"; then
+        echo -e "${YELLOW}[INFO]${NC} 找到白名单规则，正在删除..."
+        ufw delete allow from $ip
+        echo -e "${GREEN}[SUCCESS]${NC} $ip 白名单规则已删除"
+    fi
+    
+    # 查找黑名单规则
+    if ufw status | grep -q "DENY.*$ip"; then
+        echo -e "${YELLOW}[INFO]${NC} 找到黑名单规则，正在删除..."
+        ufw delete deny from $ip
+        echo -e "${GREEN}[SUCCESS]${NC} $ip 黑名单规则已删除"
+    fi
+    
+    if ! ufw status | grep -q "$ip"; then
+        echo -e "${GREEN}[SUCCESS]${NC} 所有与 $ip 相关的规则已删除"
+    else
+        echo -e "${YELLOW}[WARNING]${NC} 可能还有与 $ip 相关的规则存在"
+        echo -e "${BLUE}[INFO]${NC} 请手动检查: ufw status | grep '$ip'"
+    fi
+}
+
 # 重置全部规则并设置默认
 reset_rules() {
     echo -e "${YELLOW}[WARNING]${NC} 即将重置所有防火墙规则！"
@@ -241,8 +320,6 @@ reset_rules() {
     for port in 80 443 222; do
         ufw allow $port/tcp
         ufw allow $port/udp
-        ufw allow proto tcp from any to any port $port
-        ufw allow proto udp from any to any port $port
     done
     
     # 启用UFW
@@ -264,15 +341,17 @@ show_menu() {
     echo -e "UFW状态: $(if check_ufw_status; then echo -e "${GREEN}启用${NC}"; else echo -e "${RED}禁用${NC}"; fi)"
     echo ""
     echo "请选择操作:"
-    echo -e "  ${GREEN}1${NC}) 开放端口"
+    echo -e "  ${GREEN}1${NC}) 开放端口（自动开放TCP/UDP）"
     echo -e "  ${GREEN}2${NC}) 关闭防火墙"
-    echo -e "  ${GREEN}3${NC}) 删除规则"
-    echo -e "  ${GREEN}4${NC}) 查看规则"
-    echo -e "  ${GREEN}5${NC}) 添加IP到白名单"
-    echo -e "  ${GREEN}6${NC}) 添加IP到黑名单"
-    echo -e "  ${GREEN}7${NC}) 重置全部规则（默认只开放80,443,222）"
-    echo -e "  ${GREEN}8${NC}) 启用防火墙"
-    echo -e "  ${GREEN}9${NC}) 退出"
+    echo -e "  ${GREEN}3${NC}) 关闭/删除端口（删除TCP和UDP）"
+    echo -e "  ${GREEN}4${NC}) 删除规则（按编号）"
+    echo -e "  ${GREEN}5${NC}) 查看规则"
+    echo -e "  ${GREEN}6${NC}) 添加IP到白名单"
+    echo -e "  ${GREEN}7${NC}) 添加IP到黑名单"
+    echo -e "  ${GREEN}8${NC}) 删除IP规则"
+    echo -e "  ${GREEN}9${NC}) 重置全部规则（默认只开放80,443,222）"
+    echo -e "  ${GREEN}10${NC}) 启用防火墙"
+    echo -e "  ${GREEN}11${NC}) 退出"
     echo ""
 }
 
@@ -288,7 +367,7 @@ main() {
     while true; do
         show_menu
         
-        read -r -p "请输入选项 [1-9]: " choice
+        read -r -p "请输入选项 [1-11]: " choice
         
         case $choice in
             1)
@@ -298,24 +377,30 @@ main() {
                 disable_ufw
                 ;;
             3)
-                delete_rule
+                close_port
                 ;;
             4)
-                view_rules
+                delete_rule
                 ;;
             5)
-                whitelist_ip
+                view_rules
                 ;;
             6)
-                blacklist_ip
+                whitelist_ip
                 ;;
             7)
-                reset_rules
+                blacklist_ip
                 ;;
             8)
-                enable_ufw
+                delete_ip_rule
                 ;;
             9)
+                reset_rules
+                ;;
+            10)
+                enable_ufw
+                ;;
+            11)
                 echo -e "${BLUE}[INFO]${NC} 再见！"
                 exit 0
                 ;;
@@ -325,17 +410,4 @@ main() {
         esac
         
         echo ""
-        echo -e "按回车键继续..."
-        read -r
-    done
-}
-
-# 检查是否为root用户
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} 请使用root用户运行此脚本"
-    echo "请使用: sudo bash $0"
-    exit 1
-fi
-
-# 运行主函数
-main
+        echo
