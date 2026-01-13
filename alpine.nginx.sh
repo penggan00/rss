@@ -28,7 +28,7 @@ fi
 
 # 检查系统是否支持 IPv6
 check_ipv6() {
-    if ip -6 addr show | grep -q "inet6"; then
+    if ip -6 addr show 2>/dev/null | grep -q "inet6" && [ -f /proc/net/if_inet6 ]; then
         echo -e "${GREEN}检测到 IPv6 支持${NC}"
         return 0
     else
@@ -120,22 +120,31 @@ EOF
     
     # 测试配置
     echo -e "${YELLOW}测试 Nginx 配置...${NC}"
-    if nginx -t 2>/dev/null; then
+    nginx -t 2>&1
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}Nginx 配置正常${NC}"
         
         # 显示监听信息
         echo -e "${YELLOW}Nginx 监听配置:${NC}"
         echo "IPv6 优先: 启用"
         echo "默认服务器: 已配置 IPv6 和 IPv4"
+        return 0
     else
-        echo -e "${RED}Nginx 配置错误:${NC}"
-        nginx -t 2>&1
+        echo -e "${RED}Nginx 配置错误${NC}"
+        return 1
     fi
 }
 
 # 启动/重载 Nginx
 reload_nginx() {
     echo -e "${YELLOW}>>> 重载 Nginx...${NC}"
+    
+    # 先测试配置
+    if ! nginx -t 2>/dev/null; then
+        echo -e "${RED}配置错误，无法重载${NC}"
+        nginx -t 2>&1
+        return 1
+    fi
     
     if pgrep nginx >/dev/null; then
         if nginx -s reload 2>/dev/null; then
@@ -144,7 +153,12 @@ reload_nginx() {
             # 显示监听状态
             sleep 1
             echo -e "${YELLOW}当前监听端口:${NC}"
-            netstat -tulpn | grep nginx || ss -tulpn | grep nginx
+            if command -v ss >/dev/null; then
+                ss -tulpn | grep nginx
+            else
+                netstat -tulpn | grep nginx
+            fi
+            return 0
         else
             echo -e "${RED}重载失败，尝试重启...${NC}"
             pkill nginx 2>/dev/null
@@ -152,19 +166,44 @@ reload_nginx() {
             if nginx; then
                 echo -e "${GREEN}Nginx 启动成功${NC}"
                 echo -e "${YELLOW}当前监听端口:${NC}"
-                netstat -tulpn | grep nginx || ss -tulpn | grep nginx
+                if command -v ss >/dev/null; then
+                    ss -tulpn | grep nginx
+                else
+                    netstat -tulpn | grep nginx
+                fi
+                return 0
             else
                 echo -e "${RED}启动失败${NC}"
+                return 1
             fi
         fi
     else
         if nginx; then
             echo -e "${GREEN}Nginx 启动成功${NC}"
             echo -e "${YELLOW}当前监听端口:${NC}"
-            netstat -tulpn | grep nginx || ss -tulpn | grep nginx
+            if command -v ss >/dev/null; then
+                ss -tulpn | grep nginx
+            else
+                netstat -tulpn | grep nginx
+            fi
+            return 0
         else
             echo -e "${RED}启动失败${NC}"
+            return 1
         fi
+    fi
+}
+
+# 测试 Nginx 配置
+test_nginx_config() {
+    echo -e "${YELLOW}>>> 测试 Nginx 配置...${NC}"
+    nginx -t 2>&1
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}配置测试通过${NC}"
+        return 0
+    else
+        echo -e "${RED}配置测试失败${NC}"
+        return 1
     fi
 }
 
@@ -225,12 +264,23 @@ add_proxy() {
     CONF_FILE="$NGINX_CONF_DIR/$FULL_DOMAIN.conf"
     
     # 检查 IPv6 支持
-    HAS_IPV6=$(check_ipv6 && echo "yes" || echo "no")
+    if check_ipv6; then
+        HAS_IPV6="yes"
+        echo -e "${GREEN}检测到 IPv6 支持${NC}"
+    else
+        HAS_IPV6="no"
+        echo -e "${YELLOW}未检测到 IPv6 支持${NC}"
+    fi
     
-    cat > "$CONF_FILE" <<EOF
+    # 创建配置文件
+    echo -e "${YELLOW}创建配置文件: $CONF_FILE${NC}"
+    
+    if [ "$HAS_IPV6" = "yes" ]; then
+        # 有 IPv6 支持的配置
+        cat > "$CONF_FILE" <<EOF
 # 反向代理: $FULL_DOMAIN -> 127.0.0.1:$PORT
 # 生成时间: $(date)
-# IPv6 支持: $HAS_IPV6
+# IPv6 支持: 已启用
 
 # HTTP 服务器 - IPv6 优先
 server {
@@ -308,6 +358,88 @@ server {
     }
 }
 EOF
+    else
+        # 无 IPv6 支持的配置
+        cat > "$CONF_FILE" <<EOF
+# 反向代理: $FULL_DOMAIN -> 127.0.0.1:$PORT
+# 生成时间: $(date)
+# IPv6 支持: 未启用
+
+# HTTP 服务器
+server {
+    listen 80;
+    server_name $FULL_DOMAIN;
+    
+    # 记录访问日志
+    access_log /var/log/nginx/${FULL_DOMAIN}_access.log;
+    error_log /var/log/nginx/${FULL_DOMAIN}_error.log;
+    
+    # 重定向到 HTTPS
+    return 301 https://\$host\$request_uri;
+}
+
+# HTTPS 服务器
+server {
+    listen 443 ssl http2;
+    server_name $FULL_DOMAIN;
+    
+    # SSL 证书
+    ssl_certificate $CERT;
+    ssl_certificate_key $KEY;
+    
+    # SSL 配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # 安全头
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # 日志
+    access_log /var/log/nginx/${FULL_DOMAIN}_ssl_access.log;
+    error_log /var/log/nginx/${FULL_DOMAIN}_ssl_error.log;
+    
+    # 反向代理配置
+    location / {
+        proxy_pass http://127.0.0.1:$PORT;
+        
+        # 基础头部
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 缓冲区
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+        
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    
+    # 禁止访问隐藏文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+}
+EOF
+    fi
     
     echo -e "${GREEN}配置文件: $CONF_FILE${NC}"
     echo -e "${YELLOW}IPv6 支持: $HAS_IPV6${NC}"
@@ -335,35 +467,56 @@ EOF
             
             echo -e "${GREEN}端口 $PORT 已锁定 (IPv6)${NC}"
         fi
+    else
+        echo "未安装 iptables，跳过防火墙配置"
     fi
     
-    # 测试并重载
-    echo -e "${YELLOW}测试配置...${NC}"
-    if nginx -t 2>/dev/null; then
-        reload_nginx
-        echo -e "${GREEN}配置成功!${NC}"
-        echo ""
-        echo -e "${GREEN}========================================${NC}"
-        echo -e "${GREEN}      IPv6 优先反向代理配置成功        ${NC}"
-        echo -e "${GREEN}========================================${NC}"
-        echo ""
-        echo "域名: $FULL_DOMAIN"
-        echo "IPv6 访问: https://[$FULL_DOMAIN] (如果支持)"
-        echo "IPv4 访问: https://$FULL_DOMAIN"
-        echo "后端: http://127.0.0.1:$PORT"
-        echo ""
-        echo -e "${YELLOW}监听配置:${NC}"
-        echo "HTTP: [::]:80 和 0.0.0.0:80"
-        echo "HTTPS: [::]:443 和 0.0.0.0:443"
-        echo ""
-        echo -e "${YELLOW}注意:${NC}"
-        echo "1. IPv6 地址需要放在方括号中访问，如: https://[2600:1f18:1234::1]"
-        echo "2. 确保 DNS 已配置 AAAA 记录指向服务器 IPv6 地址"
-        echo "3. 端口 $PORT 已被防火墙锁定，仅允许本地访问"
+    # 测试配置
+    echo -e "${YELLOW}测试 Nginx 配置...${NC}"
+    if test_nginx_config; then
+        echo -e "${GREEN}配置测试通过${NC}"
+        
+        # 重载 Nginx
+        if reload_nginx; then
+            echo -e "${GREEN}配置成功!${NC}"
+            echo ""
+            echo -e "${GREEN}========================================${NC}"
+            echo -e "${GREEN}      IPv6 优先反向代理配置成功        ${NC}"
+            echo -e "${GREEN}========================================${NC}"
+            echo ""
+            echo "域名: $FULL_DOMAIN"
+            echo "后端: http://127.0.0.1:$PORT"
+            echo "配置文件: $CONF_FILE"
+            echo ""
+            if [ "$HAS_IPV6" = "yes" ]; then
+                echo -e "${YELLOW}IPv6 配置:${NC}"
+                echo "HTTP: 监听 [::]:80 和 0.0.0.0:80"
+                echo "HTTPS: 监听 [::]:443 和 0.0.0.0:443"
+                echo ""
+                echo -e "${YELLOW}访问方式:${NC}"
+                echo "IPv6: https://[$FULL_DOMAIN]"
+                echo "IPv4: https://$FULL_DOMAIN"
+            else
+                echo -e "${YELLOW}仅支持 IPv4:${NC}"
+                echo "HTTP: 监听 0.0.0.0:80"
+                echo "HTTPS: 监听 0.0.0.0:443"
+                echo ""
+                echo -e "${YELLOW}访问方式:${NC}"
+                echo "https://$FULL_DOMAIN"
+            fi
+            echo ""
+            echo -e "${YELLOW}防火墙状态:${NC}"
+            echo "端口 $PORT: 已封锁（仅允许本地访问）"
+            return 0
+        else
+            echo -e "${RED}Nginx 重载失败${NC}"
+            rm -f "$CONF_FILE"
+            return 1
+        fi
     else
-        echo -e "${RED}配置错误，删除文件${NC}"
+        echo -e "${RED}配置测试失败，删除配置文件${NC}"
         rm -f "$CONF_FILE"
-        nginx -t 2>&1
+        return 1
     fi
 }
 
@@ -454,23 +607,17 @@ check_nginx_status() {
         
         # 检查配置
         echo -e "${YELLOW}配置检查:${NC}"
-        if nginx -t 2>/dev/null; then
-            echo -e "${GREEN}配置语法: 正确${NC}"
-        else
-            echo -e "${RED}配置语法: 错误${NC}"
-            nginx -t 2>&1
-        fi
+        test_nginx_config
         
         # 显示监听端口
         echo -e "${YELLOW}监听端口:${NC}"
-        echo "IPv4 监听:"
-        netstat -tulpn 2>/dev/null | grep nginx | grep -E ":80|:443" | grep -v ":::" || \
-        ss -tulpn 2>/dev/null | grep nginx | grep -E ":80|:443" | grep -v ":::" 
-        
-        echo ""
-        echo "IPv6 监听:"
-        netstat -tulpn 2>/dev/null | grep nginx | grep -E ":::80|:::443" || \
-        ss -tulpn 2>/dev/null | grep nginx | grep -E ":::80|:::443"
+        if command -v ss >/dev/null; then
+            echo "IPv4 和 IPv6 监听:"
+            ss -tulpn | grep nginx
+        else
+            echo "IPv4 和 IPv6 监听:"
+            netstat -tulpn | grep nginx
+        fi
     else
         echo -e "${RED}Nginx 进程: 未运行${NC}"
     fi
@@ -480,9 +627,9 @@ check_nginx_status() {
     echo -e "${YELLOW}系统 IPv6 状态:${NC}"
     if check_ipv6; then
         echo -e "${GREEN}IPv6 地址:${NC}"
-        ip -6 addr show | grep inet6 | grep -v "::1" | head -2
+        ip -6 addr show 2>/dev/null | grep inet6 | grep -v "::1" | head -2
     else
-        echo -e "${RED}系统不支持 IPv6${NC}"
+        echo -e "${RED}系统不支持 IPv6 或未启用${NC}"
     fi
 }
 
@@ -525,14 +672,7 @@ main() {
             4) reload_nginx ;;
             5) fix_nginx_now ;;
             6) check_nginx_status ;;
-            7) 
-                echo -e "${YELLOW}测试 Nginx 配置...${NC}"
-                if nginx -t 2>/dev/null; then
-                    echo -e "${GREEN}配置检查通过${NC}"
-                else
-                    nginx -t 2>&1
-                fi
-                ;;
+            7) test_nginx_config ;;
             0) 
                 echo "再见！"
                 exit 0
