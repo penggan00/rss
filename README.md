@@ -25,7 +25,7 @@ systemctl restart docker # 重启 Docker
 cd
 ~/rss
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/acme.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/https.sh)"
 ```
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
