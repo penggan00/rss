@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# ================= Alpine Nginx 反向代理管理器 =================
-# 专为 Alpine Linux 设计，简化配置
-# ==============================================================
+# ================= Alpine Nginx 反向代理管理器 (IPv6支持) =================
+# 专为 Alpine Linux 设计，支持 IPv6 优先监听
+# =========================================================================
 
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 SSL_DIR="/etc/nginx/ssl"
@@ -26,6 +26,17 @@ if [ ! -f /etc/alpine-release ]; then
     exit 1
 fi
 
+# 检查系统是否支持 IPv6
+check_ipv6() {
+    if ip -6 addr show | grep -q "inet6"; then
+        echo -e "${GREEN}检测到 IPv6 支持${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}未检测到 IPv6 支持${NC}"
+        return 1
+    fi
+}
+
 # 修复 Nginx 配置（强制）
 fix_nginx_now() {
     echo -e "${YELLOW}>>> 修复 Nginx 配置...${NC}"
@@ -33,31 +44,65 @@ fix_nginx_now() {
     # 确保目录存在
     mkdir -p "$NGINX_CONF_DIR" "$SSL_DIR" /var/log/nginx /run/nginx
     
-    # 创建极简 Nginx 配置
-    cat > /etc/nginx/nginx.conf <<'EOF'
+    # 检查 IPv6 支持
+    HAS_IPV6=$(check_ipv6 && echo "yes" || echo "no")
+    
+    # 创建 Nginx 配置（IPv6 优先）
+    cat > /etc/nginx/nginx.conf <<EOF
 user nginx nginx;
 worker_processes auto;
 pid /run/nginx.pid;
 
 events {
     worker_connections 1024;
+    multi_accept on;
+    use epoll;
 }
 
 http {
+    # 基础设置
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
-    sendfile on;
-    keepalive_timeout 65;
-    client_max_body_size 100m;
     
+    # 日志
     access_log /var/log/nginx/access.log;
     error_log /var/log/nginx/error.log;
     
-    include /etc/nginx/conf.d/*.conf;
+    # 性能优化
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
     
+    # 限制
+    client_max_body_size 100m;
+    client_body_timeout 12;
+    client_header_timeout 12;
+    send_timeout 10;
+    
+    # 包含其他配置
+    include $NGINX_CONF_DIR/*.conf;
+    
+    # 默认服务器 - 禁止直接IP访问
+    # IPv6 优先监听
     server {
+        listen [::]:80 default_server ipv6only=on;
         listen 80 default_server;
         server_name _;
+        
+        return 444;
+    }
+    
+    server {
+        listen [::]:443 ssl default_server ipv6only=on;
+        listen 443 ssl default_server;
+        server_name _;
+        
+        ssl_certificate $SSL_DIR/fallback.crt;
+        ssl_certificate_key $SSL_DIR/fallback.key;
+        
         return 444;
     }
 }
@@ -65,15 +110,23 @@ EOF
     
     # 创建 fallback 证书
     if [ ! -f "$SSL_DIR/fallback.key" ]; then
+        echo -e "${YELLOW}生成默认证书...${NC}"
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "$SSL_DIR/fallback.key" \
             -out "$SSL_DIR/fallback.crt" \
             -subj "/CN=Invalid" 2>/dev/null
+        chmod 600 "$SSL_DIR/fallback.key"
     fi
     
     # 测试配置
+    echo -e "${YELLOW}测试 Nginx 配置...${NC}"
     if nginx -t 2>/dev/null; then
         echo -e "${GREEN}Nginx 配置正常${NC}"
+        
+        # 显示监听信息
+        echo -e "${YELLOW}Nginx 监听配置:${NC}"
+        echo "IPv6 优先: 启用"
+        echo "默认服务器: 已配置 IPv6 和 IPv4"
     else
         echo -e "${RED}Nginx 配置错误:${NC}"
         nginx -t 2>&1
@@ -82,23 +135,42 @@ EOF
 
 # 启动/重载 Nginx
 reload_nginx() {
+    echo -e "${YELLOW}>>> 重载 Nginx...${NC}"
+    
     if pgrep nginx >/dev/null; then
         if nginx -s reload 2>/dev/null; then
             echo -e "${GREEN}Nginx 重载成功${NC}"
+            
+            # 显示监听状态
+            sleep 1
+            echo -e "${YELLOW}当前监听端口:${NC}"
+            netstat -tulpn | grep nginx || ss -tulpn | grep nginx
         else
             echo -e "${RED}重载失败，尝试重启...${NC}"
             pkill nginx 2>/dev/null
             sleep 1
-            nginx && echo -e "${GREEN}Nginx 启动成功${NC}" || echo -e "${RED}启动失败${NC}"
+            if nginx; then
+                echo -e "${GREEN}Nginx 启动成功${NC}"
+                echo -e "${YELLOW}当前监听端口:${NC}"
+                netstat -tulpn | grep nginx || ss -tulpn | grep nginx
+            else
+                echo -e "${RED}启动失败${NC}"
+            fi
         fi
     else
-        nginx && echo -e "${GREEN}Nginx 启动成功${NC}" || echo -e "${RED}启动失败${NC}"
+        if nginx; then
+            echo -e "${GREEN}Nginx 启动成功${NC}"
+            echo -e "${YELLOW}当前监听端口:${NC}"
+            netstat -tulpn | grep nginx || ss -tulpn | grep nginx
+        else
+            echo -e "${RED}启动失败${NC}"
+        fi
     fi
 }
 
-# 添加反向代理
+# 添加反向代理（IPv6支持）
 add_proxy() {
-    echo -e "${YELLOW}=== 添加反向代理 ===${NC}"
+    echo -e "${YELLOW}=== 添加反向代理 (IPv6支持) ===${NC}"
     
     # 检查证书
     if [ ! -f "$DOMAIN_LIST" ] || [ ! -s "$DOMAIN_LIST" ]; then
@@ -152,57 +224,142 @@ add_proxy() {
     FULL_DOMAIN="$PREFIX.$DOMAIN"
     CONF_FILE="$NGINX_CONF_DIR/$FULL_DOMAIN.conf"
     
+    # 检查 IPv6 支持
+    HAS_IPV6=$(check_ipv6 && echo "yes" || echo "no")
+    
     cat > "$CONF_FILE" <<EOF
 # 反向代理: $FULL_DOMAIN -> 127.0.0.1:$PORT
 # 生成时间: $(date)
+# IPv6 支持: $HAS_IPV6
 
+# HTTP 服务器 - IPv6 优先
 server {
+    listen [::]:80 ipv6only=on;
     listen 80;
     server_name $FULL_DOMAIN;
+    
+    # 记录访问日志
+    access_log /var/log/nginx/${FULL_DOMAIN}_access.log;
+    error_log /var/log/nginx/${FULL_DOMAIN}_error.log;
+    
+    # 重定向到 HTTPS
     return 301 https://\$host\$request_uri;
 }
 
+# HTTPS 服务器 - IPv6 优先
 server {
-    listen 443 ssl;
+    listen [::]:443 ssl http2 ipv6only=on;
+    listen 443 ssl http2;
     server_name $FULL_DOMAIN;
     
+    # SSL 证书
     ssl_certificate $CERT;
     ssl_certificate_key $KEY;
-    ssl_protocols TLSv1.2 TLSv1.3;
     
+    # SSL 配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # 安全头
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # 日志
+    access_log /var/log/nginx/${FULL_DOMAIN}_ssl_access.log;
+    error_log /var/log/nginx/${FULL_DOMAIN}_ssl_error.log;
+    
+    # 反向代理配置
     location / {
         proxy_pass http://127.0.0.1:$PORT;
+        
+        # 基础头部
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
         
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 缓冲区
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+        
+        # WebSocket 支持
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
+    }
+    
+    # 禁止访问隐藏文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
     }
 }
 EOF
     
     echo -e "${GREEN}配置文件: $CONF_FILE${NC}"
+    echo -e "${YELLOW}IPv6 支持: $HAS_IPV6${NC}"
     
     # 配置防火墙
     echo -e "${YELLOW}配置防火墙...${NC}"
     if command -v iptables &>/dev/null; then
+        # 清理旧规则
         iptables -D INPUT -p tcp --dport $PORT -j DROP 2>/dev/null
         iptables -D INPUT -s 127.0.0.1 -p tcp --dport $PORT -j ACCEPT 2>/dev/null
         
+        # 添加新规则
         iptables -I INPUT -p tcp --dport $PORT -j DROP
         iptables -I INPUT -s 127.0.0.1 -p tcp --dport $PORT -j ACCEPT
-        echo -e "${GREEN}端口 $PORT 已锁定${NC}"
+        
+        echo -e "${GREEN}端口 $PORT 已锁定 (IPv4)${NC}"
+        
+        # 如果支持 IPv6，也配置 IPv6 防火墙
+        if [ "$HAS_IPV6" = "yes" ] && command -v ip6tables &>/dev/null; then
+            ip6tables -D INPUT -p tcp --dport $PORT -j DROP 2>/dev/null
+            ip6tables -D INPUT -s ::1 -p tcp --dport $PORT -j ACCEPT 2>/dev/null
+            
+            ip6tables -I INPUT -p tcp --dport $PORT -j DROP
+            ip6tables -I INPUT -s ::1 -p tcp --dport $PORT -j ACCEPT
+            
+            echo -e "${GREEN}端口 $PORT 已锁定 (IPv6)${NC}"
+        fi
     fi
     
     # 测试并重载
+    echo -e "${YELLOW}测试配置...${NC}"
     if nginx -t 2>/dev/null; then
         reload_nginx
         echo -e "${GREEN}配置成功!${NC}"
-        echo "访问: https://$FULL_DOMAIN"
+        echo ""
+        echo -e "${GREEN}========================================${NC}"
+        echo -e "${GREEN}      IPv6 优先反向代理配置成功        ${NC}"
+        echo -e "${GREEN}========================================${NC}"
+        echo ""
+        echo "域名: $FULL_DOMAIN"
+        echo "IPv6 访问: https://[$FULL_DOMAIN] (如果支持)"
+        echo "IPv4 访问: https://$FULL_DOMAIN"
         echo "后端: http://127.0.0.1:$PORT"
+        echo ""
+        echo -e "${YELLOW}监听配置:${NC}"
+        echo "HTTP: [::]:80 和 0.0.0.0:80"
+        echo "HTTPS: [::]:443 和 0.0.0.0:443"
+        echo ""
+        echo -e "${YELLOW}注意:${NC}"
+        echo "1. IPv6 地址需要放在方括号中访问，如: https://[2600:1f18:1234::1]"
+        echo "2. 确保 DNS 已配置 AAAA 记录指向服务器 IPv6 地址"
+        echo "3. 端口 $PORT 已被防火墙锁定，仅允许本地访问"
     else
         echo -e "${RED}配置错误，删除文件${NC}"
         rm -f "$CONF_FILE"
@@ -220,10 +377,21 @@ list_configs() {
     fi
     
     for conf in "$NGINX_CONF_DIR"/*.conf; do
+        CONF_NAME=$(basename "$conf")
+        DOMAIN_NAME=$(grep 'server_name' "$conf" | head -1 | awk '{print $2}' | sed 's/;//')
+        PORT=$(grep 'proxy_pass' "$conf" | grep -o '[0-9]\+' | head -1)
+        
         echo ""
-        echo "文件: $(basename "$conf")"
-        echo "域名: $(grep 'server_name' "$conf" | head -1 | awk '{print $2}' | sed 's/;//')"
-        echo "后端: $(grep 'proxy_pass' "$conf" | head -1 | awk '{print $2}' | sed 's/;//')"
+        echo "文件: $CONF_NAME"
+        echo "域名: $DOMAIN_NAME"
+        echo "后端端口: $PORT"
+        
+        # 检查 IPv6 配置
+        if grep -q "listen \[::\]" "$conf"; then
+            echo "IPv6: ${GREEN}已启用${NC}"
+        else
+            echo "IPv6: ${RED}未启用${NC}"
+        fi
     done
 }
 
@@ -253,9 +421,19 @@ delete_config() {
             rm "$CONF_FILE"
             echo -e "${GREEN}配置已删除${NC}"
             
+            # 解锁防火墙
             if [ -n "$PORT" ] && command -v iptables &>/dev/null; then
+                echo -e "${YELLOW}解锁端口 $PORT ...${NC}"
+                # IPv4
                 iptables -D INPUT -p tcp --dport $PORT -j DROP 2>/dev/null
                 iptables -D INPUT -s 127.0.0.1 -p tcp --dport $PORT -j ACCEPT 2>/dev/null
+                
+                # IPv6
+                if command -v ip6tables &>/dev/null; then
+                    ip6tables -D INPUT -p tcp --dport $PORT -j DROP 2>/dev/null
+                    ip6tables -D INPUT -s ::1 -p tcp --dport $PORT -j ACCEPT 2>/dev/null
+                fi
+                
                 echo "防火墙规则已清除"
             fi
             
@@ -266,19 +444,75 @@ delete_config() {
     fi
 }
 
+# 检查 Nginx 状态
+check_nginx_status() {
+    echo -e "${YELLOW}=== Nginx 状态检查 ===${NC}"
+    
+    # 检查进程
+    if pgrep nginx >/dev/null; then
+        echo -e "${GREEN}Nginx 进程: 运行中${NC}"
+        
+        # 检查配置
+        echo -e "${YELLOW}配置检查:${NC}"
+        if nginx -t 2>/dev/null; then
+            echo -e "${GREEN}配置语法: 正确${NC}"
+        else
+            echo -e "${RED}配置语法: 错误${NC}"
+            nginx -t 2>&1
+        fi
+        
+        # 显示监听端口
+        echo -e "${YELLOW}监听端口:${NC}"
+        echo "IPv4 监听:"
+        netstat -tulpn 2>/dev/null | grep nginx | grep -E ":80|:443" | grep -v ":::" || \
+        ss -tulpn 2>/dev/null | grep nginx | grep -E ":80|:443" | grep -v ":::" 
+        
+        echo ""
+        echo "IPv6 监听:"
+        netstat -tulpn 2>/dev/null | grep nginx | grep -E ":::80|:::443" || \
+        ss -tulpn 2>/dev/null | grep nginx | grep -E ":::80|:::443"
+    else
+        echo -e "${RED}Nginx 进程: 未运行${NC}"
+    fi
+    
+    # 检查 IPv6 支持
+    echo ""
+    echo -e "${YELLOW}系统 IPv6 状态:${NC}"
+    if check_ipv6; then
+        echo -e "${GREEN}IPv6 地址:${NC}"
+        ip -6 addr show | grep inet6 | grep -v "::1" | head -2
+    else
+        echo -e "${RED}系统不支持 IPv6${NC}"
+    fi
+}
+
 # 主菜单
 main() {
+    echo -e "${YELLOW}=== Alpine Nginx 管理器 (IPv6 支持) ==="
+    echo "检测到系统: Alpine Linux"
+    
+    # 检查 IPv6
+    if check_ipv6; then
+        echo -e "${GREEN}IPv6 支持: 已启用${NC}"
+    else
+        echo -e "${YELLOW}IPv6 支持: 未检测到${NC}"
+    fi
+    
+    echo "=====================================${NC}"
+    
     # 先修复配置
     fix_nginx_now
     
     while true; do
         echo ""
         echo -e "${YELLOW}===== Alpine Nginx 管理器 ====="
-        echo "1. 添加反向代理"
+        echo "1. 添加反向代理 (IPv6优先)"
         echo "2. 查看配置"
         echo "3. 删除配置"
         echo "4. 重载 Nginx"
         echo "5. 修复 Nginx 配置"
+        echo "6. 检查 Nginx 状态"
+        echo "7. 测试 Nginx 配置"
         echo "0. 退出"
         echo -e "==================================${NC}"
         
@@ -290,7 +524,19 @@ main() {
             3) delete_config ;;
             4) reload_nginx ;;
             5) fix_nginx_now ;;
-            0) echo "再见！"; exit 0 ;;
+            6) check_nginx_status ;;
+            7) 
+                echo -e "${YELLOW}测试 Nginx 配置...${NC}"
+                if nginx -t 2>/dev/null; then
+                    echo -e "${GREEN}配置检查通过${NC}"
+                else
+                    nginx -t 2>&1
+                fi
+                ;;
+            0) 
+                echo "再见！"
+                exit 0
+                ;;
             *) echo -e "${RED}无效选项${NC}" ;;
         esac
     done
