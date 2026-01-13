@@ -31,7 +31,7 @@ init_dirs() {
     mkdir -p "/etc/nginx/ssl/private"
 }
 
-# 安装 acme.sh
+# 安装和配置 acme.sh
 install_acme() {
     if [ ! -d "$ACME_DIR" ]; then
         echo -e "${YELLOW}>>> 正在安装 acme.sh...${NC}"
@@ -47,6 +47,15 @@ install_acme() {
         fi
         
         ./acme.sh --install --home "$ACME_DIR" --accountemail "$LE_EMAIL"
+        
+        # 设置默认使用 Let's Encrypt，避免 ZeroSSL 需要额外注册
+        ./acme.sh --set-default-ca --server letsencrypt
+        
+        cd "$CERT_HOME"
+    else
+        # 确保使用 Let's Encrypt
+        cd "$ACME_DIR"
+        ./acme.sh --set-default-ca --server letsencrypt 2>/dev/null || true
         cd "$CERT_HOME"
     fi
 }
@@ -104,8 +113,8 @@ issue_cert() {
     
     echo -e "${YELLOW}>>> 开始申请泛域名证书 *.$DOMAIN ...${NC}"
     
-    # 使用调试模式运行
-    "$ACME_DIR"/acme.sh --issue --dns dns_cf \
+    # 申请证书（强制使用 Let's Encrypt）
+    "$ACME_DIR"/acme.sh --issue --server letsencrypt --dns dns_cf \
         -d "$DOMAIN" -d "*.$DOMAIN" \
         --log "$LOG_DIR/acme-$(date +%Y%m%d-%H%M%S).log" \
         --force
@@ -138,6 +147,14 @@ issue_cert() {
         return 0
     else
         echo -e "${RED}证书申请失败，请查看日志: $LOG_DIR/${NC}"
+        
+        # 提供调试建议
+        echo -e "${YELLOW}调试建议:${NC}"
+        echo "1. 检查 Cloudflare API Token 权限"
+        echo "2. 手动测试:"
+        echo "   export CF_Token=\"$CF_TOKEN\""
+        echo "   $ACME_DIR/acme.sh --issue --server letsencrypt --dns dns_cf -d \"$DOMAIN\" -d \"*.$DOMAIN\" --debug"
+        
         return 1
     fi
 }
@@ -179,7 +196,7 @@ renew_single_cert() {
     export CF_Token="$CF_TOKEN"
     
     echo -e "${YELLOW}正在更新 $DOMAIN ...${NC}"
-    "$ACME_DIR"/acme.sh --renew -d "$DOMAIN" --force
+    "$ACME_DIR"/acme.sh --renew -d "$DOMAIN" --force --server letsencrypt
 }
 
 # 查看证书
@@ -203,6 +220,16 @@ list_certs() {
         if [ -f "$CERT_FILE" ]; then
             echo "证书文件: $CERT_FILE"
             echo "有效期: $(openssl x509 -in "$CERT_FILE" -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2)"
+            
+            # 检查证书签发者
+            ISSUER=$(openssl x509 -in "$CERT_FILE" -noout -issuer 2>/dev/null)
+            if echo "$ISSUER" | grep -q "ZeroSSL"; then
+                echo "签发者: ${YELLOW}ZeroSSL${NC}"
+            elif echo "$ISSUER" | grep -q "Let's Encrypt"; then
+                echo "签发者: ${GREEN}Let's Encrypt${NC}"
+            else
+                echo "签发者: $ISSUER"
+            fi
         else
             echo "${RED}证书文件不存在${NC}"
         fi
@@ -212,6 +239,40 @@ list_certs() {
             echo "配置: $ENV_FILE"
         fi
     done < "$CONFIG_DIR/domains.list"
+}
+
+# 切换 CA 提供商
+switch_ca() {
+    echo -e "${YELLOW}=== 切换证书颁发机构 ===${NC}"
+    echo "1. Let's Encrypt (推荐，无需额外注册)"
+    echo "2. ZeroSSL (需要注册邮箱)"
+    echo "3. BuyPass (需要注册)"
+    echo "4. Google Public CA (需要注册)"
+    
+    read -p "请选择: " CA_OPT
+    
+    case $CA_OPT in
+        1)
+            "$ACME_DIR"/acme.sh --set-default-ca --server letsencrypt
+            echo -e "${GREEN}已切换到 Let's Encrypt${NC}"
+            ;;
+        2)
+            echo -e "${YELLOW}注意: ZeroSSL 需要先注册账户${NC}"
+            "$ACME_DIR"/acme.sh --set-default-ca --server zerossl
+            echo "请运行: $ACME_DIR/acme.sh --register-account -m 你的邮箱"
+            ;;
+        3)
+            "$ACME_DIR"/acme.sh --set-default-ca --server buypass
+            echo -e "${GREEN}已切换到 BuyPass${NC}"
+            ;;
+        4)
+            "$ACME_DIR"/acme.sh --set-default-ca --server google
+            echo -e "${GREEN}已切换到 Google Public CA${NC}"
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            ;;
+    esac
 }
 
 # 主菜单
@@ -226,6 +287,7 @@ main_menu() {
         echo "2. 更新证书"
         echo "3. 查看证书"
         echo "4. 设置通知邮箱"
+        echo "5. 切换 CA 提供商"
         echo "0. 退出"
         
         read -p "请选择: " OPT
@@ -238,7 +300,10 @@ main_menu() {
                 read -p "请输入新邮箱: " NEW_EMAIL
                 echo "$NEW_EMAIL" > "$CONFIG_DIR/email"
                 echo -e "${GREEN}邮箱已更新${NC}"
+                # 更新 acme.sh 账户邮箱
+                "$ACME_DIR"/acme.sh --update-account --accountemail "$NEW_EMAIL"
                 ;;
+            5) switch_ca ;;
             0) exit 0 ;;
             *) echo -e "${RED}无效选项${NC}" ;;
         esac
