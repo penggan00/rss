@@ -1,337 +1,490 @@
 #!/bin/bash
-set -euo pipefail
 
-# ==================== 全局配置与颜色定义 ====================
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-ACME_DIR="${HOME}/.acme.sh"
-NGINX_CONF_DIR="/etc/nginx/conf.d"
-NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
-LISTEN_PORTS="80 443"
-DISABLE_LOGS=true
-
-# ==================== 前置函数：系统检测与工具准备 ====================
-detect_os() {
+# 系统检测
+detect_system() {
     if [ -f /etc/alpine-release ]; then
-        echo "alpine"
-    elif [ -f /etc/debian_version ] || [ -f /etc/ubuntu_version ]; then
-        echo "debian"
+        SYSTEM="alpine"
+        echo -e "${BLUE}检测到系统: Alpine Linux${NC}"
+    elif [ -f /etc/debian_version ]; then
+        SYSTEM="debian"
+        echo -e "${BLUE}检测到系统: Debian/Ubuntu${NC}"
     else
-        echo -e "${RED}>>> 错误：不支持当前操作系统，仅支持 Alpine Linux 和 Debian/Ubuntu 系列${NC}"
+        echo -e "${RED}不支持的系统！脚本仅支持Alpine和Debian系统${NC}"
         exit 1
     fi
 }
 
-install_dependencies() {
-    local OS=$(detect_os)
-    echo -e "${BLUE}>>> 正在安装系统必要依赖...${NC}"
+# 检查并清除现有Nginx
+check_nginx() {
+    echo -e "${YELLOW}>>> 检查现有Nginx安装...${NC}"
     
-    if [ "$OS" = "alpine" ]; then
-        apk update > /dev/null 2>&1
-        # 修复：移除 nginx-ssl，直接安装 nginx（内置 SSL），补充 openrc（服务管理）、sudo
-        apk add --no-cache curl sudo openssl nginx openrc
-    else
-        apt update > /dev/null 2>&1
-        apt install -y --no-install-recommends curl sudo openssl gnupg2 ca-certificates
-        if ! [ -f /etc/apt/sources.list.d/nginx.list ]; then
-            echo "deb http://nginx.org/packages/debian $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
-            curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/nginx.gpg
-            apt update > /dev/null 2>&1
-        fi
-        apt install -y --no-install-recommends nginx
-    fi
-}
-
-# ==================== 核心功能：旧版 Nginx 清理与环境初始化 ====================
-clean_old_nginx() {
-    echo -e "${YELLOW}>>> 正在清空旧版 Nginx 环境...${NC}"
-    local OS=$(detect_os)
-    
-    # 停止正在运行的 Nginx 进程（兼容 Alpine 和 Debian）
-    if pgrep nginx > /dev/null 2>&1; then
-        if [ "$OS" = "alpine" ]; then
-            sudo rc-service nginx stop > /dev/null 2>&1 || sudo pkill nginx > /dev/null 2>&1
-        else
-            sudo systemctl stop nginx > /dev/null 2>&1 || sudo pkill nginx > /dev/null 2>&1
-        fi
-    fi
-    
-    # 卸载 Nginx 程序（修复：Alpine 仅卸载 nginx，移除 nginx-ssl）
-    if [ "$OS" = "alpine" ]; then
-        apk del --purge nginx > /dev/null 2>&1 || true
-    else
-        apt remove -y --purge nginx nginx-common nginx-full > /dev/null 2>&1 || true
-        apt autoremove -y --purge > /dev/null 2>&1
-    fi
-    
-    # 删除残留配置、证书、日志目录
-    sudo rm -rf /etc/nginx \
-                /var/lib/nginx \
-                /var/log/nginx \
-                /usr/local/nginx \
-                /home/*/.acme.sh/nginx* > /dev/null 2>&1 || true
-    
-    echo -e "${GREEN}>>> 旧版 Nginx 清理完成${NC}"
-}
-
-init_nginx_environment() {
-    clean_old_nginx
-    install_dependencies
-    
-    configure_nginx_main() {
-        echo -e "${BLUE}>>> 正在配置 Nginx 主配置文件...${NC}"
-        sudo cp "$NGINX_MAIN_CONF" "${NGINX_MAIN_CONF}.bak" > /dev/null 2>&1 || true
+    if command -v nginx &> /dev/null; then
+        echo -e "${YELLOW}检测到已安装的Nginx${NC}"
+        nginx -v
         
-        sudo tee "$NGINX_MAIN_CONF" > /dev/null << EOF
+        read -p "是否清除现有Nginx并重新安装？(y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}>>> 正在卸载Nginx...${NC}"
+            
+            if [ "$SYSTEM" = "alpine" ]; then
+                apk del nginx nginx-mod-http-* --purge 2>/dev/null
+                rm -rf /etc/nginx /var/lib/nginx /var/log/nginx
+            else
+                apt-get remove --purge nginx* -y
+                apt-get autoremove -y
+                rm -rf /etc/nginx /var/lib/nginx /var/log/nginx
+            fi
+        else
+            echo -e "${GREEN}使用现有Nginx安装${NC}"
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+# 安装Nginx（智能适配系统）
+install_nginx() {
+    echo -e "${YELLOW}>>> 安装Nginx...${NC}"
+    
+    if [ "$SYSTEM" = "alpine" ]; then
+        # Alpine安装
+        echo -e "${BLUE}正在更新Alpine软件包...${NC}"
+        apk update
+        
+        echo -e "${BLUE}安装Nginx及相关模块...${NC}"
+        apk add nginx nginx-mod-http-headers-more nginx-mod-http-lua \
+                nginx-mod-http-set-misc nginx-mod-stream
+        
+        # Alpine需要创建运行目录
+        mkdir -p /run/nginx
+        
+    else
+        # Debian/Ubuntu安装
+        echo -e "${BLUE}正在更新APT包列表...${NC}"
+        apt-get update
+        
+        echo -e "${BLUE}安装Nginx...${NC}"
+        apt-get install nginx -y
+        
+        # 安装常用模块
+        apt-get install nginx-extras -y 2>/dev/null || echo "nginx-extras不可用，使用标准模块"
+    fi
+    
+    # 验证安装
+    if command -v nginx &> /dev/null; then
+        nginx -v
+        echo -e "${GREEN}>>> Nginx安装成功${NC}"
+        return 0
+    else
+        echo -e "${RED}>>> Nginx安装失败${NC}"
+        return 1
+    fi
+}
+
+# 配置Nginx基础设置
+configure_nginx() {
+    echo -e "${YELLOW}>>> 配置Nginx...${NC}"
+    
+    # 备份原配置
+    if [ -f /etc/nginx/nginx.conf ]; then
+        cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup.$(date +%Y%m%d%H%M%S)
+    fi
+    
+    # 创建必要的目录结构
+    mkdir -p /etc/nginx/{sites-available,sites-enabled,ssl,conf.d}
+    mkdir -p /var/log/nginx
+    mkdir -p /var/www/html
+    
+    # 优化Nginx配置
+    cat > /etc/nginx/nginx.conf << 'EOF'
 user nginx;
 worker_processes auto;
-error_log /dev/null;
-pid /var/run/nginx.pid;
+pid /run/nginx/nginx.pid;
 
 events {
-    worker_connections 10240;
-    use epoll;
+    worker_connections 1024;
     multi_accept on;
+    use epoll;
 }
 
 http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    access_log /dev/null;
-    log_not_found off;
-    client_body_buffer_size 128k;
-    client_header_buffer_size 1k;
-    large_client_header_buffers 4 4k;
-
-    keepalive_timeout 65;
-    keepalive_requests 1000;
-    tcp_nodelay on;
+    # 基础设置
+    sendfile on;
     tcp_nopush on;
-
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+    
+    # MIME类型
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    
+    # 日志格式
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+    
+    access_log /var/log/nginx/access.log main;
+    error_log /var/log/nginx/error.log warn;
+    
+    # Gzip压缩
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
-    gzip_proxied any;
-    gzip_types text/plain text/css text/javascript application/json application/javascript application/xml+rss application/xhtml+xml;
-    gzip_comp_level 6;
-
-    ipv6only off;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/javascript application/xml+rss 
+               application/json image/svg+xml;
+    
+    # 限制
+    client_max_body_size 100M;
+    client_body_timeout 12;
+    client_header_timeout 12;
+    reset_timedout_connection on;
+    
+    # 包含其他配置
     include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
 }
 EOF
-    }
     
-    configure_nginx_main
+    # 创建默认页面
+    cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nginx Proxy Ready</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        h1 { color: #333; }
+        .status { color: green; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Nginx反向代理已就绪</h1>
+    <p class="status">状态: 运行正常</p>
+    <p>服务器时间: <span id="datetime"></span></p>
+    <script>
+        document.getElementById('datetime').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>
+EOF
     
-    # 创建必要目录并设置权限
-    sudo mkdir -p "$NGINX_CONF_DIR" \
-                 "/etc/nginx/ssl/certs" \
-                 "/etc/nginx/ssl/private" \
-                 "/var/run/nginx" \
-                 "/var/lib/nginx/tmp" > /dev/null 2>&1
-    sudo chown -R nginx:nginx /var/run/nginx /var/lib/nginx /etc/nginx/ssl > /dev/null 2>&1
-    sudo chmod 700 /etc/nginx/ssl/private > /dev/null 2>&1
+    echo -e "${GREEN}>>> Nginx基础配置完成${NC}"
+}
+
+# 设置开机自启
+enable_autostart() {
+    echo -e "${YELLOW}>>> 设置Nginx开机自启...${NC}"
     
-    # 配置 Nginx 自启并启动服务（兼容 Alpine openrc 和 Debian systemd）
-    echo -e "${BLUE}>>> 正在配置 Nginx 开机自启并启动服务...${NC}"
-    local OS=$(detect_os)
-    if [ "$OS" = "alpine" ]; then
-        # Alpine：使用 openrc 配置自启并启动
-        sudo rc-update add nginx default > /dev/null 2>&1
-        sudo rc-service nginx start > /dev/null 2>&1
+    if [ "$SYSTEM" = "alpine" ]; then
+        # Alpine使用openrc
+        rc-update add nginx default 2>/dev/null
+        rc-service nginx start
     else
-        # Debian：使用 systemctl 配置自启并启动
-        sudo systemctl enable nginx > /dev/null 2>&1
-        sudo systemctl start nginx > /dev/null 2>&1
+        # Debian使用systemd
+        systemctl enable nginx
+        systemctl start nginx
     fi
     
-    # 验证 Nginx 是否启动成功
-    if ! pgrep nginx > /dev/null 2>&1; then
-        echo -e "${RED}>>> 错误：Nginx 启动失败，请检查配置${NC}"
-        exit 1
+    # 检查运行状态
+    if pgrep nginx > /dev/null; then
+        echo -e "${GREEN}>>> Nginx已启动并设置开机自启${NC}"
+    else
+        echo -e "${YELLOW}>>> Nginx未运行，尝试手动启动...${NC}"
+        nginx
     fi
-    
-    echo -e "${GREEN}>>> Nginx 新环境初始化完成，服务已启动并设置开机自启${NC}"
 }
 
-# ==================== 核心功能：证书安装（沿用原逻辑优化） ====================
-install_certificate() {
-    local DOMAIN=$1
-    if [ -z "$DOMAIN" ] || ! [ -d "$ACME_DIR" ]; then
-        echo -e "${RED}>>> 错误：子域名为空或 acme.sh 目录不存在${NC}"
-        exit 1
-    fi
-    
-    echo -e "${YELLOW}>>> 安装证书到 Nginx...${NC}"
-    
-    mkdir -p "/etc/nginx/ssl/certs/$DOMAIN" \
-             "/etc/nginx/ssl/private/$DOMAIN" \
-             "/etc/nginx/ssl"
-    
-    cd "$ACME_DIR" || { echo -e "${RED}>>> 错误：无法进入 acme.sh 目录${NC}"; exit 1; }
-    
-    ./acme.sh --install-cert -d "$DOMAIN" \
-        --key-file "/etc/nginx/ssl/private/$DOMAIN/key.pem" \
-        --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
-        --cert-file "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" \
-        --ca-file "/etc/nginx/ssl/certs/$DOMAIN/ca.pem" \
-        --force \
-        --reloadcmd "if [ \$(detect_os) = 'alpine' ]; then rc-service nginx reload; else systemctl reload nginx; fi"
-    
-    ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/nginx/ssl/$DOMAIN.crt"
-    ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/nginx/ssl/$DOMAIN.key"
-    
-    if ! [ -f "/etc/nginx/ssl/$DOMAIN.crt" ] || ! [ -f "/etc/nginx/ssl/$DOMAIN.key" ]; then
-        echo -e "${RED}>>> 错误：证书安装失败，文件不存在${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}>>> 证书安装完成${NC}"
-}
-
-# ==================== 核心功能：反代配置生成（支持 WebSocket 可选） ====================
+# 创建反向代理配置
 create_reverse_proxy() {
-    echo -e "${BLUE}====================================${NC}"
-    read -p "请输入你的子域名（例如：demo.example.com）：" DOMAIN
-    read -p "请输入被反代的目标端口（例如：8080）：" TARGET_PORT
-    read -p "是否开启 WebSocket 1.1 支持？（y/n，默认：n）：" WS_ENABLE
+    echo -e "${YELLOW}>>> 创建反向代理配置${NC}"
     
-    if [ -z "$DOMAIN" ] || [ -z "$TARGET_PORT" ] || ! [[ "$TARGET_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$TARGET_PORT" -gt 65535 ]; then
-        echo -e "${RED}>>> 错误：子域名或目标端口输入无效（端口需为 1-65535 之间的数字）${NC}"
-        exit 1
+    # 获取用户输入
+    read -p "请输入子域名 (例如: api.example.com): " SUBDOMAIN
+    read -p "请输入后端服务端口 (例如: 3000): " BACKEND_PORT
+    read -p "是否启用WebSocket支持？(y/n): " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] && WEBSOCKET=true || WEBSOCKET=false
+    
+    # 验证输入
+    if [ -z "$SUBDOMAIN" ] || [ -z "$BACKEND_PORT" ]; then
+        echo -e "${RED}错误: 子域名和端口不能为空${NC}"
+        return 1
     fi
-    WS_ENABLE=${WS_ENABLE:-n}
     
-    install_certificate "$DOMAIN"
+    # 创建SSL证书路径（假设证书已存在）
+    SSL_CERT="/etc/nginx/ssl/certs/${SUBDOMAIN}/fullchain.pem"
+    SSL_KEY="/etc/nginx/ssl/private/${SUBDOMAIN}/key.pem"
     
-    local PROXY_CONF="${NGINX_CONF_DIR}/${DOMAIN}.conf"
-    echo -e "${BLUE}>>> 正在生成 ${DOMAIN} 的反代配置文件...${NC}"
+    # 检查证书是否存在
+    if [ ! -f "$SSL_CERT" ] || [ ! -f "$SSL_KEY" ]; then
+        echo -e "${YELLOW}警告: 未找到SSL证书，将使用HTTP模式${NC}"
+        echo -e "${YELLOW}证书路径应为:${NC}"
+        echo -e "证书: $SSL_CERT"
+        echo -e "私钥: $SSL_KEY"
+        USE_SSL=false
+    else
+        USE_SSL=true
+        echo -e "${GREEN}找到SSL证书${NC}"
+    fi
     
-    sudo tee "$PROXY_CONF" > /dev/null << EOF
-# ${DOMAIN} 反代配置（自动生成，禁用日志）
+    # 生成Nginx配置
+    CONFIG_FILE="/etc/nginx/sites-available/${SUBDOMAIN}.conf"
+    
+    cat > "$CONFIG_FILE" << EOF
+# 反向代理配置: $SUBDOMAIN -> 127.0.0.1:$BACKEND_PORT
+# 生成时间: $(date)
+
+# HTTP重定向到HTTPS（如果启用SSL）
 server {
     listen 80;
     listen [::]:80;
-    server_name $DOMAIN;
+    server_name $SUBDOMAIN;
     
-    return 301 https://\$host\$request_uri;
-    access_log /dev/null;
-    error_log /dev/null;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $DOMAIN;
-
-    ssl_certificate /etc/nginx/ssl/$DOMAIN.crt;
-    ssl_certificate_key /etc/nginx/ssl/$DOMAIN.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 1.1.1.1 8.8.8.8 valid=300s;
-    resolver_timeout 5s;
-
-    access_log /dev/null;
-    error_log /dev/null;
-
-    location / {
-        proxy_pass http://127.0.0.1:$TARGET_PORT;
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # 强制HTTPS（如果启用SSL）
+    $([ "$USE_SSL" = true ] && echo 'return 301 https://\$server_name\$request_uri;')
+    
+    # 如果未启用SSL，直接代理
+    $([ "$USE_SSL" != true ] && echo "location / {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Port \$server_port;
-
-        proxy_connect_timeout 30s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-
-        proxy_buffering on;
-        proxy_buffer_size 16k;
-        proxy_buffers 4 64k;
-        proxy_busy_buffers_size 128k;
-EOF
-
-    if [ "$WS_ENABLE" = "y" ] || [ "$WS_ENABLE" = "Y" ]; then
-        echo -e "${YELLOW}>>> 已开启 WebSocket 1.1 支持${NC}"
-        sudo tee -a "$PROXY_CONF" > /dev/null << EOF
-        # WebSocket 1.1 支持配置（RFC 6455 标准）
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 86400s;
-EOF
-    fi
-
-    sudo tee -a "$PROXY_CONF" > /dev/null << EOF
-    }
+    }")
 }
 EOF
+    
+    # 如果启用SSL，添加HTTPS配置块
+    if [ "$USE_SSL" = true ]; then
+        cat >> "$CONFIG_FILE" << EOF
 
-    echo -e "${BLUE}>>> 正在验证 Nginx 配置语法...${NC}"
-    if ! sudo nginx -t > /dev/null 2>&1; then
-        echo -e "${RED}>>> 错误：Nginx 配置语法有误，请检查${NC}"
-        sudo rm -f "$PROXY_CONF"
+# HTTPS服务器
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $SUBDOMAIN;
+    
+    # SSL证书
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+    
+    # SSL优化
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers off;
+    
+    # 安全头
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # 代理设置
+    location / {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        # 基础代理头
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
+        
+        # 连接设置
+        proxy_buffering off;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 60s;
+        
+        # 禁用缓存（可根据需要调整）
+        proxy_no_cache 1;
+        proxy_cache_bypass 1;
+        
+        # 保持活动连接
+        proxy_set_header Connection "";
+    }
+EOF
+    
+    # 如果启用WebSocket，添加相关配置
+    if [ "$WEBSOCKET" = true ]; then
+        cat >> "$CONFIG_FILE" << EOF
+    
+    # WebSocket支持
+    location /websocket {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        # WebSocket特定头部
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        
+        # 连接超时设置
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+EOF
+    fi
+    
+    # 关闭HTTPS服务器块
+    echo "}" >> "$CONFIG_FILE"
+    
+    fi
+    
+    # 创建符号链接启用站点
+    ln -sf "$CONFIG_FILE" "/etc/nginx/sites-enabled/${SUBDOMAIN}.conf"
+    
+    echo -e "${GREEN}>>> 反向代理配置已创建:${NC}"
+    echo -e "${BLUE}配置文件:${NC} $CONFIG_FILE"
+    echo -e "${BLUE}域名:${NC} $SUBDOMAIN"
+    echo -e "${BLUE}后端端口:${NC} $BACKEND_PORT"
+    echo -e "${BLUE}SSL:${NC} $USE_SSL"
+    echo -e "${BLUE}WebSocket:${NC} $WEBSOCKET"
+}
+
+# 测试并重载Nginx
+reload_nginx() {
+    echo -e "${YELLOW}>>> 测试Nginx配置...${NC}"
+    
+    if nginx -t; then
+        echo -e "${GREEN}>>> 配置测试通过${NC}"
+        
+        echo -e "${YELLOW}>>> 重载Nginx配置...${NC}"
+        if [ "$SYSTEM" = "alpine" ]; then
+            rc-service nginx reload 2>/dev/null || nginx -s reload
+        else
+            systemctl reload nginx 2>/dev/null || nginx -s reload
+        fi
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> Nginx配置重载成功${NC}"
+            
+            # 显示配置摘要
+            echo -e "\n${BLUE}================ 配置摘要 ================${NC}"
+            echo -e "${GREEN}✅ Nginx运行状态:${NC} $(pgrep nginx > /dev/null && echo '运行中' || echo '未运行')"
+            echo -e "${GREEN}✅ 监听端口:${NC}"
+            netstat -tulpn | grep nginx | grep -E ':(80|443)' | awk '{print "  " $4}'
+            echo -e "${GREEN}✅ 启用的站点:${NC}"
+            ls -1 /etc/nginx/sites-enabled/ 2>/dev/null || echo "  无"
+            echo -e "${BLUE}========================================${NC}"
+        else
+            echo -e "${RED}>>> Nginx重载失败${NC}"
+        fi
+    else
+        echo -e "${RED}>>> Nginx配置测试失败，请检查配置${NC}"
+        return 1
+    fi
+}
+
+# 显示菜单
+show_menu() {
+    echo -e "\n${BLUE}========== Nginx智能反向代理管理 ==========${NC}"
+    echo -e "${GREEN}1.${NC} 初始化安装/重新安装Nginx"
+    echo -e "${GREEN}2.${NC} 添加新的反向代理"
+    echo -e "${GREEN}3.${NC} 重载Nginx配置"
+    echo -e "${GREEN}4.${NC} 查看Nginx状态"
+    echo -e "${GREEN}5.${NC} 查看当前配置"
+    echo -e "${GREEN}6.${NC} 备份当前配置"
+    echo -e "${GREEN}7.${NC} 退出"
+    echo -e "${BLUE}========================================${NC}"
+    echo -n "请选择操作 [1-7]: "
+}
+
+# 主函数
+main() {
+    # 检查root权限
+    if [ "$EUID" -ne 0 ]; then 
+        echo -e "${RED}请使用root权限运行此脚本${NC}"
         exit 1
     fi
     
-    # 平滑重载 Nginx（兼容 Alpine 和 Debian）
-    local OS=$(detect_os)
-    if [ "$OS" = "alpine" ]; then
-        sudo rc-service nginx reload > /dev/null 2>&1
-    else
-        sudo systemctl reload nginx > /dev/null 2>&1
-    fi
+    # 检测系统
+    detect_system
     
-    echo -e "${GREEN}>>> ${DOMAIN} 反代配置生效成功！${NC}"
-    echo -e "${GREEN}>>> 可通过 https://${DOMAIN} 访问被反代的 ${TARGET_PORT} 端口服务${NC}"
+    while true; do
+        show_menu
+        read choice
+        
+        case $choice in
+            1)
+                check_nginx
+                install_nginx
+                configure_nginx
+                enable_autostart
+                ;;
+            2)
+                create_reverse_proxy
+                reload_nginx
+                ;;
+            3)
+                reload_nginx
+                ;;
+            4)
+                echo -e "${YELLOW}>>> Nginx状态:${NC}"
+                if [ "$SYSTEM" = "alpine" ]; then
+                    rc-service nginx status 2>/dev/null || ps aux | grep nginx
+                else
+                    systemctl status nginx --no-pager -l
+                fi
+                ;;
+            5)
+                echo -e "${YELLOW}>>> 当前启用的代理配置:${NC}"
+                grep -r "server_name" /etc/nginx/sites-enabled/ 2>/dev/null || echo "未找到配置"
+                echo -e "\n${YELLOW}>>> 监听端口:${NC}"
+                netstat -tulpn | grep nginx
+                ;;
+            6)
+                BACKUP_DIR="/etc/nginx/backup_$(date +%Y%m%d_%H%M%S)"
+                mkdir -p "$BACKUP_DIR"
+                cp -r /etc/nginx/* "$BACKUP_DIR/"
+                echo -e "${GREEN}>>> 配置已备份到: $BACKUP_DIR${NC}"
+                ;;
+            7)
+                echo -e "${GREEN}退出脚本${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效选择，请重新输入${NC}"
+                ;;
+        esac
+        
+        echo -e "\n按Enter继续..."
+        read
+    done
 }
 
-# ==================== 交互菜单：主程序入口 ====================
-main_menu() {
-    clear
-    echo -e "${BLUE}====================================${NC}"
-    echo -e "${GREEN}      Nginx 智能交互反代脚本${NC}"
-    echo -e "${GREEN}      支持 Alpine/Debian 双系统${NC}"
-    echo -e "${BLUE}====================================${NC}"
-    echo "1. 初始化 Nginx 新环境（清空旧版+安装+自启）"
-    echo "2. 添加新的 HTTPS 反代配置（重载 Nginx，不中断服务）"
-    echo "3. 退出脚本"
-    echo -e "${BLUE}====================================${NC}"
-    read -p "请选择操作选项（1/2/3）：" OPTION
-    
-    case "$OPTION" in
-        1)
-            init_nginx_environment
-            ;;
-        2)
-            if ! command -v nginx > /dev/null 2>&1; then
-                echo -e "${YELLOW}>>> 未检测到 Nginx，将先初始化 Nginx 环境...${NC}"
-                init_nginx_environment
-            fi
-            create_reverse_proxy
-            ;;
-        3)
-            echo -e "${GREEN}>>> 脚本退出，感谢使用${NC}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}>>> 错误：无效选项，请重新选择${NC}"
-            sleep 2
-            main_menu
-            ;;
-    esac
-}
+# 脚本开始
+clear
+echo -e "${BLUE}========================================${NC}"
+echo -e "${GREEN}   Nginx智能反向代理配置脚本${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo -e "系统: $(uname -a)"
+echo -e "主机名: $(hostname)"
+echo -e "IP地址: $(hostname -I 2>/dev/null || ip addr show | grep -oP 'inet \K[\d.]+' | grep -v '127.0.0.1' | head -1)"
+echo -e "${BLUE}========================================${NC}"
 
-# 启动主菜单
-main_menu
+main
