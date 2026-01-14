@@ -539,7 +539,7 @@ EOF
         proxy_set_header Connection "Upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
-        prop_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         
         proxy_read_timeout 3600s;
@@ -1137,6 +1137,21 @@ EOC
         if pgrep nginx > /dev/null; then
             echo -e "${GREEN}✅ Nginx启动成功${NC}"
             
+            # 12. 配置开机自启
+            echo -e "${YELLOW}配置开机自启...${NC}"
+            
+            # Alpine系统 (OpenRC)
+            if [ -f /etc/alpine-release ]; then
+                rc-update add nginx default 2>/dev/null
+                echo -e "${GREEN}✅ 已配置Nginx开机自启 (OpenRC)${NC}"
+            # Systemd系统
+            elif command -v systemctl &> /dev/null; then
+                systemctl enable nginx 2>/dev/null
+                echo -e "${GREEN}✅ 已配置Nginx开机自启 (Systemd)${NC}"
+            else
+                echo -e "${YELLOW}⚠️  无法自动配置开机自启，请手动配置${NC}"
+            fi
+            
             # 显示状态
             echo -e "${YELLOW}运行状态：${NC}"
             echo "进程："
@@ -1203,6 +1218,12 @@ main() {
         echo
         if [[ $choice =~ ^[Yy]$ ]]; then
             apk update && apk add nginx
+            
+            # 安装后配置开机自启
+            if [ -f /etc/alpine-release ]; then
+                rc-update add nginx default 2>/dev/null
+                echo -e "${GREEN}✅ 已配置Nginx开机自启${NC}"
+            fi
         else
             exit 1
         fi
@@ -1255,6 +1276,7 @@ main() {
                 echo -e "  1. 停止并卸载当前Nginx"
                 echo -e "  2. 清理所有配置文件"
                 echo -e "  3. 重新安装并配置Nginx"
+                echo -e "  4. 自动配置开机自启"
                 echo -ne "${YELLOW}继续？${NC} (y/n): "
                 read -n 1 confirm
                 echo
