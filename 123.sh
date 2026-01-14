@@ -1,292 +1,163 @@
 #!/usr/bin/env bash
-# fix-nginx-log-dirs.sh
-# 一键修复 nginx 启动时因日志/运行目录不存在导致的错误（Alpine/Debian 兼容）
 #
-# 用法:
-#   sudo bash fix-nginx-log-dirs.sh
-# 可选（若你想把 error_log 指向 /dev/null，请设置环境变量）:
-#   sudo REDIRECT_ERROR_TO_NULL=1 bash fix-nginx-log-dirs.sh
+# fix-nginx-upstream-address.sh
+# 目的：当 nginx 报错 "connect() failed (111: Connection refused) while connecting to upstream"
+#       常因 proxy_pass 指向与后端实际监听地址(IPv4/IPv6)不匹配导致（例如 proxy_pass http://[::1]:PORT;
+#       而后端仅监听 127.0.0.1:PORT 或反之）。本脚本自动检测后端端口的监听地址并把 nginx 配置
+#       中的 proxy_pass 规范化为最合适的后端地址（127.0.0.1 或 [::1]），然后测试并重载 nginx。
 #
+# 使用：以 root 运行
+#   sudo bash fix-nginx-upstream-address.sh
+#
+# 注意：
+# - 脚本只修改 /etc/nginx/conf.d/reverse_proxy_<DOMAIN>.conf（会备份原文件）。
+# - 如果后端为 docker 容器并被 docker-proxy 绑定到 0.0.0.0:PORT，脚本会选择 127.0.0.1:PORT（适配 host 网络与 docker-proxy）。
+# - 执行后会自动运行 `nginx -t` 并尝试重载（rc-service systemctl nginx -s reload 三种方式）。
+# - 若自动修复失败，会打印诊断信息供人工处理。
+#
+
 set -euo pipefail
 IFS=$'\n\t'
 
-TIMESTAMP="$(date +%Y%m%d%H%M%S)"
-NGINX_CONF="/etc/nginx/nginx.conf"
-BACKUP_DIR="/root/nginx_fix_backups_${TIMESTAMP}"
-REDIRECT_ERROR_TO_NULL="${REDIRECT_ERROR_TO_NULL:-0}"
+GREEN="\033[1;32m"
+YELLOW="\033[1;33m"
+RED="\033[1;31m"
+NC="\033[0m"
+info(){ echo -e "${GREEN}$*${NC}"; }
+warn(){ echo -e "${YELLOW}$*${NC}"; }
+err(){ echo -e "${RED}$*${NC}"; }
 
-# Ensure running as root
-if [ "$(id -u)" -ne 0 ]; then
-  echo "请以 root 用户运行此脚本。"
-  exit 1
-fi
+[ "$(id -u)" -eq 0 ] || { err "请以 root 运行此脚本"; exit 1; }
 
-mkdir -p "$BACKUP_DIR"
-
-echo "备份与环境检测..."
-if [ -f "$NGINX_CONF" ]; then
-  cp -a "$NGINX_CONF" "${BACKUP_DIR}/nginx.conf.bak" || true
-  echo "已备份 $NGINX_CONF -> ${BACKUP_DIR}/nginx.conf.bak"
-else
-  echo "未找到 $NGINX_CONF（继续：可能尚未安装或路径不同）"
-fi
-
-# Detect nginx run user from config
-NGINX_USER=""
-NGINX_GROUP=""
-if [ -f "$NGINX_CONF" ]; then
-  # get first 'user' directive
-  USERLINE=$(sed -n 's/^[ \t]*user[ \t]\+\([a-zA-Z0-9._-]\+\).*;/\1/p' "$NGINX_CONF" | head -n1 || true)
-  if [ -n "$USERLINE" ]; then
-    NGINX_USER="$USERLINE"
-  fi
-fi
-
-# Fallback candidates
-if [ -z "$NGINX_USER" ]; then
-  if getent passwd nginx >/dev/null 2>&1; then
-    NGINX_USER=nginx
-  elif getent passwd www-data >/dev/null 2>&1; then
-    NGINX_USER=www-data
-  else
-    # fallback to current user (root) — but prefer creating dirs owned by root if no nginx user exists
-    NGINX_USER=root
-  fi
-fi
-
-# try to get group
-if getent passwd "$NGINX_USER" >/dev/null 2>&1; then
-  NGINX_GROUP=$(getent passwd "$NGINX_USER" | cut -d: -f4)
-  # if group number returned, try to convert to name
-  if ! getent group "$NGINX_GROUP" >/dev/null 2>&1; then
-    # not a name, try to find primary group name
-    NGINX_GROUP=$(getent passwd "$NGINX_USER" | awk -F: '{printf $4}' | awk '{ print $1 }')
-    # convert gid to group name
-    if getent group "$NGINX_GROUP" >/dev/null 2>&1; then
-      NGINX_GROUP_NAME="$(getent group "$NGINX_GROUP" | cut -d: -f1)"
-      NGINX_GROUP="$NGINX_GROUP_NAME"
-    else
-      # fallback to user name
-      NGINX_GROUP="$NGINX_USER"
-    fi
-  fi
-else
-  # user not found: fallback to root
-  NGINX_USER=root
-  NGINX_GROUP=root
-fi
-
-echo "检测到 nginx 运行用户: ${NGINX_USER}:${NGINX_GROUP}"
-
-# Directories & files to ensure
-DIRS=(
-  "/var/log/nginx"
-  "/var/lib/nginx/logs"
-  "/var/lib/nginx"
-  "/run/nginx"
-)
-
-FILES=(
-  "/var/log/nginx/error.log"
-  "/var/log/nginx/access.log"
-  "/var/lib/nginx/logs/error.log"
-)
-
-echo "创建缺失目录与日志文件..."
-for d in "${DIRS[@]}"; do
-  if [ ! -d "$d" ]; then
-    mkdir -p "$d"
-    echo "已创建目录: $d"
-  else
-    echo "目录已存在: $d"
-  fi
-done
-
-for f in "${FILES[@]}"; do
-  if [ ! -f "$f" ]; then
-    touch "$f"
-    echo "已创建文件: $f"
-  else
-    echo "文件已存在: $f"
-  fi
-done
-
-# Set ownership and permissions (safe defaults)
-echo "设置权限与归属..."
-# If nginx user exists, use it; otherwise use root
-if getent passwd "$NGINX_USER" >/dev/null 2>&1; then
-  chown -R "${NGINX_USER}:${NGINX_GROUP}" /var/log/nginx /var/lib/nginx /run/nginx || true
-else
-  chown -R root:root /var/log/nginx /var/lib/nginx /run/nginx || true
-fi
-
-chmod 750 /var/log/nginx /var/lib/nginx /run/nginx || true
-chmod 640 /var/log/nginx/*.log /var/lib/nginx/logs/*.log || true
-
-echo "已设置：/var/log/nginx 和 /var/lib/nginx/logs 的所有权与权限"
-
-# Optional: redirect error_log to /dev/null if user set env var
-if [ "${REDIRECT_ERROR_TO_NULL:-0}" != "0" ]; then
-  if [ -f "$NGINX_CONF" ]; then
-    cp -a "$NGINX_CONF" "${BACKUP_DIR}/nginx.conf.errorlog.bak"
-    # replace error_log directives to /dev/null
-    # This will replace lines like: error_log /path/to/file level;
-    sed -E -i 's@^[[:space:]]*error_log[[:space:]]+[^[:space:]]+[[:space:]]+([a-zA-Z0-9_]+;|[a-zA-Z0-9_]+;|;|.+;)$@error_log /dev/null crit;@g' "$NGINX_CONF" || true
-    echo "已将 $NGINX_CONF 中的 error_log 指向 /dev/null（备份在 ${BACKUP_DIR}）"
-  else
-    echo "未找到 nginx 配置文件，跳过 error_log 重定向。"
-  fi
-fi
-
-# Test nginx config
-echo "检测 nginx 配置语法..."
-NGINX_TEST_OK=0
-if command -v nginx >/dev/null 2>&1; then
-  if nginx -t 2>&1 | tee "${BACKUP_DIR}/nginx_test_output.txt"; then
-    echo "nginx -t 检查通过"
-    NGINX_TEST_OK=1
-  else
-    echo "nginx -t 检查未通过，详情见 ${BACKUP_DIR}/nginx_test_output.txt"
-  fi
-else
-  echo "未检测到 nginx 可执行文件 (command -v nginx)，请确认 nginx 是否已安装。"
-fi
-
-# Restart nginx service (support alpine openrc or systemd)
-echo "尝试重启 nginx 服务..."
-RESTART_OK=0
-if command -v rc-service >/dev/null 2>&1; then
-  # Alpine openrc
-  if rc-service nginx restart >/dev/null 2>&1; then
-    echo "使用 rc-service 成功重启 nginx（OpenRC）"
-    RESTART_OK=1
-  else
-    echo "使用 rc-service 重启 nginx 失败，请手动查看日志或运行: rc-service nginx restart"
-  fi
-elif command -v systemctl >/dev/null 2>&1; then
-  if systemctl restart nginx >/dev/null 2>&1; then
-    echo "使用 systemctl 成功重启 nginx (systemd)"
-    RESTART_OK=1
-  else
-    echo "使用 systemctl 重启 nginx 失败，请手动检查: systemctl status nginx"
-  fi
-else
-  # fallback: try direct nginx start
-  if command -v nginx >/dev/null 2>&1; then
-    if nginx >/dev/null 2>&1; then
-      echo "直接启动 nginx 成功"
-      RESTART_OK=1
-    else
-      echo "直接启动 nginx 失败，请手动运行 nginx -t 查看错误"
-    fi
-  fi
-fi
-
-echo
-echo "=== 操作总结 ==="
-echo "备份目录: $BACKUP_DIR"
-echo "确保的目录: ${DIRS[*]}"
-echo "确保的文件: ${FILES[*]}"
-echo "nginx 配置语法检测: $( [ "$NGINX_TEST_OK" -eq 1 ] && echo '通过' || echo '未通过' )"
-echo "nginx 重启: $( [ "$RESTART_OK" -eq 1 ] && echo '成功' || echo '失败' )"
-
-if [ "$RESTART_OK" -ne 1 ]; then
-  echo
-  echo "可能的后续排查步骤（按顺序）："
-  echo " 1) 查看当前哪个进程占用 80/443： sudo ss -ltnp | egrep ':80|:443' 或 sudo netstat -ltnp | egrep ':80|:443'"
-  echo " 2) 查看 nginx 错误详情： sudo nginx -t 或查看 ${BACKUP_DIR}/nginx_test_output.txt"
-  echo " 3) 若希望仅监听 IPv6，请更新站点配置为 listen [::]:80 ipv6only=on; 并在 proxy_pass 对 IPv6 字面量使用方括号"
-  echo " 4) 若想把错误日志指向 /dev/null 再运行： sudo REDIRECT_ERROR_TO_NULL=1 bash $0"
-  echo
-fi
-
-echo "完成。若需要我自动为你把站点配置改为 IPv6-only 或把 proxy_pass 的 IPv6 后端地址自动用 [] 包起来，请回复“改为 IPv6-only”或粘贴 nginx -t 的输出/ss -ltnp 输出给我。"
-#!/usr/bin/env bash
-# make-site-ipv6-only.sh
-# 将指定站点的 /etc/nginx/conf.d/reverse_proxy_${DOMAIN}.conf 修改为 IPv6-only 的 listen，
-# 并把 proxy_pass 中的 IPv6 字面量（若有）用方括号包起来。备份并测试 nginx，然后重启。
-#
-# 用法: sudo bash make-site-ipv6-only.sh <DOMAIN>
-# 例如: sudo bash make-site-ipv6-only.sh nz.215155.xyz
-set -euo pipefail
-if [ "$(id -u)" -ne 0 ]; then
-  echo "请以 root 运行此脚本。"
-  exit 1
-fi
-if [ $# -lt 1 ]; then
-  echo "用法: $0 <DOMAIN>"
-  exit 1
-fi
-DOMAIN="$1"
+read -rp "输入要修复的域名（对应 /etc/nginx/conf.d/reverse_proxy_<DOMAIN>.conf），默认 nz.215155.xyz: " DOMAIN
+DOMAIN="${DOMAIN:-nz.215155.xyz}"
 CONF="/etc/nginx/conf.d/reverse_proxy_${DOMAIN}.conf"
 if [ ! -f "$CONF" ]; then
-  echo "未找到站点配置: $CONF"
-  echo "可选: 将所有 /etc/nginx/conf.d/*.conf 进行同样处理（会对所有文件进行备份与修改）。"
-  read -p "是否对所有 /etc/nginx/conf.d/*.conf 执行相同替换？(y/N) " yn
-  if [[ "$yn" =~ ^[Yy]$ ]]; then
-    FILES=( /etc/nginx/conf.d/*.conf )
-  else
-    echo "退出。请提供正确的域名或手动修改配置。"
-    exit 1
-  fi
-else
-  FILES=( "$CONF" )
+  err "未找到配置文件: $CONF"
+  echo "可用的 reverse_proxy_*.conf 列表："
+  ls -1 /etc/nginx/conf.d/reverse_proxy_*.conf 2>/dev/null || true
+  exit 1
 fi
 
-TIMESTAMP="$(date +%Y%m%d%H%M%S)"
-BACKUP_DIR="/root/nginx_ipv6_patch_backups_${TIMESTAMP}"
-mkdir -p "$BACKUP_DIR"
-echo "备份并修改下列文件: ${FILES[*]}"
-cp -a "${FILES[@]}" "$BACKUP_DIR/" 2>/dev/null || true
-echo "已备份到 $BACKUP_DIR"
+info "正在解析 $CONF 中的 proxy_pass ..."
+# 找第一个 proxy_pass 并提取 host和port（支持 http://host:port 和 http://[::1]:port）
+UPSTREAM_LINE=$(grep -m1 -E 'proxy_pass\s+http://' "$CONF" || true)
+if [ -z "$UPSTREAM_LINE" ]; then
+  err "在 $CONF 中未找到 proxy_pass http://... 条目。"
+  exit 1
+fi
 
-for f in "${FILES[@]}"; do
-  echo "处理 $f ..."
-  # 将 listen 80/listen [::]:80 替为只监听 IPv6
-  # 注意保留其它参数（如 ssl http2）
-  # replace listen 80; and/or listen 443 ssl http2; and corresponding IPv6 lines
-  sed -E -i.bak \
-    -e 's/^[[:space:]]*listen[[:space:]]+80[[:space:]]*;/    listen [::]:80 ipv6only=on;/I' \
-    -e 's/^[[:space:]]*listen[[:space:]]+\[::\]:80[[:space:]]*;/    listen [::]:80 ipv6only=on;/I' \
-    -e 's/^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]+http2[[:space:]]*;/    listen [::]:443 ssl http2 ipv6only=on;/I' \
-    -e 's/^[[:space:]]*listen[[:space:]]+\[::\]:443[[:space:]]+ssl[[:space:]]+http2[[:space:]]*;/    listen [::]:443 ssl http2 ipv6only=on;/I' \
-    "$f" || true
+# parse host and port
+# examples matched:
+#  proxy_pass http://127.0.0.1:25774;
+#  proxy_pass http://[::1]:25774;
+#  proxy_pass http://example.local:8080;
+UPSTREAM_RAW=$(echo "$UPSTREAM_LINE" | sed -E 's/.*proxy_pass\s+http:\/\///; s/\s*;//; s/\s.*$//')
+# now UPSTREAM_RAW is like [::1]:25774 or 127.0.0.1:25774 or example.com:8080
+# extract port
+PORT=$(echo "$UPSTREAM_RAW" | awk -F: '{print $NF}')
+if ! echo "$PORT" | grep -qE '^[0-9]+$'; then
+  err "无法解析端口：$UPSTREAM_RAW"
+  exit 1
+fi
+info "解析到上游端口: $PORT (来自 $UPSTREAM_RAW)"
 
-  # 如果只有 listen 443 ssl; 小心替换为 ipv6only 形式
-  sed -E -i.bak -e 's/^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]*;/    listen [::]:443 ssl ipv6only=on;/I' "$f" || true
+# find listeners for this port
+info "检测本机对端口 $PORT 的监听情况 (ss -ltnp)..."
+LISTEN_INFO=$(ss -ltnp "( sport = :$PORT )" 2>/dev/null || ss -ltnp | egrep ":$PORT" || true)
+echo "$LISTEN_INFO"
 
-  # 将 proxy_pass 中的 IPv6 字面量转换为带方括号形式
-  # 匹配 http://::1:PORT 或 http://[::1]:PORT 或 http://2001:db8::1:PORT 等
-  # 尽量避免误替换域名:port
-  # 这里使用 perl 做更可靠的替换
-  perl -0777 -pe '
-    s{
-      (proxy_pass\s+http://)         # 1: 前缀
-      (\[?                          # optional opening bracket
-         ((?:[0-9a-fA-F:]+))        # 3: IPv6 address (hex and colons)
-      \]?):
-      ([0-9]+)                      # 4: port
-      ;
-    }{$1"[".$3."]:" .$4 . ";" }gexmi
-  ' -i.bak "$f" || true
+# Decide preferred backend address:
+# Preference:
+# 1) if any IPv6 listener exists (contains '[' or visible as [::] or [::1]) -> use [::1] if loopback or [::] if only all-ipv6
+# 2) else if any 127.0.0.1 or 0.0.0.0 -> use 127.0.0.1
+# 3) else if only specific IPv4 local address -> use that IP
+PREFERRED=""
+# check for explicit [::1] or [::]
+if echo "$LISTEN_INFO" | grep -qi '\[::1\]\|:\:\]'; then
+  PREFERRED="[::1]"
+elif echo "$LISTEN_INFO" | grep -qi '\[::\]\|:::'; then
+  # all IPv6 listening; prefer IPv6 loopback if exists, else use [::] (but we will use [::1] which most services accept if bound to ::)
+  PREFERRED="[::1]"
+fi
 
-  echo "已处理并生成备份文件 ${f}.bak"
-done
-
-echo "修改完成。现在测试 nginx 配置..."
-if nginx -t 2>&1 | tee "$BACKUP_DIR/nginx_test_after_patch.txt"; then
-  echo "nginx -t 检查通过，重启 nginx..."
-  if command -v rc-service >/dev/null 2>&1; then
-    rc-service nginx restart || rc-service nginx reload || true
-  elif command -v systemctl >/dev/null 2>&1; then
-    systemctl restart nginx || systemctl reload nginx || true
+# check IPv4
+if [ -z "$PREFERRED" ]; then
+  if echo "$LISTEN_INFO" | grep -q '127.0.0.1:'; then
+    PREFERRED="127.0.0.1"
+  elif echo "$LISTEN_INFO" | grep -q '0.0.0.0:'; then
+    # docker-proxy or service bound to all IPv4
+    PREFERRED="127.0.0.1"
   else
-    nginx -s reload || true
+    # If there is a specific IPv4 like 192.168.x.x:
+    SPECIFIC_IPV4=$(echo "$LISTEN_INFO" | awk '{print $4}' | sed 's/:.*$//' | egrep -v '^$' | head -n1 || true)
+    if [ -n "$SPECIFIC_IPV4" ]; then
+      PREFERRED="$SPECIFIC_IPV4"
+    fi
   fi
-  echo "已尝试重启 nginx。若仍失败请查看 $BACKUP_DIR/nginx_test_after_patch.txt 并运行: ss -ltnp | egrep \":80|:443\""
+fi
+
+if [ -z "$PREFERRED" ]; then
+  warn "未检测到任何本地监听地址（可能端口尚未监听）。请确认后端服务已启动并监听端口 $PORT。"
+  echo "当前 ss -ltnp 输出："
+  ss -ltnp | egrep ":$PORT" || true
+  exit 2
+fi
+
+info "建议使用后端地址: $PREFERRED:$PORT"
+
+# Compose replacement backend URI
+if echo "$PREFERRED" | grep -q ":"; then
+  # IPv6 literal
+  NEW_BACKEND="http://[${PREFERRED}]:${PORT}"
+else
+  NEW_BACKEND="http://${PREFERRED}:${PORT}"
+fi
+
+info "将把 $CONF 中的 proxy_pass 更新为: $NEW_BACKEND （先备份原文件）"
+cp -a "$CONF" "${CONF}.bak.$(date +%s)"
+
+# replace proxy_pass lines robustly
+perl -0777 -pe '
+  s{(proxy_pass\s+)http://\[?[0-9a-fA-F:\.]+\]?:[0-9]+;}{ $1 . "'"${NEW_BACKEND}"'" . ";" }gexmi
+' -i "$CONF"
+
+# Also handle cases proxy_pass used DNS names; attempt to replace if it pointed to same port
+# If no occurrence replaced, try replacing by port only
+if ! grep -q -E "proxy_pass\s+http://\[?[0-9a-fA-F:\.]+\]?:$PORT;" "$CONF"; then
+  # fallback: replace any proxy_pass that contains :PORT
+  perl -0777 -pe '
+    s{(proxy_pass\s+)http://([^;:\s]+\:?)'"${PORT}"'[;]}{ $1 . "'"${NEW_BACKEND}"'" . ";" }gexmi
+  ' -i "$CONF" || true
+fi
+
+info "完成替换。现在检测 nginx 配置语法..."
+if nginx -t 2>&1 | tee /tmp/nginx_test.$$; then
+  rm -f /tmp/nginx_test.$$
+  info "nginx -t 通过，尝试重载 nginx..."
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || warn "systemctl reload/restart 返回非0"
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service nginx reload 2>/dev/null || rc-service nginx restart 2>/dev/null || warn "rc-service reload/restart 返回非0"
+  else
+    nginx -s reload 2>/dev/null || warn "nginx -s reload 返回非0"
+  fi
+  info "操作完成。请检验 /var/log/nginx/error.log 是否仍有 connect() failed 错误。"
+  echo
+  info "快速检测："
+  ss -ltnp | egrep ":$PORT" || true
+  if echo "$NEW_BACKEND" | grep -q '\['; then
+    echo "本机连通性测试示例： curl -6 -I 'http://[::1]:${PORT}/' "
+  else
+    echo "本机连通性测试示例： curl -4 -I 'http://${PREFERRED}:${PORT}/' "
+  fi
+  echo "若仍报 connect() failed (111: Connection refused)，请确认后端服务在 $PREFERRED:$PORT 正常监听并接受连接（请检查后端日志或进程）。"
   exit 0
 else
-  echo "nginx -t 未通过，已将 test 输出保存在 $BACKUP_DIR/nginx_test_after_patch.txt"
-  echo "建议检查占用端口的进程: ss -ltnp | egrep ':80|:443' 或贴上该输出给我。"
-  exit 1
+  cat /tmp/nginx_test.$$
+  rm -f /tmp/nginx_test.$$
+  err "nginx -t 未通过，已恢复备份并退出。请检查 /var/log/nginx/error.log 与 /etc/nginx/conf.d/*.bak 文件。"
+  # restore backup
+  mv "${CONF}.bak."* "$CONF" 2>/dev/null || true
+  exit 3
 fi
