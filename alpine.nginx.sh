@@ -1,141 +1,119 @@
 #!/usr/bin/env bash
 #
-# nginx-smart-reverse-proxy.sh
-# 适配 Alpine Linux v3.21 (OpenRC) 和 Debian (systemd) 的智能 nginx 反代脚本
+# nginx-smart-reverse-proxy-final.sh
+# 终极稳定版（保留错误日志）：
+# - 兼容 Alpine (OpenRC) 与 Debian (systemd)
+# - 选择 1=本地 IPv4 (127.0.0.1) 或 2=本地 IPv6 (::1)（不需手动输入 IP）
+# - 支持可选 WebSocket 1.1
+# - 自动处理 IPv6 字面量（proxy_pass 中自动用 [::1] 格式）
+# - 每次运行：若 nginx 未运行尝试启动；若已运行则重载（不论 80/443 是否被占用）
+# - 保留错误日志（/var/log/nginx/error.log），access_log 默认关闭
 #
-# 功能
-# - 自动检测系统（Alpine / Debian-family）
-# - 安装 nginx（使用 apk 或 apt）并开启自启
-# - 生成同时监听 IPv4 & IPv6 的 80/443 配置（自动 HTTP -> HTTPS 跳转）
-# - 根据输入的子域名 + 目标地址:端口 生成反代配置（可选 WebSocket 1.1 支持）
-# - 使用已存在的证书（调用 install_certificate 函数完成证书放置）
-# - 关闭访问日志并把错误日志重定向到 /dev/null（按你的要求“不记录日志”）
-# - 提供一些稳定性/性能优化建议并尝试写入 nginx 主配置（备份原文件）
-#
-# 使用方法
-# 1) 放到目标机器，赋权：chmod +x nginx-smart-reverse-proxy.sh
-# 2) 以 root 或 sudo 运行：sudo ./nginx-smart-reverse-proxy.sh
-# 3) 按提示输入 DOMAIN、TARGET_HOST、TARGET_PORT、是否开启 WebSocket
-#
-# 注意
-# - 证书安���部分会使用 /etc/nginx/ssl/... 路径，且假设你已经通过 acme.sh 或其他方式获取并希望放到该路径。
-# - 脚本会在 /etc/nginx/conf.d/ 生成名为 reverse_proxy_${DOMAIN}.conf 的站点配置（适配大多数 nginx 包）
-# - 脚本尽力兼容 Alpine(OpenRC) 和 Debian(systemd)，在其他 distro 上也可能工作但未专门测试
-# - 按你要求：访问日志关闭，错误日志写入 /dev/null
+# 使用：以 root 运行
+#   sudo bash nginx-smart-reverse-proxy-final.sh
 #
 set -euo pipefail
 IFS=$'\n\t'
 
-# 颜色（可选）
 YELLOW="\033[1;33m"
 GREEN="\033[1;32m"
 RED="\033[1;31m"
 NC="\033[0m"
 
-# 全局变量（交互时填写）
-DOMAIN=""
-TARGET_HOST=""
-TARGET_PORT=""
-ENABLE_WS="n"
-ACME_DIR="${ACME_DIR:-/root/.acme.sh}"   # 若使用 acme.sh 可修改此处
+info() { echo -e "${GREEN}$*${NC}"; }
+warn() { echo -e "${YELLOW}$*${NC}"; }
+die()  { echo -e "${RED}$*${NC}" >&2; exit 1; }
 
-# 检测系统
+ACME_DIR="${ACME_DIR:-/root/.acme.sh}"
+
+# require root
+[ "$(id -u)" -eq 0 ] || die "请以 root 或 sudo 运行此脚本。"
+
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_ID="${ID:-}"
-        OS_ID_LIKE="${ID_LIKE:-}"
-    else
-        OS_ID=""
-        OS_ID_LIKE=""
+  if [ -f /etc/os-release ]; then . /etc/os-release; fi
+  if echo "${ID:-} ${ID_LIKE:-}" | grep -qi alpine; then DISTRO=alpine
+  elif echo "${ID:-} ${ID_LIKE:-}" | grep -Ei "debian|ubuntu|mint" >/dev/null 2>&1; then DISTRO=debian
+  else
+    if command -v apk >/dev/null 2>&1; then DISTRO=alpine
+    elif command -v apt-get >/dev/null 2>&1; then DISTRO=debian
+    else die "不支持的发行版，脚本仅适配 Alpine/Debian 系列。"
     fi
-
-    if echo "$OS_ID $OS_ID_LIKE" | grep -qi alpine; then
-        DISTRO="alpine"
-    elif echo "$OS_ID $OS_ID_LIKE" | grep -Ei "debian|ubuntu|mint" >/dev/null 2>&1; then
-        DISTRO="debian"
-    else
-        # 兜底：尝试基于存在的包管理器判断
-        if command -v apk >/dev/null 2>&1; then
-            DISTRO="alpine"
-        elif command -v apt-get >/dev/null 2>&1; then
-            DISTRO="debian"
-        else
-            echo -e "${RED}不支持的发行版，脚本仅适配 Alpine/Debian 系列。${NC}"
-            exit 1
-        fi
-    fi
-
-    echo -e "${GREEN}检测到发行版: $DISTRO${NC}"
+  fi
+  info "检测到发行版: $DISTRO"
 }
 
-# 安装所需工具与 nginx
-install_nginx() {
-    echo -e "${YELLOW}>>> 安装 nginx 及依赖...${NC}"
-    if [ "$DISTRO" = "alpine" ]; then
-        apk update
-        apk add --no-cache nginx openssl curl bash coreutils
-        # 确保 /run/nginx 存在（openrc 的 nginx 可能需要）
-        mkdir -p /run/nginx
-    else
-        apt-get update -y
-        DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl curl ca-certificates gnupg2 lsb-release
-    fi
-
-    # 确认 nginx 安装成功
-    if ! command -v nginx >/dev/null 2>&1; then
-        echo -e "${RED}nginx 安装失败，请检查包管理器输出。${NC}"
-        exit 1
-    fi
-
-    echo -e "${GREEN}nginx 安装完成${NC}"
+install_nginx_and_tools() {
+  info "安装 nginx 与必要工具..."
+  if [ "$DISTRO" = "alpine" ]; then
+    apk update
+    apk add --no-cache nginx openssl curl bash coreutils procps
+    mkdir -p /run/nginx
+  else
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y nginx openssl curl ca-certificates lsb-release procps
+  fi
+  command -v nginx >/dev/null 2>&1 || die "nginx 安装失败，请检查包管理器输出。"
+  info "nginx 已安装"
 }
 
-# 开启自启并启动 nginx（systemd 或 openrc）
-enable_autostart() {
-    echo -e "${YELLOW}>>> 配置 nginx 自启并启动服务...${NC}"
-    if [ "$DISTRO" = "alpine" ]; then
-        # openrc
-        rc-update add nginx default || true
-        rc-service nginx stop >/dev/null 2>&1 || true
-        rc-service nginx start || rc-service nginx restart || true
-    else
-        # systemd
-        systemctl enable --now nginx || (systemctl daemon-reload && systemctl restart nginx)
-    fi
+ensure_dirs_and_logs() {
+  info "确保日志与运行目录存在并有合适权限..."
+  mkdir -p /var/log/nginx /var/lib/nginx/logs /run/nginx
+  touch /var/log/nginx/error.log /var/log/nginx/access.log /var/lib/nginx/logs/error.log || true
 
-    # 再次检查 nginx 状态
-    sleep 1
-    if ! nginx -t >/dev/null 2>&1; then
-        echo -e "${RED}nginx 配置检查失败，请查看 /var/log 或 nginx -t 输出。${NC}"
-        # 继续：我们会尝试启动，但通知用户
-    else
-        echo -e "${GREEN}nginx 已启动并设置为开机自启（如果系统支持）。${NC}"
-    fi
+  # detect nginx user from config; fallback to nginx/www-data/root
+  NGINX_USER="nginx"
+  if [ -f /etc/nginx/nginx.conf ]; then
+    USERLINE=$(sed -n 's/^[ \t]*user[ \t]\+\([a-zA-Z0-9._-]\+\).*;/\1/p' /etc/nginx/nginx.conf | head -n1 || true)
+    [ -n "$USERLINE" ] && NGINX_USER="$USERLINE"
+  fi
+  if getent passwd "$NGINX_USER" >/dev/null 2>&1; then
+    NGINX_GROUP=$(getent passwd "$NGINX_USER" | cut -d: -f4)
+    if ! getent group "$NGINX_GROUP" >/dev/null 2>&1; then NGINX_GROUP="$NGINX_USER"; fi
+  else
+    NGINX_USER=root
+    NGINX_GROUP=root
+  fi
+
+  chown -R "${NGINX_USER}:${NGINX_GROUP}" /var/log/nginx /var/lib/nginx /run/nginx || true
+  chmod 750 /var/log/nginx /var/lib/nginx /run/nginx || true
+  chmod 640 /var/log/nginx/*.log /var/lib/nginx/logs/*.log || true
+
+  info "已创建并设置 /var/log/nginx, /var/lib/nginx/logs, /run/nginx"
 }
 
-# 备份并尝试写入一些稳定性/性能优化到 nginx 主配置（尽量保持兼容）
-tune_nginx_main_conf() {
-    NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
-    if [ ! -f "$NGINX_MAIN_CONF" ]; then
-        echo -e "${YELLOW}未找到 $NGINX_MAIN_CONF，跳过主配置调整。${NC}"
-        return
-    fi
+install_certificate() {
+  [ -n "${DOMAIN:-}" ] || return
+  info "尝试使用 acme.sh 安装证书（若存在），否则假设您已手动放置证书到 /etc/nginx/ssl/${DOMAIN}.crt 与 .key"
+  mkdir -p "/etc/nginx/ssl/certs/${DOMAIN}" "/etc/nginx/ssl/private/${DOMAIN}" "/etc/nginx/ssl"
+  if [ -x "${ACME_DIR}/acme.sh" ]; then
+    (cd "$ACME_DIR" && ./acme.sh --install-cert -d "$DOMAIN" \
+      --key-file "/etc/nginx/ssl/private/${DOMAIN}/key.pem" \
+      --fullchain-file "/etc/nginx/ssl/certs/${DOMAIN}/fullchain.pem" \
+      --cert-file "/etc/nginx/ssl/certs/${DOMAIN}/cert.pem" \
+      --ca-file "/etc/nginx/ssl/certs/${DOMAIN}/ca.pem" \
+      --reloadcmd "echo '证书安装完成'") || warn "acme.sh --install-cert 返回非零"
+  fi
+  if [ -f "/etc/nginx/ssl/certs/${DOMAIN}/fullchain.pem" ] && [ -f "/etc/nginx/ssl/private/${DOMAIN}/key.pem" ]; then
+    ln -sf "/etc/nginx/ssl/certs/${DOMAIN}/fullchain.pem" "/etc/nginx/ssl/${DOMAIN}.crt"
+    ln -sf "/etc/nginx/ssl/private/${DOMAIN}/key.pem" "/etc/nginx/ssl/${DOMAIN}.key"
+    info "证书已链接到 /etc/nginx/ssl/${DOMAIN}.{crt,key}"
+  else
+    warn "未检测到自动安装的证书，请确保 /etc/nginx/ssl/${DOMAIN}.crt 与 /etc/nginx/ssl/${DOMAIN}.key 存在"
+  fi
+}
 
-    echo -e "${YELLOW}>>> 备份并尝试优化 $NGINX_MAIN_CONF ...${NC}"
-    cp -a "$NGINX_MAIN_CONF" "${NGINX_MAIN_CONF}.backup.$(date +%s)" || true
-
-    # 仅在未设置相关选项时追加最小安全/性能项，避免破坏发行版默认结构
-    # 我们在 http {} 内追加一段 safe_optimizations（通过在配置尾部 include）
-    SAFE_INC="/etc/nginx/conf.d/_smart_tune.conf"
+generate_smart_tune() {
+  SAFE_INC="/etc/nginx/conf.d/_smart_tune.conf"
+  if [ ! -f "$SAFE_INC" ]; then
     cat >"$SAFE_INC" <<'EOF'
-# smart tuning - safe defaults (generated)
+# safe tuning defaults (generated)
 worker_processes auto;
 events {
     worker_connections 10240;
-    use epoll; # 若不可用 nginx 会忽略
+    use epoll;
 }
-
 http {
     server_tokens off;
     sendfile on;
@@ -144,96 +122,83 @@ http {
     keepalive_timeout 65;
     types_hash_max_size 2048;
     client_max_body_size 100m;
-    fastcgi_buffers 8 16k;
-    fastcgi_buffer_size 32k;
-    # SSL 缓存/会话
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
 }
 EOF
-
-    echo -e "${GREEN}已写入 $SAFE_INC（如果 nginx 配置已包含 conf.d/*.conf 则会生效）。备份保存在 ${NGINX_MAIN_CONF}.backup.*${NC}"
+    info "已写入 $SAFE_INC"
+  fi
 }
 
-# 将用户已生成的证书安装到 Nginx 指定位置（使用你提供的逻辑）
-install_certificate() {
-    # 依赖全局 DOMAIN, ACME_DIR
-    echo -e "${YELLOW}>>> 安装证书到 Nginx...${NC}"
-    
-    # 创建证书目录
-    mkdir -p "/etc/nginx/ssl/certs/$DOMAIN"
-    mkdir -p "/etc/nginx/ssl/private/$DOMAIN"
-    mkdir -p "/etc/nginx/ssl"
-    
-    cd "$ACME_DIR" || true
-    
-    # 如果 acme.sh 存在则调用安装命令（否则假定用户已手动放置证书到 ACME_DIR）
-    if [ -x "./acme.sh" ]; then
-        ./acme.sh --install-cert -d "$DOMAIN" \
-            --key-file "/etc/nginx/ssl/private/$DOMAIN/key.pem" \
-            --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
-            --cert-file "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" \
-            --ca-file "/etc/nginx/ssl/certs/$DOMAIN/ca.pem" \
-            --reloadcmd "echo '证书安装完成'"
-    else
-        echo -e "${YELLOW}未检测到 acme.sh，可跳过自动安装，或者请手动将证书放到 /etc/nginx/ssl/...${NC}"
-    fi
-    
-    # 创建符号链接（方便 nginx 指向固定路径）
-    ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/nginx/ssl/$DOMAIN.crt" || true
-    ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/nginx/ssl/$DOMAIN.key" || true
-    
-    echo -e "${GREEN}>>> 证书安装步骤完成（请确认 /etc/nginx/ssl/$DOMAIN.crt 与 .key 已存在）${NC}"
+# normalize backend: bracket IPv6 literal if present
+backend_uri() {
+  local host="$1" port="$2"
+  if echo "$host" | grep -q ":"; then
+    echo "http://[${host}]:${port}"
+  else
+    echo "http://${host}:${port}"
+  fi
 }
 
-# 生成反代配置
 generate_proxy_conf() {
-    CONF_DIR="/etc/nginx/conf.d"
-    mkdir -p "$CONF_DIR"
+  CONF_DIR="/etc/nginx/conf.d"
+  mkdir -p "$CONF_DIR"
+  CONF_FILE="${CONF_DIR}/reverse_proxy_${DOMAIN}.conf"
+  [ -f "$CONF_FILE" ] && cp -a "$CONF_FILE" "${CONF_FILE}.bak.$(date +%s)" || true
 
-    CONF_FILE="${CONF_DIR}/reverse_proxy_${DOMAIN}.conf"
+  LISTEN_HTTP="listen 80;"
+  LISTEN_HTTP_V6="listen [::]:80;"
+  LISTEN_HTTPS="listen 443 ssl http2;"
+  LISTEN_HTTPS_V6="listen [::]:443 ssl http2;"
 
-    echo -e "${YELLOW}>>> 生成反代配置到 $CONF_FILE ...${NC}"
+  SSL_CRT="/etc/nginx/ssl/${DOMAIN}.crt"
+  SSL_KEY="/etc/nginx/ssl/${DOMAIN}.key"
 
-    # 如果启用 websocket，需要在 http 范围写 map，用 conf.d 内文件即可
-    if [ "${ENABLE_WS}" = "y" ] || [ "${ENABLE_WS}" = "Y" ]; then
-        cat >"$CONF_FILE" <<EOF
-# 自动生成的反代配置（含 WebSocket 支持）
-map \$http_upgrade \$connection_upgrade {
+  ERROR_LOG_CONF="error_log /var/log/nginx/error.log crit;"
+
+  if [[ "${ENABLE_WS,,}" = "y" || "${ENABLE_WS,,}" = "yes" ]]; then
+    WS_MAP_BLOCK='map $http_upgrade $connection_upgrade {
     default upgrade;
-    '' close;
-}
+    "" close;
+}'
+    PROXY_WS_HEADERS='        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;'
+  else
+    WS_MAP_BLOCK=''
+    PROXY_WS_HEADERS=''
+  fi
+
+  cat >"$CONF_FILE" <<EOF
+# reverse proxy for ${DOMAIN} (generated)
+$WS_MAP_BLOCK
 
 server {
-    listen 80;
-    listen [::]:80;
+    $LISTEN_HTTP
+    $LISTEN_HTTP_V6
     server_name ${DOMAIN};
-    # 所有 http 请求强制跳转到 https
     return 301 https://\$host\$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    $LISTEN_HTTPS
+    $LISTEN_HTTPS_V6
     server_name ${DOMAIN};
 
-    # SSL - 使用脚本安装的位置
-    ssl_certificate /etc/nginx/ssl/${DOMAIN}.crt;
-    ssl_certificate_key /etc/nginx/ssl/${DOMAIN}.key;
+    ssl_certificate ${SSL_CRT};
+    ssl_certificate_key ${SSL_KEY};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    # 不记录访问日志，错误日志重定向到 /dev/null（按要求）
     access_log off;
-    error_log /dev/null crit;
+    ${ERROR_LOG_CONF}
 
-    # 安全头部（可选）
     add_header X-Frame-Options SAMEORIGIN;
     add_header X-Content-Type-Options nosniff;
 
     location / {
-        proxy_pass http://${TARGET_HOST}:${TARGET_PORT};
+        proxy_pass ${BACKEND};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -245,135 +210,95 @@ server {
         proxy_connect_timeout 60s;
         proxy_send_timeout 180s;
         proxy_read_timeout 360s;
-
-        # WebSocket 支持
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
+${PROXY_WS_HEADERS}
     }
 }
 EOF
+
+  info "已生成站点配置： $CONF_FILE"
+}
+
+test_and_reload_nginx() {
+  if ! nginx -t 2>&1 | tee /tmp/nginx_test_out.$$; then
+    cat /tmp/nginx_test_out.$$
+    rm -f /tmp/nginx_test_out.$$
+    die "nginx -t 检查失败，请修正输出中的错误后重试。"
+  fi
+  rm -f /tmp/nginx_test_out.$$
+  info "nginx 配置语法检查通过"
+
+  if pgrep -x nginx >/dev/null 2>&1; then
+    warn "检测到 nginx 已在运行，尝试重载..."
+    if command -v rc-service >/dev/null 2>&1; then
+      rc-service nginx reload 2>&1 || rc-service nginx restart 2>&1 || warn "rc-service reload/restart 返回非0"
+    elif command -v systemctl >/dev/null 2>&1; then
+      systemctl reload nginx 2>&1 || systemctl restart nginx 2>&1 || warn "systemctl reload/restart 返回非0"
     else
-        cat >"$CONF_FILE" <<EOF
-# 自动生成的反代配置（无 WebSocket 支持）
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${DOMAIN};
-
-    ssl_certificate /etc/nginx/ssl/${DOMAIN}.crt;
-    ssl_certificate_key /etc/nginx/ssl/${DOMAIN}.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    access_log off;
-    error_log /dev/null crit;
-
-    add_header X-Frame-Options SAMEORIGIN;
-    add_header X-Content-Type-Options nosniff;
-
-    location / {
-        proxy_pass http://${TARGET_HOST}:${TARGET_PORT};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Port \$server_port;
-
-        proxy_buffering off;
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 180s;
-        proxy_read_timeout 360s;
-    }
-}
-EOF
+      nginx -s reload 2>&1 || warn "nginx -s reload 返回非0"
     fi
-
-    echo -e "${GREEN}配置已写入：$CONF_FILE${NC}"
-}
-
-# 重载并检查 nginx
-reload_nginx() {
-    echo -e "${YELLOW}>>> 检查 nginx 配置并重载...${NC}"
-    if ! nginx -t; then
-        echo -e "${RED}nginx -t 检查失败，请查看输出并修正错误。${NC}"
-        exit 1
-    fi
-
-    if [ "$DISTRO" = "alpine" ]; then
-        rc-service nginx reload || rc-service nginx restart
+    info "已尝试重载 nginx"
+  else
+    info "nginx 未运行，尝试启动..."
+    if command -v rc-service >/dev/null 2>&1; then
+      if rc-service nginx start 2>&1; then info "nginx 已启动 (OpenRC)"; else warn "rc-service start 失败，尝试重载/重启"; rc-service nginx restart 2>&1 || true; fi
+    elif command -v systemctl >/dev/null 2>&1; then
+      if systemctl start nginx 2>&1; then info "nginx 已启动 (systemd)"; else warn "systemctl start 失败，尝试重载/重启"; systemctl restart nginx 2>&1 || true; fi
     else
-        systemctl reload nginx || systemctl restart nginx
+      if nginx >/dev/null 2>&1; then info "nginx 直接启动成功"; else warn "直接启动 nginx 失败，检查端口占用或配置"; fi
     fi
-
-    echo -e "${GREEN}nginx 已重载并应用新配置。${NC}"
+  fi
 }
 
-# 交互式获取输入
-prompt_user() {
-    read -rp "请输入要反代的子域名 (如 sub.example.com)： " DOMAIN
-    DOMAIN="${DOMAIN:-}"
-    if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}域名不能为空。退出。${NC}"
-        exit 1
-    fi
+# ---------------- main ----------------
+detect_os
+install_nginx_and_tools
+ensure_dirs_and_logs
+generate_smart_tune
 
-    read -rp "后端目标地址 (IP或域名，默认 127.0.0.1)： " TARGET_HOST
-    TARGET_HOST="${TARGET_HOST:-127.0.0.1}"
+read -rp "请输入用于反代的子域名 (如 sub.example.com)： " DOMAIN
+[ -n "$DOMAIN" ] || die "域名不能为空。"
 
-    read -rp "后端端口 (例如 8080)： " TARGET_PORT
-    if ! echo "$TARGET_PORT" | grep -qE '^[0-9]+$'; then
-        echo -e "${RED}端口必须为数字。退出。${NC}"
-        exit 1
-    fi
+read -rp "请输入后端端口 (例如 8080)： " TARGET_PORT
+echo "$TARGET_PORT" | grep -qE '^[0-9]+$' || die "端口必须为数字"
 
-    read -rp "是否开启 WebSocket 1.1 支持？ (y/N)： " ENABLE_WS
-    ENABLE_WS="${ENABLE_WS:-n}"
-}
+echo "选择后端 IP 源（脚本将自动使用本地地址）："
+echo " 1) 本地 IPv4 (127.0.0.1)"
+echo " 2) 本地 IPv6 (::1)"
+read -rp "请选择 1 或 2（默认 1）: " IP_CHOICE
+IP_CHOICE="${IP_CHOICE:-1}"
+if [[ "$IP_CHOICE" =~ ^2$ ]]; then TARGET_HOST="::1"; else TARGET_HOST="127.0.0.1"; fi
 
-# 主流程
-main() {
-    if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${RED}请以 root 或 sudo 运行脚本。${NC}"
-        exit 1
-    fi
+read -rp "是否开启 WebSocket 1.1 支持？ (y/N)： " ENABLE_WS
+ENABLE_WS="${ENABLE_WS:-n}"
 
-    detect_os
-    prompt_user
-    install_nginx
-    enable_autostart
-    tune_nginx_main_conf
+info "将为 ${DOMAIN} 反代到 ${TARGET_HOST}:${TARGET_PORT} （WebSocket: ${ENABLE_WS}）"
 
-    # 先尝试安装证书（如果 ACME 可用）
-    install_certificate
+BACKEND=$(backend_uri "$TARGET_HOST" "$TARGET_PORT")
 
-    # 生成反代配置
-    generate_proxy_conf
+# backup main config
+[ -f /etc/nginx/nginx.conf ] && cp -a /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup.$(date +%s) || true
 
-    # 检查并重载 nginx
-    reload_nginx
+# install cert if possible and link
+install_certificate
 
-    echo -e "${GREEN}完成：${NC} 域名 ${DOMAIN} 已被配置为反代到 ${TARGET_HOST}:${TARGET_PORT}"
-    if [ "${ENABLE_WS}" = "y" ] || [ "${ENABLE_WS}" = "Y" ]; then
-        echo -e "${GREEN}WebSocket 支持：已启用${NC}"
-    else
-        echo -e "${YELLOW}WebSocket 支持：未启用${NC}"
-    fi
+# generate proxy conf and apply
+generate_proxy_conf
+test_and_reload_nginx
 
-    echo -e "${YELLOW}测试建议：${NC}"
-    echo "  - 本机可用: curl -Ik https://${DOMAIN}/"
-    echo "  - 若后端是 WebSocket，可用 websocket 客户端或 wscat 进行连接测试（wss://）"
-    echo -e "${YELLOW}若证书已手动放置，请确保 /etc/nginx/ssl/${DOMAIN}.crt/.key 存在。${NC}"
-}
+# final notes and tests
+info "完成：域名 ${DOMAIN} 已配置反代到 ${TARGET_HOST}:${TARGET_PORT}"
+if [[ "${ENABLE_WS,,}" = "y" || "${ENABLE_WS,,}" = "yes" ]]; then info "WebSocket 支持：已启用"; else info "WebSocket 支持：未启用"; fi
 
-# 执行
-main "$@"
+echo
+echo "本地连通性测试（在本机运行）:"
+if echo "$TARGET_HOST" | grep -q ":"; then
+  echo "  curl -6 -I 'http://[::1]:${TARGET_PORT}/'"
+else
+  echo "  curl -4 -I 'http://127.0.0.1:${TARGET_PORT}/'"
+fi
+echo
+echo "外部 HTTPS 测试（DNS 解析到本机公网 IP）:"
+echo "  curl -Ik https://${DOMAIN}/"
+echo
+echo "错误日志保留在： /var/log/nginx/error.log"
+info "如果遇到问题，请贴出：nginx -t 输出、rc-service nginx status 或 systemctl status nginx、以及 ss -ltnp | egrep ':80|:443' 输出。"
