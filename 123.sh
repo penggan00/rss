@@ -1,227 +1,203 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# fix-nginx-log-dirs.sh
+# 一键修复 nginx 启动时因日志/运行目录不存在导致的错误（Alpine/Debian 兼容）
+#
+# 用法:
+#   sudo bash fix-nginx-log-dirs.sh
+# 可选（若你想把 error_log 指向 /dev/null，请设置环境变量）:
+#   sudo REDIRECT_ERROR_TO_NULL=1 bash fix-nginx-log-dirs.sh
+#
+set -euo pipefail
+IFS=$'\n\t'
 
-# ================= 修复 Nginx IPv6 监听 =================
-# 解决 Nginx 只监听 IPv4 的问题
-# =====================================================
+TIMESTAMP="$(date +%Y%m%d%H%M%S)"
+NGINX_CONF="/etc/nginx/nginx.conf"
+BACKUP_DIR="/root/nginx_fix_backups_${TIMESTAMP}"
+REDIRECT_ERROR_TO_NULL="${REDIRECT_ERROR_TO_NULL:-0}"
 
-echo "=== 修复 Nginx IPv6 监听问题 ==="
+# Ensure running as root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "请以 root 用户运行此脚本。"
+  exit 1
+fi
 
-# 1. 检查当前监听状态
-echo "1. 当前监听状态:"
-ss -tlnp | grep -E ':(80|443)'
+mkdir -p "$BACKUP_DIR"
 
-# 2. 备份原配置
-echo "2. 备份原配置..."
-cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup.$(date +%Y%m%d%H%M%S)
-
-# 3. 创建正确的 Nginx 主配置
-echo "3. 创建新的 Nginx 配置..."
-cat > /etc/nginx/nginx.conf <<'EOF'
-user nginx nginx;
-worker_processes auto;
-pid /run/nginx.pid;
-
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-    sendfile on;
-    keepalive_timeout 65;
-    client_max_body_size 100m;
-    
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
-    
-    include /etc/nginx/conf.d/*.conf;
-}
-EOF
-
-# 4. 创建默认服务器配置（监听 IPv6）
-echo "4. 创建默认服务器配置..."
-cat > /etc/nginx/conf.d/default_server.conf <<'EOF'
-# 默认服务器 - 禁止直接IP访问
-# 同时监听 IPv4 和 IPv6
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    return 444;
-}
-
-server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name _;
-    
-    ssl_certificate /etc/nginx/ssl/fallback.crt;
-    ssl_certificate_key /etc/nginx/ssl/fallback.key;
-    
-    # 兼容性 SSL 配置
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    
-    return 444;
-}
-EOF
-
-# 5. 修复你的反向代理配置
-echo "5. 修复反向代理配置..."
-cat > /etc/nginx/conf.d/nz.215155.xyz.conf <<'EOF'
-# 反向代理配置
-# 域名: nz.215155.xyz
-# 后端: 127.0.0.1:25774
-# 监听 IPv6
-
-# HTTP - 重定向到 HTTPS
-server {
-    listen 80;
-    listen [::]:80;
-    server_name nz.215155.xyz;
-    
-    access_log /var/log/nginx/nz.215155.xyz_access.log;
-    error_log /var/log/nginx/nz.215155.xyz_error.log;
-    
-    return 301 https://$host$request_uri;
-}
-
-# HTTPS - 主要配置
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name nz.215155.xyz;
-    
-    # SSL 证书
-    ssl_certificate /etc/nginx/ssl/215155.xyz.crt;
-    ssl_certificate_key /etc/nginx/ssl/215155.xyz.key;
-    
-    # SSL 配置（兼容 Alpine）
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # 安全头
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    
-    # 日志
-    access_log /var/log/nginx/nz.215155.xyz_ssl_access.log;
-    error_log /var/log/nginx/nz.215155.xyz_ssl_error.log;
-    
-    # 反向代理
-    location / {
-        proxy_pass http://127.0.0.1:25774;
-        
-        # 基础头部
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        
-        # 超时设置
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-        
-        # WebSocket 支持
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-    
-    # 禁止访问隐藏文件
-    location ~ /\. {
-        deny all;
-        access_log off;
-        log_not_found off;
-    }
-}
-EOF
-
-# 6. 检查证书文件
-echo "6. 检查证书文件..."
-if [ ! -f "/etc/nginx/ssl/215155.xyz.crt" ] || [ ! -f "/etc/nginx/ssl/215155.xyz.key" ]; then
-    echo "错误: 证书文件不存在"
-    echo "请确保证书文件存在:"
-    echo "  /etc/nginx/ssl/215155.xyz.crt"
-    echo "  /etc/nginx/ssl/215155.xyz.key"
-    exit 1
+echo "备份与环境检测..."
+if [ -f "$NGINX_CONF" ]; then
+  cp -a "$NGINX_CONF" "${BACKUP_DIR}/nginx.conf.bak" || true
+  echo "已备份 $NGINX_CONF -> ${BACKUP_DIR}/nginx.conf.bak"
 else
-    echo "✅ 证书文件存在"
+  echo "未找到 $NGINX_CONF（继续：可能尚未安装或路径不同）"
 fi
 
-# 7. 创建 fallback 证书（如果不存在）
-if [ ! -f "/etc/nginx/ssl/fallback.crt" ]; then
-    echo "创建 fallback 证书..."
-    mkdir -p /etc/nginx/ssl
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout /etc/nginx/ssl/fallback.key \
-        -out /etc/nginx/ssl/fallback.crt \
-        -subj "/CN=Invalid" 2>/dev/null
+# Detect nginx run user from config
+NGINX_USER=""
+NGINX_GROUP=""
+if [ -f "$NGINX_CONF" ]; then
+  # get first 'user' directive
+  USERLINE=$(sed -n 's/^[ \t]*user[ \t]\+\([a-zA-Z0-9._-]\+\).*;/\1/p' "$NGINX_CONF" | head -n1 || true)
+  if [ -n "$USERLINE" ]; then
+    NGINX_USER="$USERLINE"
+  fi
 fi
 
-# 8. 测试 Nginx 配置
-echo "7. 测试 Nginx 配置..."
-nginx -t 2>&1
-if [ $? -eq 0 ]; then
-    echo "✅ Nginx 配置测试通过"
+# Fallback candidates
+if [ -z "$NGINX_USER" ]; then
+  if getent passwd nginx >/dev/null 2>&1; then
+    NGINX_USER=nginx
+  elif getent passwd www-data >/dev/null 2>&1; then
+    NGINX_USER=www-data
+  else
+    # fallback to current user (root) — but prefer creating dirs owned by root if no nginx user exists
+    NGINX_USER=root
+  fi
+fi
+
+# try to get group
+if getent passwd "$NGINX_USER" >/dev/null 2>&1; then
+  NGINX_GROUP=$(getent passwd "$NGINX_USER" | cut -d: -f4)
+  # if group number returned, try to convert to name
+  if ! getent group "$NGINX_GROUP" >/dev/null 2>&1; then
+    # not a name, try to find primary group name
+    NGINX_GROUP=$(getent passwd "$NGINX_USER" | awk -F: '{printf $4}' | awk '{ print $1 }')
+    # convert gid to group name
+    if getent group "$NGINX_GROUP" >/dev/null 2>&1; then
+      NGINX_GROUP_NAME="$(getent group "$NGINX_GROUP" | cut -d: -f1)"
+      NGINX_GROUP="$NGINX_GROUP_NAME"
+    else
+      # fallback to user name
+      NGINX_GROUP="$NGINX_USER"
+    fi
+  fi
 else
-    echo "❌ Nginx 配置测试失败"
-    exit 1
+  # user not found: fallback to root
+  NGINX_USER=root
+  NGINX_GROUP=root
 fi
 
-# 9. 重载 Nginx
-echo "8. 重载 Nginx..."
-nginx -s reload 2>/dev/null || nginx
+echo "检测到 nginx 运行用户: ${NGINX_USER}:${NGINX_GROUP}"
 
-# 10. 检查监听状态
-echo "9. 检查新的监听状态..."
-sleep 2
-echo "IPv4 监听:"
-ss -tlnp | grep -E '0.0.0.0:(80|443)'
-echo ""
-echo "IPv6 监听:"
-ss -tlnp | grep -E ':::(80|443)'
+# Directories & files to ensure
+DIRS=(
+  "/var/log/nginx"
+  "/var/lib/nginx/logs"
+  "/var/lib/nginx"
+  "/run/nginx"
+)
 
-# 11. 测试连接
-echo "10. 测试连接..."
-echo "测试 komari 服务 (本地):"
-if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:25774 2>/dev/null | grep -q "200"; then
-    echo "✅ komari 服务正常 (HTTP 200)"
+FILES=(
+  "/var/log/nginx/error.log"
+  "/var/log/nginx/access.log"
+  "/var/lib/nginx/logs/error.log"
+)
+
+echo "创建缺失目录与日志文件..."
+for d in "${DIRS[@]}"; do
+  if [ ! -d "$d" ]; then
+    mkdir -p "$d"
+    echo "已创建目录: $d"
+  else
+    echo "目录已存在: $d"
+  fi
+done
+
+for f in "${FILES[@]}"; do
+  if [ ! -f "$f" ]; then
+    touch "$f"
+    echo "已创建文件: $f"
+  else
+    echo "文件已存在: $f"
+  fi
+done
+
+# Set ownership and permissions (safe defaults)
+echo "设置权限与归属..."
+# If nginx user exists, use it; otherwise use root
+if getent passwd "$NGINX_USER" >/dev/null 2>&1; then
+  chown -R "${NGINX_USER}:${NGINX_GROUP}" /var/log/nginx /var/lib/nginx /run/nginx || true
 else
-    echo "❌ komari 服务异常"
+  chown -R root:root /var/log/nginx /var/lib/nginx /run/nginx || true
 fi
 
-echo ""
-echo "测试 Nginx HTTP 重定向:"
-curl -s -I http://nz.215155.xyz 2>/dev/null | grep -i "location\|HTTP"
+chmod 750 /var/log/nginx /var/lib/nginx /run/nginx || true
+chmod 640 /var/log/nginx/*.log /var/lib/nginx/logs/*.log || true
 
-echo ""
-echo "测试 Nginx HTTPS 连接:"
-if curl -s -k -o /dev/null -w "%{http_code}" https://nz.215155.xyz 2>/dev/null | grep -q "200"; then
-    echo "✅ Nginx HTTPS 连接成功 (HTTP 200)"
+echo "已设置：/var/log/nginx 和 /var/lib/nginx/logs 的所有权与权限"
+
+# Optional: redirect error_log to /dev/null if user set env var
+if [ "${REDIRECT_ERROR_TO_NULL:-0}" != "0" ]; then
+  if [ -f "$NGINX_CONF" ]; then
+    cp -a "$NGINX_CONF" "${BACKUP_DIR}/nginx.conf.errorlog.bak"
+    # replace error_log directives to /dev/null
+    # This will replace lines like: error_log /path/to/file level;
+    sed -E -i 's@^[[:space:]]*error_log[[:space:]]+[^[:space:]]+[[:space:]]+([a-zA-Z0-9_]+;|[a-zA-Z0-9_]+;|;|.+;)$@error_log /dev/null crit;@g' "$NGINX_CONF" || true
+    echo "已将 $NGINX_CONF 中的 error_log 指向 /dev/null（备份在 ${BACKUP_DIR}）"
+  else
+    echo "未找到 nginx 配置文件，跳过 error_log 重定向。"
+  fi
+fi
+
+# Test nginx config
+echo "检测 nginx 配置语法..."
+NGINX_TEST_OK=0
+if command -v nginx >/dev/null 2>&1; then
+  if nginx -t 2>&1 | tee "${BACKUP_DIR}/nginx_test_output.txt"; then
+    echo "nginx -t 检查通过"
+    NGINX_TEST_OK=1
+  else
+    echo "nginx -t 检查未通过，详情见 ${BACKUP_DIR}/nginx_test_output.txt"
+  fi
 else
-    echo "❌ Nginx HTTPS 连接失败"
+  echo "未检测到 nginx 可执行文件 (command -v nginx)，请确认 nginx 是否已安装。"
 fi
 
-# 12. 获取服务器 IPv6 地址
-echo ""
-echo "11. 服务器 IPv6 地址:"
-ip -6 addr show | grep inet6 | grep -v "::1" | head -2
+# Restart nginx service (support alpine openrc or systemd)
+echo "尝试重启 nginx 服务..."
+RESTART_OK=0
+if command -v rc-service >/dev/null 2>&1; then
+  # Alpine openrc
+  if rc-service nginx restart >/dev/null 2>&1; then
+    echo "使用 rc-service 成功重启 nginx（OpenRC）"
+    RESTART_OK=1
+  else
+    echo "使用 rc-service 重启 nginx 失败，请手动查看日志或运行: rc-service nginx restart"
+  fi
+elif command -v systemctl >/dev/null 2>&1; then
+  if systemctl restart nginx >/dev/null 2>&1; then
+    echo "使用 systemctl 成功重启 nginx (systemd)"
+    RESTART_OK=1
+  else
+    echo "使用 systemctl 重启 nginx 失败，请手动检查: systemctl status nginx"
+  fi
+else
+  # fallback: try direct nginx start
+  if command -v nginx >/dev/null 2>&1; then
+    if nginx >/dev/null 2>&1; then
+      echo "直接启动 nginx 成功"
+      RESTART_OK=1
+    else
+      echo "直接启动 nginx 失败，请手动运行 nginx -t 查看错误"
+    fi
+  fi
+fi
 
-echo ""
-echo "=== 修复完成 ==="
-echo "现在应该可以通过以下方式访问:"
-echo "1. IPv4: https://nz.215155.xyz"
-echo "2. IPv6: https://[你的IPv6地址]"
-echo ""
-echo "要获取准确的 IPv6 地址，运行: ip -6 addr show"
+echo
+echo "=== 操作总结 ==="
+echo "备份目录: $BACKUP_DIR"
+echo "确保的目录: ${DIRS[*]}"
+echo "确保的文件: ${FILES[*]}"
+echo "nginx 配置语法检测: $( [ "$NGINX_TEST_OK" -eq 1 ] && echo '通过' || echo '未通过' )"
+echo "nginx 重启: $( [ "$RESTART_OK" -eq 1 ] && echo '成功' || echo '失败' )"
+
+if [ "$RESTART_OK" -ne 1 ]; then
+  echo
+  echo "可能的后续排查步骤（按顺序）："
+  echo " 1) 查看当前哪个进程占用 80/443： sudo ss -ltnp | egrep ':80|:443' 或 sudo netstat -ltnp | egrep ':80|:443'"
+  echo " 2) 查看 nginx 错误详情： sudo nginx -t 或查看 ${BACKUP_DIR}/nginx_test_output.txt"
+  echo " 3) 若希望仅监听 IPv6，请更新站点配置为 listen [::]:80 ipv6only=on; 并在 proxy_pass 对 IPv6 字面量使用方括号"
+  echo " 4) 若想把错误日志指向 /dev/null 再运行： sudo REDIRECT_ERROR_TO_NULL=1 bash $0"
+  echo
+fi
+
+echo "完成。若需要我自动为你把站点配置改为 IPv6-only 或把 proxy_pass 的 IPv6 后端地址自动用 [] 包起来，请回复“改为 IPv6-only”或粘贴 nginx -t 的输出/ss -ltnp 输出给我。"
