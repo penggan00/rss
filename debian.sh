@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ===================================================
-# Debian 12 Nginx 反向代理管理脚本
-# 功能：初始化Nginx、管理SSL证书、管理反向代理
-# 版本：1.1
+# Debian 12+ Nginx 反向代理纯净安装管理脚本
+# 功能：完全清理并重新安装Nginx，配置反向代理
+# 版本：2.0
 # 作者：AI Assistant
 # ===================================================
 
@@ -19,6 +19,7 @@ SSL_DIR="/etc/nginx/ssl"
 CERT_ROOT="/etc/nginx/ssl/certs"
 KEY_ROOT="/etc/nginx/ssl/private"
 BACKUP_DIR="/etc/nginx/backup"
+WWW_ROOT="/var/www/html"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -53,193 +54,258 @@ check_root() {
     fi
 }
 
+# 清理旧 Nginx 安装
+clean_nginx() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          清理旧 Nginx 安装                ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    
+    # 停止 Nginx 服务
+    if systemctl is-active nginx &>/dev/null; then
+        log "停止 Nginx 服务..."
+        systemctl stop nginx
+        systemctl disable nginx 2>/dev/null
+    fi
+    
+    # 杀死所有 nginx 进程
+    if pgrep nginx &>/dev/null; then
+        log "终止 nginx 进程..."
+        pkill -9 nginx 2>/dev/null
+    fi
+    
+    # 备份现有配置
+    if [ -d "/etc/nginx" ]; then
+        log "备份现有配置..."
+        backup_tar="/tmp/nginx-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+        tar czf "$backup_tar" -C /etc nginx/ 2>/dev/null
+        log "配置已备份到: $backup_tar"
+    fi
+    
+    # 完全删除 Nginx
+    log "完全删除 Nginx..."
+    apt-get remove --purge -y nginx nginx-common nginx-full nginx-core 2>/dev/null
+    apt-get autoremove -y 2>/dev/null
+    
+    # 清理配置文件
+    log "清理配置文件..."
+    rm -rf /etc/nginx
+    rm -rf /var/log/nginx
+    rm -rf /var/cache/nginx
+    rm -rf /var/lib/nginx
+    rm -rf /usr/share/nginx
+    rm -rf /usr/lib/nginx
+    
+    # 清理可能存在的残余文件
+    find /etc -name "*nginx*" -type f -delete 2>/dev/null
+    find /var -name "*nginx*" -type d -exec rm -rf {} + 2>/dev/null || true
+    
+    # 删除可能存在的 nginx 用户和组
+    if id nginx &>/dev/null; then
+        userdel -r nginx 2>/dev/null || true
+    fi
+    
+    log "Nginx 清理完成"
+}
+
 # 安装依赖
 install_deps() {
-    log "安装系统依赖..."
-    apt-get update
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          安装系统依赖                    ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     
-    # 检查并安装必要软件
-    local deps=("curl" "git" "openssl" "certbot" "python3-certbot-nginx")
+    log "更新系统包列表..."
+    apt-get update -y
     
-    for dep in "${deps[@]}"; do
-        if ! dpkg -l | grep -q "^ii  $dep "; then
-            apt-get install -y "$dep"
-        fi
-    done
+    log "安装必要工具..."
+    apt-get install -y curl wget git tar gzip unzip
     
-    # 安装 Nginx
-    if ! command -v nginx &> /dev/null; then
-        apt-get install -y nginx
-    fi
+    log "安装 SSL 相关工具..."
+    apt-get install -y openssl certbot python3-certbot-nginx
+    
+    log "安装编译工具（可选）..."
+    apt-get install -y build-essential libpcre3 libpcre3-dev zlib1g zlib1g-dev libssl-dev
     
     log "依赖安装完成"
 }
 
-# 修复 Nginx 配置问题
-fix_nginx_config() {
-    log "修复 Nginx 配置问题..."
+# 创建目录结构和设置权限
+create_dirs_and_permissions() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          创建目录结构和权限              ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     
-    # 检查并创建必要的配置文件
-    if [ ! -f "/etc/nginx/mime.types" ]; then
-        warn "缺少 mime.types 文件，从 Nginx 包中恢复"
-        apt-get install --reinstall -y nginx-common
+    log "创建主安装目录..."
+    mkdir -p "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR"
+    chown root:root "$INSTALL_DIR"
+    
+    log "创建配置目录..."
+    mkdir -p "$CONFIG_DIR"
+    chmod 750 "$CONFIG_DIR"
+    chown root:www-data "$CONFIG_DIR"
+    
+    log "创建日志目录..."
+    mkdir -p "$LOG_DIR"
+    chmod 775 "$LOG_DIR"
+    chown root:www-data "$LOG_DIR"
+    
+    log "创建 Nginx 配置目录..."
+    mkdir -p /etc/nginx
+    mkdir -p "$NGINX_CONF_DIR"
+    mkdir -p "$NGINX_SITES_AVAILABLE"
+    mkdir -p "$NGINX_SITES_ENABLED"
+    
+    chmod 755 /etc/nginx
+    chmod 750 "$NGINX_CONF_DIR"
+    chown root:www-data /etc/nginx
+    chown root:www-data "$NGINX_CONF_DIR"
+    
+    log "创建 SSL 证书目录..."
+    mkdir -p "$SSL_DIR"
+    mkdir -p "$CERT_ROOT"
+    mkdir -p "$KEY_ROOT"
+    
+    chmod 755 "$SSL_DIR"
+    chmod 755 "$CERT_ROOT"
+    chmod 700 "$KEY_ROOT"  # 私钥目录严格权限
+    
+    chown root:root "$SSL_DIR"
+    chown root:www-data "$CERT_ROOT"
+    chown root:www-data "$KEY_ROOT"
+    
+    log "创建网站根目录..."
+    mkdir -p "$WWW_ROOT"
+    chmod 755 "$WWW_ROOT"
+    chown www-data:www-data "$WWW_ROOT"
+    
+    log "创建日志目录..."
+    mkdir -p /var/log/nginx
+    mkdir -p /var/log/nginx/proxy
+    mkdir -p /var/log/nginx/ssl
+    
+    chmod 755 /var/log/nginx
+    chmod 770 /var/log/nginx/proxy
+    chmod 770 /var/log/nginx/ssl
+    
+    chown root:www-data /var/log/nginx
+    chown www-data:www-data /var/log/nginx/proxy
+    chown www-data:www-data /var/log/nginx/ssl
+    
+    log "创建备份目录..."
+    mkdir -p "$BACKUP_DIR"
+    chmod 750 "$BACKUP_DIR"
+    chown root:root "$BACKUP_DIR"
+    
+    log "创建运行时目录..."
+    mkdir -p /var/cache/nginx
+    mkdir -p /var/lib/nginx
+    mkdir -p /run/nginx
+    
+    chmod 755 /var/cache/nginx
+    chmod 755 /var/lib/nginx
+    chmod 755 /run/nginx
+    
+    chown www-data:www-data /var/cache/nginx
+    chown www-data:www-data /var/lib/nginx
+    chown www-data:www-data /run/nginx
+    
+    log "目录结构和权限设置完成"
+}
+
+# 安装 Nginx
+install_nginx() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          安装 Nginx                      ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    
+    log "安装 Nginx 主包..."
+    apt-get install -y nginx
+    
+    if [ $? -eq 0 ]; then
+        log "✅ Nginx 安装成功"
+        
+        # 检查版本
+        nginx -v
+    else
+        error "Nginx 安装失败"
+        
+        # 尝试从官方源安装
+        log "尝试从 Nginx 官方源安装..."
+        
+        # 添加 Nginx 官方源
+        wget -O /tmp/nginx-key.gpg https://nginx.org/keys/nginx_signing.key
+        apt-key add /tmp/nginx-key.gpg
+        
+        # 添加源
+        echo "deb https://nginx.org/packages/mainline/debian/ $(lsb_release -cs) nginx" > /etc/apt/sources.list.d/nginx.list
+        echo "deb-src https://nginx.org/packages/mainline/debian/ $(lsb_release -cs) nginx" >> /etc/apt/sources.list.d/nginx.list
+        
+        apt-get update
+        apt-get install -y nginx
+        
+        if [ $? -ne 0 ]; then
+            error "Nginx 官方源安装也失败"
+            return 1
+        fi
     fi
     
-    # 确保 sites-available 和 sites-enabled 目录存在
-    mkdir -p "$NGINX_SITES_AVAILABLE" "$NGINX_SITES_ENABLED"
+    # 停止自动启动的 Nginx
+    systemctl stop nginx
+    systemctl disable nginx
     
-    # 如果 nginx.conf 被破坏，恢复默认配置
-    if ! nginx -t 2>/dev/null; then
-        warn "Nginx 配置损坏，恢复默认配置..."
-        
-        # 备份当前配置
-        cp /etc/nginx/nginx.conf "$BACKUP_DIR/nginx.conf.broken.$(date +%Y%m%d-%H%M%S)"
-        
-        # 获取默认配置
-        cat > /etc/nginx/nginx.conf << 'EOF'
+    log "Nginx 安装完成"
+}
+
+# 配置 Nginx 用户和权限
+setup_nginx_user() {
+    log "配置 Nginx 用户和组..."
+    
+    # 确保 www-data 用户存在
+    if ! id www-data &>/dev/null; then
+        groupadd www-data
+        useradd -r -g www-data -s /sbin/nologin -d /nonexistent www-data
+    fi
+    
+    # 设置用户 shell 为 nologin
+    usermod -s /usr/sbin/nologin www-data
+    
+    log "Nginx 用户配置完成"
+}
+
+# 配置 Nginx 主配置文件
+configure_nginx_main() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          配置 Nginx 主配置文件            ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    
+    log "创建优化的 nginx.conf..."
+    
+    cat > /etc/nginx/nginx.conf << 'EOF'
+# Nginx 主配置文件
+# 由反向代理管理脚本生成
+
+# 运行用户和组
 user www-data;
 worker_processes auto;
 pid /run/nginx.pid;
 
+# 错误日志位置和级别
+error_log /var/log/nginx/error.log warn;
+
+# 事件模块配置
 events {
-    worker_connections 768;
+    worker_connections 1024;
+    multi_accept on;
+    use epoll;
 }
 
+# HTTP 模块配置
 http {
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 100M;
-    
+    # 基础 MIME 类型
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
     
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
-    
-    gzip on;
-    
-    include /etc/nginx/conf.d/*.conf;
-    include /etc/nginx/sites-enabled/*;
-}
-EOF
-    fi
-    
-    # 确保默认站点配置存在
-    if [ ! -f "$NGINX_SITES_AVAILABLE/default" ]; then
-        cat > "$NGINX_SITES_AVAILABLE/default" << 'EOF'
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    
-    root /var/www/html;
-    index index.html index.htm index.nginx-debian.html;
-    
-    server_name _;
-    
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-EOF
-    fi
-    
-    # 启用默认站点
-    ln -sf "$NGINX_SITES_AVAILABLE/default" "$NGINX_SITES_ENABLED/default" 2>/dev/null
-    
-    log "Nginx 配置修复完成"
-}
-
-# 初始化目录和权限
-init_dirs() {
-    log "初始化目录结构..."
-    
-    # 创建必要目录
-    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" "$BACKUP_DIR"
-    mkdir -p "$NGINX_CONF_DIR"
-    mkdir -p "$SSL_DIR" "$CERT_ROOT" "$KEY_ROOT"
-    mkdir -p "/var/www/html"
-    
-    # 创建日志目录
-    mkdir -p "/var/log/nginx/proxy"
-    
-    # 设置权限
-    chmod 755 "$INSTALL_DIR"
-    chmod 700 "$KEY_ROOT"
-    chmod 644 "$CERT_ROOT" 2>/dev/null || true
-    
-    # 创建默认首页
-    if [ ! -f "/var/www/html/index.html" ]; then
-        cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Nginx 反向代理管理</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 50px; text-align: center; }
-        h1 { color: #333; }
-        p { color: #666; }
-        .status { 
-            background: #f0f0f0; 
-            padding: 20px; 
-            border-radius: 5px; 
-            display: inline-block;
-            margin: 20px;
-        }
-    </style>
-</head>
-<body>
-    <h1>🎉 Nginx 反向代理已就绪</h1>
-    <div class="status">
-        <p>服务器运行正常</p>
-        <p>使用管理脚本进行配置：</p>
-        <code>bash proxy-manager.sh</code>
-    </div>
-</body>
-</html>
-EOF
-    fi
-    
-    log "目录初始化完成"
-}
-
-# 配置 Nginx 优化设置
-configure_nginx_optimization() {
-    log "配置 Nginx 优化设置..."
-    
-    # 备份原始配置
-    if [ -f "/etc/nginx/nginx.conf" ]; then
-        cp "/etc/nginx/nginx.conf" "$BACKUP_DIR/nginx.conf.backup.$(date +%Y%m%d-%H%M%S)"
-    fi
-    
-    # 在 nginx.conf 的 http 块中添加优化设置
-    if grep -q "http {" /etc/nginx/nginx.conf; then
-        # 读取现有配置
-        cat /etc/nginx/nginx.conf | while IFS= read -r line; do
-            if [[ "$line" == "http {" ]]; then
-                echo "$line"
-                cat << 'EOF'
-    # 优化设置
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 100M;
-    
-    # SSL 优化
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # 日志格式
+    # 日志格式定义
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                     '$status $body_bytes_sent "$http_referer" '
                     '"$http_user_agent" "$http_x_forwarded_for"';
@@ -247,39 +313,81 @@ configure_nginx_optimization() {
     log_format proxy '$remote_addr - $remote_user [$time_local] "$request" '
                      '$status $body_bytes_sent "$http_referer" '
                      '"$http_user_agent" "$http_x_forwarded_for" '
-                     'proxy: $upstream_addr upstream_time: $upstream_response_time';
+                     'proxy: $upstream_addr time: $upstream_response_time';
     
-    # 访问控制
+    log_format ssl '$remote_addr - $remote_user [$time_local] "$request" '
+                   '$status $body_bytes_sent "$http_referer" '
+                   '"$http_user_agent" ssl_protocol: $ssl_protocol ssl_cipher: $ssl_cipher';
+    
+    # 访问日志
+    access_log /var/log/nginx/access.log main;
+    
+    # 性能优化
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 100M;
+    
+    # 响应头优化
     server_tokens off;
-EOF
-            else
-                echo "$line"
-            fi
-        done > /tmp/nginx.conf.new
-        
-        mv /tmp/nginx.conf.new /etc/nginx/nginx.conf
-    fi
     
-    log "Nginx 优化配置完成"
+    # Gzip 压缩
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/json application/javascript application/xml+rss 
+               application/atom+xml image/svg+xml;
+    
+    # SSL 优化
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # 文件缓存
+    open_file_cache max=1000 inactive=20s;
+    open_file_cache_valid 30s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
+    
+    # 包含其他配置
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+EOF
+    
+    # 设置权限
+    chmod 644 /etc/nginx/nginx.conf
+    chown root:root /etc/nginx/nginx.conf
+    
+    log "✅ Nginx 主配置文件创建完成"
 }
 
-# 配置安全默认站点
-configure_default_site() {
-    log "配置安全默认站点..."
+# 创建默认站点配置
+create_default_sites() {
+    log "创建默认站点配置..."
     
-    # 生成自签名证书用于默认站点
-    if [ ! -f "$SSL_DIR/fallback.key" ]; then
+    # 生成自签名证书
+    if [ ! -f "$SSL_DIR/default.key" ]; then
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-            -keyout "$SSL_DIR/fallback.key" \
-            -out "$SSL_DIR/fallback.crt" \
-            -subj "/C=CN/ST=Beijing/L=Beijing/O=Default/CN=invalid.local" \
-            -addext "subjectAltName=DNS:invalid.local" 2>/dev/null
-        chmod 600 "$SSL_DIR/fallback.key"
+            -keyout "$SSL_DIR/default.key" \
+            -out "$SSL_DIR/default.crt" \
+            -subj "/C=CN/ST=Beijing/L=Beijing/O=Default/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost" 2>/dev/null
+        
+        chmod 600 "$SSL_DIR/default.key"
+        chown www-data:www-data "$SSL_DIR/default.key"
+        chown www-data:www-data "$SSL_DIR/default.crt"
     fi
     
-    # 创建阻止非法访问的默认站点
-    cat > "$NGINX_CONF_DIR/00-block-default.conf" << 'EOF'
-# 阻止直接IP访问和非法域名
+    # 创建默认 HTTP 站点（重定向到 HTTPS）
+    cat > "$NGINX_SITES_AVAILABLE/default" << 'EOF'
+# 默认 HTTP 站点 - 重定向到 HTTPS
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -288,1056 +396,628 @@ server {
     # 安全头
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
     
-    # 记录访问日志
-    access_log /var/log/nginx/blocked-access.log main;
+    # 访问控制 - 只允许本地访问
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
     
-    # 返回444（无响应）
-    return 444;
+    # 记录访问
+    access_log /var/log/nginx/default-access.log main;
+    error_log /var/log/nginx/default-error.log;
+    
+    # 返回 403 禁止访问
+    return 403;
 }
 
+# 健康检查端点
 server {
-    listen 443 ssl http2 default_server;
-    listen [::]:443 ssl http2 default_server;
-    server_name _;
-    
-    # SSL证书
-    ssl_certificate /etc/nginx/ssl/fallback.crt;
-    ssl_certificate_key /etc/nginx/ssl/fallback.key;
-    
-    # 安全头
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    
-    # 记录访问日志
-    access_log /var/log/nginx/blocked-ssl-access.log main;
-    
-    # 返回444（无响应）
-    return 444;
-}
-EOF
-    
-    # 创建管理页面站点
-    cat > "$NGINX_SITES_AVAILABLE/proxy-admin" << 'EOF'
-# 管理页面
-server {
-    listen 8080;
+    listen 127.0.0.1:8080;
     server_name localhost;
     
-    root /var/www/html;
-    index index.html;
-    
-    access_log /var/log/nginx/admin-access.log main;
-    error_log /var/log/nginx/admin-error.log;
-    
-    location / {
-        try_files $uri $uri/ =404;
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
     }
     
-    # 禁止访问隐藏文件
-    location ~ /\. {
-        deny all;
+    location /nginx-status {
+        stub_status on;
         access_log off;
-        log_not_found off;
+        allow 127.0.0.1;
+        deny all;
     }
 }
 EOF
     
-    # 启用管理页面
-    ln -sf "$NGINX_SITES_AVAILABLE/proxy-admin" "$NGINX_SITES_ENABLED/" 2>/dev/null
+    # 创建管理页面
+    cat > "$WWW_ROOT/index.html" << 'EOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nginx 反向代理管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .status-box {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        
+        .status-item {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+        
+        .status-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            margin-right: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        
+        .status-up {
+            background: #10b981;
+        }
+        
+        .status-down {
+            background: #ef4444;
+        }
+        
+        .command-box {
+            background: #1f2937;
+            color: #f3f4f6;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            text-align: left;
+            overflow-x: auto;
+        }
+        
+        .btn {
+            display: inline-block;
+            background: #4f46e5;
+            color: white;
+            padding: 12px 30px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            margin-top: 20px;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        
+        .btn:hover {
+            background: #4338ca;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        .footer {
+            margin-top: 30px;
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .logo {
+            font-size: 3em;
+            margin-bottom: 20px;
+            color: #4f46e5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🚀</div>
+        <h1>Nginx 反向代理已就绪</h1>
+        <p class="subtitle">您的服务器已配置完成并正常运行</p>
+        
+        <div class="status-box">
+            <div class="status-item">
+                <div class="status-icon status-up">✓</div>
+                <div>
+                    <strong>Nginx 服务状态：</strong> 运行中
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-icon status-up">✓</div>
+                <div>
+                    <strong>SSL 证书：</strong> 已配置
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-icon status-up">✓</div>
+                <div>
+                    <strong>反向代理：</strong> 就绪
+                </div>
+            </div>
+        </div>
+        
+        <div class="command-box">
+            # 管理命令<br>
+            nginx -t                 # 测试配置<br>
+            systemctl reload nginx   # 重载配置<br>
+            systemctl status nginx   # 查看状态
+        </div>
+        
+        <button class="btn" onclick="location.reload()">刷新状态</button>
+        
+        <div class="footer">
+            <p>由 Nginx 反向代理管理脚本自动生成</p>
+            <p>© 2024 - 服务器时间: <span id="time"></span></p>
+        </div>
+    </div>
     
-    log "安全默认站点配置完成"
+    <script>
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('time').textContent = 
+                now.toLocaleString('zh-CN', { 
+                    year: 'numeric', 
+                    month: '2-digit', 
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false 
+                });
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+    </script>
+</body>
+</html>
+EOF
+    
+    # 启用默认站点
+    ln -sf "$NGINX_SITES_AVAILABLE/default" "$NGINX_SITES_ENABLED/"
+    
+    log "✅ 默认站点配置完成"
 }
 
-# 设置开机自启
-setup_autostart() {
-    log "设置开机自启..."
+# 配置防火墙
+setup_firewall() {
+    log "配置防火墙规则..."
     
-    # 启用 Nginx 服务
-    systemctl enable nginx 2>/dev/null || true
-    
-    # 检查 Nginx 是否正在运行
-    if ! systemctl is-active nginx &>/dev/null; then
-        log "启动 Nginx 服务..."
-        systemctl start nginx || {
-            error "Nginx 启动失败，尝试手动修复"
-            nginx -t
-            return 1
-        }
+    # 检查 ufw 是否安装
+    if command -v ufw &>/dev/null; then
+        ufw allow 22/tcp comment 'SSH'
+        ufw allow 80/tcp comment 'HTTP'
+        ufw allow 443/tcp comment 'HTTPS'
+        ufw --force enable
+        log "UFW 防火墙已配置"
     fi
     
-    # 创建证书更新定时任务
-    if [ -f "/usr/bin/certbot" ]; then
-        if ! crontab -l | grep -q "certbot renew"; then
-            (crontab -l 2>/dev/null; echo "0 3 * * * /usr/bin/certbot renew --quiet --deploy-hook \"systemctl reload nginx\"") | crontab -
-            log "证书自动续期定时任务已添加"
-        fi
+    # 检查 iptables
+    if command -v iptables &>/dev/null; then
+        iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+        iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        iptables -A INPUT -i lo -j ACCEPT
+        iptables -A INPUT -j DROP
+        log "iptables 规则已配置"
     fi
     
-    log "开机自启设置完成"
+    log "防火墙配置完成"
+}
+
+# 设置开机自启和服务配置
+setup_service() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          配置系统服务                    ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    
+    log "创建 systemd 服务文件..."
+    
+    cat > /lib/systemd/system/nginx.service << 'EOF'
+[Unit]
+Description=A high performance web server and a reverse proxy server
+Documentation=man:nginx(8)
+After=network.target nss-lookup.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -q -g 'daemon on; master_process on;'
+ExecStart=/usr/sbin/nginx -g 'daemon on; master_process on;'
+ExecReload=/usr/sbin/nginx -g 'daemon on; master_process on;' -s reload
+ExecStop=-/sbin/start-stop-daemon --quiet --stop --retry QUIT/5 --pidfile /run/nginx.pid
+TimeoutStopSec=5
+KillMode=mixed
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/nginx /var/cache/nginx /var/lib/nginx
+ReadOnlyPaths=/etc/nginx
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=512
+
+# 用户和组
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 重新加载 systemd
+    systemctl daemon-reload
+    
+    # 启用并启动 Nginx
+    systemctl enable nginx
+    systemctl start nginx
+    
+    # 检查服务状态
+    if systemctl is-active nginx &>/dev/null; then
+        log "✅ Nginx 服务启动成功"
+        
+        # 显示服务状态
+        systemctl status nginx --no-pager | head -20
+    else
+        error "Nginx 服务启动失败"
+        journalctl -u nginx --no-pager -n 20
+        return 1
+    fi
+    
+    log "服务配置完成"
+}
+
+# 创建监控脚本
+create_monitoring() {
+    log "创建监控脚本..."
+    
+    cat > /usr/local/bin/nginx-monitor << 'EOF'
+#!/bin/bash
+
+# Nginx 状态监控脚本
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+check_nginx() {
+    if systemctl is-active nginx &>/dev/null; then
+        echo -e "${GREEN}✓ Nginx 正在运行${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ Nginx 已停止${NC}"
+        return 1
+    fi
+}
+
+check_ports() {
+    echo -e "\n端口监听状态:"
+    netstat -tulpn | grep -E ':80|:443' | grep nginx || echo -e "${YELLOW}警告: Nginx 未监听标准端口${NC}"
+}
+
+check_ssl() {
+    echo -e "\nSSL 证书状态:"
+    if [ -d /etc/nginx/ssl/certs ]; then
+        find /etc/nginx/ssl/certs -name "*.pem" -type f | while read cert; do
+            domain=$(basename $(dirname "$cert"))
+            expiry=$(openssl x509 -in "$cert" -noout -dates 2>/dev/null | grep "Not After" | cut -d= -f2)
+            if [ -n "$expiry" ]; then
+                echo "  $domain: $expiry"
+            fi
+        done
+    fi
+}
+
+check_logs() {
+    echo -e "\n日志文件大小:"
+    ls -lh /var/log/nginx/*.log 2>/dev/null | awk '{print $5, $9}'
+}
+
+# 主函数
+main() {
+    echo "=== Nginx 状态监控 ==="
+    echo "时间: $(date)"
+    echo ""
+    
+    check_nginx
+    check_ports
+    check_ssl
+    check_logs
+    
+    # 显示活动连接数
+    connections=$(netstat -an | grep ':80\|:443' | grep ESTABLISHED | wc -l)
+    echo -e "\n活动连接数: $connections"
+    
+    # 显示系统负载
+    load=$(uptime | awk -F'load average:' '{print $2}')
+    echo -e "系统负载: $load"
+}
+
+main "$@"
+EOF
+    
+    chmod +x /usr/local/bin/nginx-monitor
+    
+    # 添加定时监控任务
+    cat > /etc/cron.d/nginx-monitor << 'EOF'
+# Nginx 监控任务
+*/5 * * * * root /usr/local/bin/nginx-monitor >> /var/log/nginx/monitor.log 2>&1
+
+# 每日凌晨清理旧日志
+0 2 * * * root find /var/log/nginx -name "*.log" -mtime +30 -delete
+0 2 * * * root find /var/log/nginx -name "*.gz" -mtime +90 -delete
+EOF
+    
+    log "✅ 监控脚本创建完成"
 }
 
 # 测试 Nginx 配置
-test_nginx_config() {
-    log "测试 Nginx 配置..."
+test_nginx() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}          测试 Nginx 配置                 ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     
+    log "测试 Nginx 配置语法..."
     if nginx -t; then
         log "✅ Nginx 配置测试通过"
-        return 0
     else
         error "❌ Nginx 配置测试失败"
         return 1
     fi
+    
+    log "测试 HTTP 访问..."
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep -q "200"; then
+        log "✅ HTTP 健康检查通过"
+    else
+        error "❌ HTTP 健康检查失败"
+    fi
+    
+    log "测试进程运行..."
+    if pgrep nginx &>/dev/null; then
+        nginx_processes=$(pgrep nginx | wc -l)
+        log "✅ Nginx 进程运行中 (共 $nginx_processes 个进程)"
+    else
+        error "❌ Nginx 进程未运行"
+    fi
+    
+    log "测试日志目录..."
+    if [ -f "/var/log/nginx/error.log" ]; then
+        log "✅ 日志文件正常"
+    else
+        warn "⚠️  日志文件未找到"
+    fi
 }
 
-# 初始化 Nginx
-init_nginx() {
+# 显示安装摘要
+show_summary() {
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          初始化 Nginx 配置                 ${NC}"
+    echo -e "${CYAN}          Nginx 安装完成摘要              ${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo ""
     
+    echo -e "${GREEN}✅ 安装状态:${NC} 完成"
+    echo ""
+    
+    echo -e "${YELLOW}📁 目录结构:${NC}"
+    echo "  安装目录: $INSTALL_DIR"
+    echo "  配置目录: /etc/nginx/"
+    echo "  证书目录: $SSL_DIR"
+    echo "  网站目录: $WWW_ROOT"
+    echo "  日志目录: /var/log/nginx/"
+    echo ""
+    
+    echo -e "${YELLOW}🔧 服务信息:${NC}"
+    systemctl status nginx --no-pager | grep "Active:" | head -1
+    nginx -v 2>&1
+    echo ""
+    
+    echo -e "${YELLOW}🌐 访问信息:${NC}"
+    server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "未知")
+    echo "  服务器IP: $server_ip"
+    echo "  管理页面: http://$server_ip (健康检查)"
+    echo ""
+    
+    echo -e "${YELLOW}🛠️  管理命令:${NC}"
+    echo "  查看状态: systemctl status nginx"
+    echo "  测试配置: nginx -t"
+    echo "  重载配置: systemctl reload nginx"
+    echo "  监控状态: nginx-monitor"
+    echo ""
+    
+    echo -e "${YELLOW}📋 后续步骤:${NC}"
+    echo "  1. 配置域名解析到服务器 IP"
+    echo "  2. 使用脚本添加反向代理"
+    echo "  3. 配置 SSL 证书（可选）"
+    echo "  4. 设置防火墙规则"
+    echo ""
+    
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    log "安装完成！Nginx 已成功安装并配置"
+}
+
+# 主安装函数
+install_nginx_complete() {
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}      Debian 12+ Nginx 纯净安装            ${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo ""
+    
+    # 确认安装
+    read -p "这将完全删除现有 Nginx 并重新安装，是否继续？(y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "安装已取消"
+        exit 0
+    fi
+    
+    # 执行安装步骤
     check_root
     
-    log "开始初始化 Nginx..."
+    log "开始安装流程..."
+    echo ""
     
-    # 安装依赖
+    # 步骤 1: 清理旧安装
+    clean_nginx
+    
+    # 步骤 2: 安装依赖
     install_deps
     
-    # 修复配置问题
-    fix_nginx_config
+    # 步骤 3: 创建目录和权限
+    create_dirs_and_permissions
     
-    # 初始化目录
-    init_dirs
+    # 步骤 4: 配置用户
+    setup_nginx_user
     
-    # 配置优化
-    configure_nginx_optimization
-    
-    # 配置默认站点
-    configure_default_site
-    
-    # 测试配置
-    if test_nginx_config; then
-        # 设置开机自启
-        setup_autostart
-        
-        # 显示状态
-        echo ""
-        log "✅ Nginx 初始化完成！"
-        echo ""
-        info "访问地址: http://服务器IP"
-        info "管理页面: http://服务器IP:8080"
-        info "配置文件: /etc/nginx/"
-        info "日志文件: /var/log/nginx/"
-        echo ""
-        systemctl status nginx --no-pager | head -10
-    else
-        error "Nginx 初始化失败，请检查错误信息"
-        return 1
+    # 步骤 5: 安装 Nginx
+    install_nginx
+    if [ $? -ne 0 ]; then
+        error "Nginx 安装失败"
+        exit 1
     fi
+    
+    # 步骤 6: 配置主文件
+    configure_nginx_main
+    
+    # 步骤 7: 创建默认站点
+    create_default_sites
+    
+    # 步骤 8: 配置防火墙
+    setup_firewall
+    
+    # 步骤 9: 设置服务
+    setup_service
+    if [ $? -ne 0 ]; then
+        error "服务设置失败"
+        exit 1
+    fi
+    
+    # 步骤 10: 创建监控
+    create_monitoring
+    
+    # 步骤 11: 测试配置
+    test_nginx
+    
+    # 步骤 12: 显示摘要
+    show_summary
 }
 
-# 查看证书信息
-view_certificates() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          证书信息查看                     ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    if [ -d "$CERT_ROOT" ]; then
-        echo -e "${YELLOW}找到的证书:${NC}"
-        echo ""
-        
-        local found=0
-        for domain_dir in "$CERT_ROOT"/*; do
-            if [ -d "$domain_dir" ]; then
-                domain=$(basename "$domain_dir")
-                cert_file="$domain_dir/fullchain.pem"
-                
-                if [ -f "$cert_file" ]; then
-                    found=1
-                    echo -e "${GREEN}域名: $domain${NC}"
-                    echo "证书路径: $cert_file"
-                    echo "私钥路径: $KEY_ROOT/$domain/key.pem"
-                    
-                    # 显示证书信息
-                    if openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -q "Not After"; then
-                        expiry=$(openssl x509 -in "$cert_file" -noout -dates 2>/dev/null | grep "Not After" | cut -d= -f2)
-                        echo "到期时间: $expiry"
-                        
-                        # 检查证书是否即将过期（30天内）
-                        expiry_ts=$(date -d "$expiry" +%s)
-                        now_ts=$(date +%s)
-                        days_left=$(( (expiry_ts - now_ts) / 86400 ))
-                        
-                        if [ $days_left -lt 30 ]; then
-                            echo -e "${RED}警告: 证书将在 $days_left 天后过期！${NC}"
-                        fi
-                    fi
-                    
-                    # 检查符号链接
-                    if [ -L "/etc/nginx/ssl/$domain.crt" ]; then
-                        echo "快捷链接: /etc/nginx/ssl/$domain.crt ✓"
-                    else
-                        echo "快捷链接: 未创建"
-                    fi
-                    
-                    echo "----------------------------------------"
-                fi
-            fi
-        done
-        
-        if [ $found -eq 0 ]; then
-            echo "未找到任何证书"
-        fi
-    else
-        warn "证书目录不存在: $CERT_ROOT"
-    fi
-    
-    # 显示 Let's Encrypt 证书
-    if [ -d "/etc/letsencrypt/live" ]; then
-        echo ""
-        echo -e "${YELLOW}Let's Encrypt 证书:${NC}"
-        for domain_dir in /etc/letsencrypt/live/*; do
-            if [ -d "$domain_dir" ] && [ -f "$domain_dir/fullchain.pem" ]; then
-                domain=$(basename "$domain_dir")
-                echo "- $domain"
-            fi
-        done
-    fi
-    
-    # 显示 acme.sh 管理的证书
-    if [ -d "$ACME_DIR" ]; then
-        echo ""
-        echo -e "${YELLOW}acme.sh 管理的证书:${NC}"
-        cd "$ACME_DIR"
-        ./acme.sh --list 2>/dev/null || echo "acme.sh 未安装或无法访问"
-    fi
-    
+# 显示帮助
+show_help() {
+    echo -e "${CYAN}使用方法:${NC}"
+    echo "  $(basename "$0") [选项]"
     echo ""
-    info "使用 '添加反向代理' 功能时会自动处理证书"
-}
-
-# 添加反向代理
-add_proxy() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          添加反向代理                     ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    # 检查 Nginx 是否运行
-    if ! systemctl is-active nginx &>/dev/null; then
-        error "Nginx 未运行，请先初始化 Nginx"
-        return 1
-    fi
-    
-    read -p "请输入子域名 (例如: app、api、blog，直接回车使用根域名): " subdomain
-    read -p "请输入主域名 (例如: example.com): " domain
-    read -p "请输入本地端口号 (例如: 3000、8080、9000): " port
-    
-    if [ -z "$subdomain" ]; then
-        full_domain="$domain"
-    else
-        full_domain="$subdomain.$domain"
-    fi
-    
-    # 检查域名格式
-    if [[ ! "$full_domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        error "域名格式不正确: $full_domain"
-        return 1
-    fi
-    
-    # 检查端口是否数字
-    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-        error "端口号无效 (1-65535)"
-        return 1
-    fi
-    
-    # 检查是否已存在配置
-    local config_file="$NGINX_CONF_DIR/$full_domain.conf"
-    if [ -f "$config_file" ]; then
-        warn "配置已存在: $config_file"
-        read -p "是否覆盖? (y/n): " overwrite
-        if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
-            return 1
-        fi
-        # 备份旧配置
-        cp "$config_file" "$BACKUP_DIR/${full_domain}.conf.backup.$(date +%Y%m%d-%H%M%S)"
-    fi
-    
-    # 创建证书目录
-    mkdir -p "$CERT_ROOT/$domain"
-    mkdir -p "$KEY_ROOT/$domain"
-    
-    # 检查证书是否存在
-    local cert_file="$CERT_ROOT/$domain/fullchain.pem"
-    local key_file="$KEY_ROOT/$domain/key.pem"
-    
-    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        echo ""
-        warn "未找到 $domain 的 SSL 证书"
-        echo "1. 使用现有证书"
-        echo "2. 申请 Let's Encrypt 证书"
-        echo "3. 生成自签名证书"
-        echo "4. 跳过 SSL（仅 HTTP）"
-        read -p "请选择 (1-4): " cert_choice
-        
-        case $cert_choice in
-            1)
-                read -p "请输入证书文件路径: " custom_cert
-                read -p "请输入私钥文件路径: " custom_key
-                if [ -f "$custom_cert" ] && [ -f "$custom_key" ]; then
-                    cp "$custom_cert" "$cert_file"
-                    cp "$custom_key" "$key_file"
-                    chmod 600 "$key_file"
-                    log "证书已复制"
-                else
-                    error "证书文件不存在，将生成自签名证书"
-                    generate_self_signed_cert "$domain"
-                fi
-                ;;
-            2)
-                apply_certificate "$domain"
-                ;;
-            3)
-                generate_self_signed_cert "$domain"
-                ;;
-            4)
-                # 标记为不使用 SSL
-                cert_file=""
-                key_file=""
-                ;;
-            *)
-                warn "选择无效，将生成自签名证书"
-                generate_self_signed_cert "$domain"
-                ;;
-        esac
-    fi
-    
-    # 创建符号链接
-    if [ -n "$cert_file" ] && [ -f "$cert_file" ]; then
-        ln -sf "$cert_file" "/etc/nginx/ssl/$domain.crt" 2>/dev/null || true
-        ln -sf "$key_file" "/etc/nginx/ssl/$domain.key" 2>/dev/null || true
-    fi
-    
-    # 创建 Nginx 配置
-    if [ -n "$cert_file" ] && [ -f "$cert_file" ]; then
-        # HTTPS 配置
-        cat > "$config_file" << EOF
-# 反向代理配置: $full_domain -> localhost:$port
-# 生成时间: $(date)
-# 管理脚本: proxy-manager.sh
-
-# HTTP 重定向到 HTTPS
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $full_domain;
-    
-    # 安全头
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    
-    # 记录日志
-    access_log /var/log/nginx/${full_domain}-access.log main;
-    
-    # 重定向到 HTTPS
-    return 301 https://\$server_name\$request_uri;
-}
-
-# HTTPS 反向代理
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $full_domain;
-    
-    # SSL 证书
-    ssl_certificate $cert_file;
-    ssl_certificate_key $key_file;
-    
-    # SSL 优化
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # 安全头
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    
-    # 记录日志
-    access_log /var/log/nginx/${full_domain}-ssl-access.log main;
-    error_log /var/log/nginx/${full_domain}-ssl-error.log;
-    
-    # 代理设置
-    location / {
-        proxy_pass http://localhost:$port;
-        
-        # 代理头
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        # 超时设置
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-        
-        # WebSocket 支持
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-    
-    # 阻止访问敏感文件
-    location ~ /\.(?!well-known) {
-        deny all;
-        access_log off;
-        log_not_found off;
-    }
-    
-    # 健康检查
-    location /nginx-health {
-        access_log off;
-        return 200 "healthy\n";
-        add_header Content-Type text/plain;
-    }
-}
-EOF
-    else
-        # HTTP only 配置
-        cat > "$config_file" << EOF
-# HTTP 反向代理配置: $full_domain -> localhost:$port
-# 生成时间: $(date)
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $full_domain;
-    
-    # 安全头
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    
-    # 记录日志
-    access_log /var/log/nginx/${full_domain}-access.log main;
-    error_log /var/log/nginx/${full_domain}-error.log;
-    
-    # 代理设置
-    location / {
-        proxy_pass http://localhost:$port;
-        
-        # 代理头
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        
-        # 超时设置
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-    
-    # 健康检查
-    location /nginx-health {
-        access_log off;
-        return 200 "healthy\n";
-        add_header Content-Type text/plain;
-    }
-}
-EOF
-    fi
-    
-    log "反向代理配置已创建: $config_file"
-    
-    # 测试配置并重载
-    if test_nginx_config; then
-        systemctl reload nginx
-        log "✅ 反向代理配置成功！"
-        echo ""
-        if [ -n "$cert_file" ] && [ -f "$cert_file" ]; then
-            info "HTTPS 地址: https://$full_domain"
-        fi
-        info "HTTP 地址: http://$full_domain"
-        info "代理目标: http://localhost:$port"
-        info "配置文件: $config_file"
-        echo ""
-        info "请确保 DNS 已正确解析到服务器 IP"
-    else
-        error "Nginx 配置测试失败"
-        if [ -f "$config_file" ]; then
-            echo "配置文件内容:"
-            cat "$config_file"
-        fi
-        return 1
-    fi
-}
-
-# 申请 SSL 证书
-apply_certificate() {
-    local domain=$1
-    
-    echo -e "${YELLOW}为 $domain 申请 SSL 证书...${NC}"
-    
-    # 检查是否安装 certbot
-    if ! command -v certbot &> /dev/null; then
-        error "certbot 未安装，正在安装..."
-        apt-get install -y certbot python3-certbot-nginx
-    fi
-    
-    # 检查是否需要添加泛域名
-    read -p "是否申请泛域名证书 (*.$domain)? (y/n): " wildcard
-    if [[ "$wildcard" =~ ^[Yy]$ ]]; then
-        cert_domains="-d $domain -d *.$domain"
-    else
-        cert_domains="-d $domain"
-    fi
-    
-    # 使用 certbot 申请证书
-    if certbot certonly --nginx $cert_domains --non-interactive --agree-tos --email admin@$domain 2>/dev/null; then
-        log "证书申请成功"
-        
-        # 复制证书到统一目录
-        local cert_path="/etc/letsencrypt/live/$domain"
-        if [ -d "$cert_path" ]; then
-            mkdir -p "$CERT_ROOT/$domain"
-            mkdir -p "$KEY_ROOT/$domain"
-            
-            cp "$cert_path/fullchain.pem" "$CERT_ROOT/$domain/"
-            cp "$cert_path/privkey.pem" "$KEY_ROOT/$domain/key.pem"
-            
-            chmod 600 "$KEY_ROOT/$domain/key.pem"
-            
-            log "证书已复制到: $CERT_ROOT/$domain/"
-            return 0
-        fi
-    else
-        error "Let's Encrypt 证书申请失败"
-        warn "尝试使用自签名证书..."
-        generate_self_signed_cert "$domain"
-        return 1
-    fi
-}
-
-# 生成自签名证书
-generate_self_signed_cert() {
-    local domain=$1
-    
-    warn "为 $domain 生成自签名证书..."
-    
-    mkdir -p "$CERT_ROOT/$domain"
-    mkdir -p "$KEY_ROOT/$domain"
-    
-    # 生成证书
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$KEY_ROOT/$domain/key.pem" \
-        -out "$CERT_ROOT/$domain/fullchain.pem" \
-        -subj "/C=CN/ST=Beijing/L=Beijing/O=Self-Signed/CN=$domain" \
-        -addext "subjectAltName=DNS:$domain,DNS:*.$domain" 2>/dev/null
-    
-    chmod 600 "$KEY_ROOT/$domain/key.pem"
-    
-    log "自签名证书已生成: $CERT_ROOT/$domain/fullchain.pem"
-}
-
-# 删除反向代理
-remove_proxy() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          删除反向代理                     ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    # 查找所有反代配置
-    local configs=()
-    local count=0
-    
-    echo -e "${YELLOW}当前的反向代理配置:${NC}"
+    echo -e "${CYAN}选项:${NC}"
+    echo "  install    完全重新安装 Nginx（推荐）"
+    echo "  status     查看 Nginx 状态"
+    echo "  test       测试 Nginx 配置"
+    echo "  monitor    运行监控脚本"
+    echo "  help       显示帮助信息"
     echo ""
-    
-    for conf in "$NGINX_CONF_DIR"/*.conf; do
-        if [ -f "$conf" ] && [[ "$(basename "$conf")" != "00-block-default.conf" ]]; then
-            server_name=$(grep -h "server_name " "$conf" | head -1 | awk '{print $2}' | sed 's/;//')
-            if [ -n "$server_name" ]; then
-                ((count++))
-                configs+=("$(basename "$conf")")
-                echo "${count}. $server_name"
-                echo "   文件: $(basename "$conf")"
-                echo ""
-            fi
-        fi
-    done
-    
-    if [ $count -eq 0 ]; then
-        warn "没有找到反向代理配置"
-        return 0
-    fi
-    
-    read -p "请输入要删除的配置编号 (1-$count，或输入 'a' 删除所有): " choice
-    
-    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $count ]; then
-        index=$((choice-1))
-        config_file="${configs[$index]}"
-        
-        read -p "确定要删除 $config_file 吗? (y/n): " confirm
-        
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            # 备份配置
-            backup_file="$BACKUP_DIR/${config_file}.backup.$(date +%Y%m%d-%H%M%S)"
-            cp "$NGINX_CONF_DIR/$config_file" "$backup_file"
-            
-            # 删除配置
-            rm -f "$NGINX_CONF_DIR/$config_file"
-            
-            # 测试并重载 Nginx
-            if test_nginx_config; then
-                systemctl reload nginx
-                log "✅ 反向代理配置已删除: $config_file"
-                log "配置文件已备份到: $backup_file"
-            else
-                error "Nginx 配置测试失败，已恢复备份"
-                cp "$backup_file" "$NGINX_CONF_DIR/$config_file"
-                return 1
-            fi
-        fi
-    elif [[ "$choice" == "a" ]]; then
-        read -p "确定要删除所有反向代理配置吗? (y/n): " confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            # 备份并删除所有配置
-            backup_dir="$BACKUP_DIR/all-proxies-$(date +%Y%m%d-%H%M%S)"
-            mkdir -p "$backup_dir"
-            
-            for conf in "$NGINX_CONF_DIR"/*.conf; do
-                if [ -f "$conf" ] && [[ "$(basename "$conf")" != "00-block-default.conf" ]]; then
-                    cp "$conf" "$backup_dir/"
-                    rm -f "$conf"
-                fi
-            done
-            
-            if test_nginx_config; then
-                systemctl reload nginx
-                log "✅ 所有反向代理配置已删除"
-                log "配置已备份到: $backup_dir"
-            fi
-        fi
-    else
-        error "选择无效"
-        return 1
-    fi
-}
-
-# 查看反向代理列表
-list_proxies() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          反向代理列表                     ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    local count=0
-    
-    for conf in "$NGINX_CONF_DIR"/*.conf; do
-        if [ -f "$conf" ] && [[ "$(basename "$conf")" != "00-block-default.conf" ]]; then
-            filename=$(basename "$conf")
-            server_name=$(grep -h "server_name " "$conf" | head -1 | awk '{print $2}' | sed 's/;//')
-            proxy_pass=$(grep -h "proxy_pass " "$conf" | head -1 | awk '{print $2}' | sed 's/;//')
-            
-            if [ -n "$server_name" ]; then
-                ((count++))
-                echo -e "${GREEN}${count}. $server_name${NC}"
-                
-                if [ -n "$proxy_pass" ]; then
-                    echo "  代理目标: $proxy_pass"
-                fi
-                
-                echo "  配置文件: $filename"
-                
-                # 检查 SSL 状态
-                if grep -q "listen 443 ssl" "$conf"; then
-                    echo "  SSL 状态: ${GREEN}已启用 HTTPS${NC}"
-                else
-                    echo "  SSL 状态: ${YELLOW}仅 HTTP${NC}"
-                fi
-                
-                # 显示日志文件
-                access_log=$(grep -h "access_log " "$conf" | head -1 | awk '{print $2}' | sed 's/;//')
-                if [ -n "$access_log" ]; then
-                    echo "  访问日志: $access_log"
-                fi
-                
-                echo ""
-            fi
-        fi
-    done
-    
-    if [ $count -eq 0 ]; then
-        echo "没有配置反向代理"
-    fi
-    
-    echo -e "${YELLOW}Nginx 状态:${NC}"
-    if systemctl is-active nginx &>/dev/null; then
-        echo -e "${GREEN}✅ Nginx 正在运行${NC}"
-        systemctl status nginx --no-pager | grep "Active:" | head -1
-    else
-        echo -e "${RED}❌ Nginx 未运行${NC}"
-    fi
-}
-
-# 重载 Nginx
-reload_nginx() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          重载 Nginx 配置                 ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    if test_nginx_config; then
-        log "正在重载 Nginx..."
-        
-        if systemctl reload nginx; then
-            log "✅ Nginx 重载成功"
-            
-            # 显示状态
-            echo ""
-            systemctl status nginx --no-pager | head -10
-        else
-            error "Nginx 重载失败"
-            
-            # 尝试重启
-            echo ""
-            read -p "是否尝试重启 Nginx? (y/n): " restart_choice
-            if [[ "$restart_choice" =~ ^[Yy]$ ]]; then
-                systemctl restart nginx
-                systemctl status nginx --no-pager | head -10
-            fi
-        fi
-    else
-        error "Nginx 配置测试失败，无法重载"
-        return 1
-    fi
-}
-
-# 备份配置
-backup_config() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          备份 Nginx 配置                 ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    local backup_name="nginx-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    local backup_path="$BACKUP_DIR/$backup_name"
-    
-    log "正在备份 Nginx 配置..."
-    
-    # 备份主要配置文件
-    tar czf "$backup_path" \
-        /etc/nginx/nginx.conf \
-        /etc/nginx/conf.d/ \
-        /etc/nginx/sites-available/ \
-        /etc/nginx/sites-enabled/ \
-        /etc/nginx/ssl/ \
-        /var/www/html/ \
-        2>/dev/null
-    
-    if [ $? -eq 0 ] && [ -f "$backup_path" ]; then
-        log "✅ 配置备份成功: $backup_path"
-        echo ""
-        echo "备份文件信息:"
-        ls -lh "$backup_path"
-        echo ""
-        echo "包含内容:"
-        tar tzf "$backup_path" | head -20
-        echo "..."
-    else
-        error "配置备份失败"
-        return 1
-    fi
-}
-
-# 查看日志
-view_logs() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          查看 Nginx 日志                 ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    echo "1. 查看错误日志 (最后50行)"
-    echo "2. 查看访问日志 (最后50行)"
-    echo "3. 查看反向代理日志"
-    echo "4. 实时监控错误日志"
-    echo "5. 实时监控访问日志"
-    echo "6. 清空日志文件"
-    echo ""
-    
-    read -p "请选择 (1-6): " log_choice
-    
-    case $log_choice in
-        1)
-            echo -e "${YELLOW}=== Nginx 错误日志 (最后50行) ===${NC}"
-            if [ -f "/var/log/nginx/error.log" ]; then
-                tail -50 /var/log/nginx/error.log
-            else
-                error "错误日志文件不存在"
-            fi
-            ;;
-        2)
-            echo -e "${YELLOW}=== Nginx 访问日志 (最后50行) ===${NC}"
-            if [ -f "/var/log/nginx/access.log" ]; then
-                tail -50 /var/log/nginx/access.log
-            else
-                error "访问日志文件不存在"
-            fi
-            ;;
-        3)
-            echo -e "${YELLOW}=== 反向代理日志目录 ===${NC}"
-            if [ -d "/var/log/nginx/proxy" ]; then
-                ls -la /var/log/nginx/proxy/
-                echo ""
-                read -p "输入要查看的日志文件名 (或按回车返回): " proxy_log
-                if [ -n "$proxy_log" ]; then
-                    if [ -f "/var/log/nginx/proxy/$proxy_log" ]; then
-                        tail -50 "/var/log/nginx/proxy/$proxy_log"
-                    else
-                        error "日志文件不存在"
-                    fi
-                fi
-            else
-                echo "反向代理日志目录不存在"
-            fi
-            ;;
-        4)
-            echo -e "${YELLOW}=== 实时监控错误日志 (Ctrl+C 退出) ===${NC}"
-            if [ -f "/var/log/nginx/error.log" ]; then
-                tail -f /var/log/nginx/error.log
-            else
-                error "错误日志文件不存在"
-            fi
-            ;;
-        5)
-            echo -e "${YELLOW}=== 实时监控访问日志 (Ctrl+C 退出) ===${NC}"
-            if [ -f "/var/log/nginx/access.log" ]; then
-                tail -f /var/log/nginx/access.log
-            else
-                error "访问日志文件不存在"
-            fi
-            ;;
-        6)
-            read -p "确定要清空所有日志文件吗? (y/n): " confirm
-            if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                if [ -f "/var/log/nginx/error.log" ]; then
-                    > /var/log/nginx/error.log
-                    log "错误日志已清空"
-                fi
-                if [ -f "/var/log/nginx/access.log" ]; then
-                    > /var/log/nginx/access.log
-                    log "访问日志已清空"
-                fi
-                if [ -d "/var/log/nginx/proxy" ]; then
-                    rm -f /var/log/nginx/proxy/*
-                    log "代理日志已清空"
-                fi
-            fi
-            ;;
-        *)
-            error "选择无效"
-            ;;
-    esac
-}
-
-# 修复 Nginx 问题
-fix_nginx() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          修复 Nginx 问题                 ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    log "开始诊断 Nginx 问题..."
-    
-    # 检查 Nginx 状态
-    if systemctl is-active nginx &>/dev/null; then
-        log "Nginx 正在运行"
-    else
-        error "Nginx 未运行"
-    fi
-    
-    # 测试配置
-    echo ""
-    log "测试 Nginx 配置..."
-    nginx -t
-    
-    # 显示错误日志
-    echo ""
-    log "最近的错误日志:"
-    tail -20 /var/log/nginx/error.log 2>/dev/null || echo "错误日志文件不存在"
-    
-    # 提供修复选项
-    echo ""
-    echo "修复选项:"
-    echo "1. 修复配置文件"
-    echo "2. 重新安装 Nginx"
-    echo "3. 重置为默认配置"
-    echo "4. 检查端口占用"
-    echo ""
-    
-    read -p "请选择 (1-4): " fix_choice
-    
-    case $fix_choice in
-        1)
-            fix_nginx_config
-            ;;
-        2)
-            log "重新安装 Nginx..."
-            apt-get install --reinstall -y nginx nginx-common
-            ;;
-        3)
-            log "重置为默认配置..."
-            cp /etc/nginx/nginx.conf "$BACKUP_DIR/nginx.conf.bak.$(date +%Y%m%d-%H%M%S)"
-            apt-get install --reinstall -y nginx-common
-            ;;
-        4)
-            log "检查端口占用..."
-            netstat -tulpn | grep -E ":80|:443|:8080"
-            ;;
-    esac
-    
-    # 测试修复后
-    echo ""
-    if test_nginx_config; then
-        systemctl restart nginx
-        log "✅ 修复完成，Nginx 已重启"
-    else
-        error "修复后配置仍然有问题"
-    fi
-}
-
-# 显示系统信息
-show_system_info() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}          系统信息                         ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    
-    echo -e "${YELLOW}服务器信息:${NC}"
-    echo "主机名: $(hostname)"
-    echo "系统: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"')"
-    echo "内核: $(uname -r)"
-    echo "架构: $(uname -m)"
-    echo ""
-    
-    echo -e "${YELLOW}网络信息:${NC}"
-    echo "IP地址: $(hostname -I 2>/dev/null | awk '{print $1}')"
-    echo "公网IP: $(curl -s ifconfig.me 2>/dev/null || echo "无法获取")"
-    echo ""
-    
-    echo -e "${YELLOW}Nginx 信息:${NC}"
-    if command -v nginx &> /dev/null; then
-        nginx -v 2>&1
-        echo "配置文件: /etc/nginx/nginx.conf"
-        echo "配置目录: /etc/nginx/conf.d/"
-        echo "日志目录: /var/log/nginx/"
-    else
-        echo "Nginx 未安装"
-    fi
-    echo ""
-    
-    echo -e "${YELLOW}磁盘使用:${NC}"
-    df -h / | tail -1
-    echo ""
-    
-    echo -e "${YELLOW}内存使用:${NC}"
-    free -h | head -2
-}
-
-# 显示菜单
-show_menu() {
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}      Nginx 反向代理管理脚本 v1.1         ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${GREEN}1.${NC}  初始化 Nginx 环境"
-    echo -e "${GREEN}2.${NC}  查看证书信息"
-    echo -e "${GREEN}3.${NC}  添加反向代理"
-    echo -e "${GREEN}4.${NC}  删除反向代理"
-    echo -e "${GREEN}5.${NC}  查看反向代理列表"
-    echo -e "${GREEN}6.${NC}  重载 Nginx 配置"
-    echo -e "${GREEN}7.${NC}  备份当前配置"
-    echo -e "${GREEN}8.${NC}  查看 Nginx 状态"
-    echo -e "${GREEN}9.${NC}  查看日志"
-    echo -e "${GREEN}10.${NC} 修复 Nginx 问题"
-    echo -e "${GREEN}11.${NC} 系统信息"
-    echo -e "${GREEN}12.${NC} 退出脚本"
-    echo ""
-    echo -e "${YELLOW}当前服务器: $(hostname)${NC}"
-    echo -e "${YELLOW}服务器时间: $(date)${NC}"
-    echo -e "${YELLOW}脚本目录: $INSTALL_DIR${NC}"
+    echo -e "${CYAN}示例:${NC}"
+    echo "  $(basename "$0") install   # 完全重新安装"
+    echo "  $(basename "$0") status    # 查看状态"
     echo ""
 }
 
 # 主函数
 main() {
-    check_root
-    
-    while true; do
-        show_menu
-        
-        read -p "请输入选项 (1-12): " choice
-        
-        case $choice in
-            1)
-                init_nginx
-                ;;
-            2)
-                view_certificates
-                ;;
-            3)
-                add_proxy
-                ;;
-            4)
-                remove_proxy
-                ;;
-            5)
-                list_proxies
-                ;;
-            6)
-                reload_nginx
-                ;;
-            7)
-                backup_config
-                ;;
-            8)
-                echo -e "${CYAN}════════════════════════════════════════════${NC}"
-                echo -e "${CYAN}          Nginx 状态信息                   ${NC}"
-                echo -e "${CYAN}════════════════════════════════════════════${NC}"
-                systemctl status nginx --no-pager -l
-                ;;
-            9)
-                view_logs
-                ;;
-            10)
-                fix_nginx
-                ;;
-            11)
-                show_system_info
-                ;;
-            12)
-                echo "再见！"
-                exit 0
-                ;;
-            *)
-                error "无效选项，请重新输入"
-                ;;
-        esac
-        
-        echo ""
-        read -p "按 Enter 键继续..."
-        clear
-    done
+    case "$1" in
+        "install")
+            install_nginx_complete
+            ;;
+        "status")
+            systemctl status nginx --no-pager
+            ;;
+        "test")
+            nginx -t
+            ;;
+        "monitor")
+            /usr/local/bin/nginx-monitor 2>/dev/null || echo "请先运行 install 安装监控脚本"
+            ;;
+        "help"|"-h"|"--help")
+            show_help
+            ;;
+        *)
+            echo "Debian 12+ Nginx 纯净安装脚本"
+            echo ""
+            echo "请选择要执行的操作:"
+            echo "1. 完全重新安装 Nginx"
+            echo "2. 查看当前状态"
+            echo "3. 退出"
+            echo ""
+            read -p "请输入选项 (1-3): " choice
+            
+            case $choice in
+                1)
+                    install_nginx_complete
+                    ;;
+                2)
+                    systemctl status nginx --no-pager
+                    ;;
+                3)
+                    exit 0
+                    ;;
+                *)
+                    echo "无效选项"
+                    ;;
+            esac
+            ;;
+    esac
 }
 
-# 启动脚本
-clear
-echo -e "${CYAN}正在启动 Nginx 反向代理管理脚本...${NC}"
-echo ""
-
-# 检查是否首次运行
-if [ ! -d "$INSTALL_DIR" ]; then
-    warn "检测到首次运行，正在创建目录..."
-    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR"
+# 检查是否直接运行
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
-
-# 检查 Nginx 是否安装
-if ! command -v nginx &> /dev/null; then
-    warn "Nginx 未安装，将自动安装"
-    apt-get update
-    apt-get install -y nginx
-fi
-
-main "$@"
