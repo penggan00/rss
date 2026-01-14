@@ -201,3 +201,92 @@ if [ "$RESTART_OK" -ne 1 ]; then
 fi
 
 echo "完成。若需要我自动为你把站点配置改为 IPv6-only 或把 proxy_pass 的 IPv6 后端地址自动用 [] 包起来，请回复“改为 IPv6-only”或粘贴 nginx -t 的输出/ss -ltnp 输出给我。"
+#!/usr/bin/env bash
+# make-site-ipv6-only.sh
+# 将指定站点的 /etc/nginx/conf.d/reverse_proxy_${DOMAIN}.conf 修改为 IPv6-only 的 listen，
+# 并把 proxy_pass 中的 IPv6 字面量（若有）用方括号包起来。备份并测试 nginx，然后重启。
+#
+# 用法: sudo bash make-site-ipv6-only.sh <DOMAIN>
+# 例如: sudo bash make-site-ipv6-only.sh nz.215155.xyz
+set -euo pipefail
+if [ "$(id -u)" -ne 0 ]; then
+  echo "请以 root 运行此脚本。"
+  exit 1
+fi
+if [ $# -lt 1 ]; then
+  echo "用法: $0 <DOMAIN>"
+  exit 1
+fi
+DOMAIN="$1"
+CONF="/etc/nginx/conf.d/reverse_proxy_${DOMAIN}.conf"
+if [ ! -f "$CONF" ]; then
+  echo "未找到站点配置: $CONF"
+  echo "可选: 将所有 /etc/nginx/conf.d/*.conf 进行同样处理（会对所有文件进行备份与修改）。"
+  read -p "是否对所有 /etc/nginx/conf.d/*.conf 执行相同替换？(y/N) " yn
+  if [[ "$yn" =~ ^[Yy]$ ]]; then
+    FILES=( /etc/nginx/conf.d/*.conf )
+  else
+    echo "退出。请提供正确的域名或手动修改配置。"
+    exit 1
+  fi
+else
+  FILES=( "$CONF" )
+fi
+
+TIMESTAMP="$(date +%Y%m%d%H%M%S)"
+BACKUP_DIR="/root/nginx_ipv6_patch_backups_${TIMESTAMP}"
+mkdir -p "$BACKUP_DIR"
+echo "备份并修改下列文件: ${FILES[*]}"
+cp -a "${FILES[@]}" "$BACKUP_DIR/" 2>/dev/null || true
+echo "已备份到 $BACKUP_DIR"
+
+for f in "${FILES[@]}"; do
+  echo "处理 $f ..."
+  # 将 listen 80/listen [::]:80 替为只监听 IPv6
+  # 注意保留其它参数（如 ssl http2）
+  # replace listen 80; and/or listen 443 ssl http2; and corresponding IPv6 lines
+  sed -E -i.bak \
+    -e 's/^[[:space:]]*listen[[:space:]]+80[[:space:]]*;/    listen [::]:80 ipv6only=on;/I' \
+    -e 's/^[[:space:]]*listen[[:space:]]+\[::\]:80[[:space:]]*;/    listen [::]:80 ipv6only=on;/I' \
+    -e 's/^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]+http2[[:space:]]*;/    listen [::]:443 ssl http2 ipv6only=on;/I' \
+    -e 's/^[[:space:]]*listen[[:space:]]+\[::\]:443[[:space:]]+ssl[[:space:]]+http2[[:space:]]*;/    listen [::]:443 ssl http2 ipv6only=on;/I' \
+    "$f" || true
+
+  # 如果只有 listen 443 ssl; 小心替换为 ipv6only 形式
+  sed -E -i.bak -e 's/^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]*;/    listen [::]:443 ssl ipv6only=on;/I' "$f" || true
+
+  # 将 proxy_pass 中的 IPv6 字面量转换为带方括号形式
+  # 匹配 http://::1:PORT 或 http://[::1]:PORT 或 http://2001:db8::1:PORT 等
+  # 尽量避免误替换域名:port
+  # 这里使用 perl 做更可靠的替换
+  perl -0777 -pe '
+    s{
+      (proxy_pass\s+http://)         # 1: 前缀
+      (\[?                          # optional opening bracket
+         ((?:[0-9a-fA-F:]+))        # 3: IPv6 address (hex and colons)
+      \]?):
+      ([0-9]+)                      # 4: port
+      ;
+    }{$1"[".$3."]:" .$4 . ";" }gexmi
+  ' -i.bak "$f" || true
+
+  echo "已处理并生成备份文件 ${f}.bak"
+done
+
+echo "修改完成。现在测试 nginx 配置..."
+if nginx -t 2>&1 | tee "$BACKUP_DIR/nginx_test_after_patch.txt"; then
+  echo "nginx -t 检查通过，重启 nginx..."
+  if command -v rc-service >/dev/null 2>&1; then
+    rc-service nginx restart || rc-service nginx reload || true
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl restart nginx || systemctl reload nginx || true
+  else
+    nginx -s reload || true
+  fi
+  echo "已尝试重启 nginx。若仍失败请查看 $BACKUP_DIR/nginx_test_after_patch.txt 并运行: ss -ltnp | egrep \":80|:443\""
+  exit 0
+else
+  echo "nginx -t 未通过，已将 test 输出保存在 $BACKUP_DIR/nginx_test_after_patch.txt"
+  echo "建议检查占用端口的进程: ss -ltnp | egrep ':80|:443' 或贴上该输出给我。"
+  exit 1
+fi
