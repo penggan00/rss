@@ -7,25 +7,79 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 域名验证函数（更宽松）
+validate_domain() {
+    local domain=$1
+    
+    # 空值检查
+    if [ -z "$domain" ]; then
+        echo -e "${RED}错误: 域名不能为空${NC}"
+        return 1
+    fi
+    
+    # 长度检查
+    if [ ${#domain} -gt 255 ]; then
+        echo -e "${RED}错误: 域名太长${NC}"
+        return 1
+    fi
+    
+    # 简单格式检查
+    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$ ]] && [[ "$domain" =~ \..+ ]]; then
+        # 额外检查：不能以点号开头或结尾，不能有连续点号
+        if [[ "$domain" =~ ^\. ]] || [[ "$domain" =~ \.$ ]] || [[ "$domain" =~ \.\. ]]; then
+            echo -e "${RED}错误: 域名格式不正确 (不能以点号开头/结尾或有连续点号)${NC}"
+            return 1
+        fi
+        
+        # 检查标签长度
+        local IFS="."
+        local labels=($domain)
+        for label in "${labels[@]}"; do
+            if [ ${#label} -gt 63 ]; then
+                echo -e "${RED}错误: 域名标签 '$label' 太长 (超过63个字符)${NC}"
+                return 1
+            fi
+            
+            if [[ ! "$label" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$ ]]; then
+                echo -e "${RED}错误: 域名标签 '$label' 包含无效字符${NC}"
+                return 1
+            fi
+        done
+        
+        echo -e "${GREEN}✅ 域名格式验证通过${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}⚠️  域名格式看起来不标准，但将继续处理${NC}"
+        # 仍然接受，因为可能是本地域名或其他特殊格式
+        return 0
+    fi
+}
+
 # 查找证书
 find_certificates() {
     local domain=$1
     
+    # 清理域名（去掉协议部分）
+    local clean_domain=${domain#*//}
+    clean_domain=${clean_domain%%/*}
+    
     # 可能的证书路径
     local cert_paths=(
-        "/etc/nginx/ssl/certs/${domain}/fullchain.pem"
-        "/etc/nginx/ssl/${domain}.crt"
-        "/etc/ssl/certs/${domain}/fullchain.pem"
-        "/etc/letsencrypt/live/${domain}/fullchain.pem"
-        "/root/.acme.sh/${domain}/fullchain.cer"
+        "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
+        "/etc/nginx/ssl/${clean_domain}.crt"
+        "/etc/ssl/certs/${clean_domain}/fullchain.pem"
+        "/etc/letsencrypt/live/${clean_domain}/fullchain.pem"
+        "/root/.acme.sh/${clean_domain}/fullchain.cer"
+        "/root/.acme.sh/${clean_domain}_ecc/fullchain.cer"
     )
     
     local key_paths=(
-        "/etc/nginx/ssl/private/${domain}/key.pem"
-        "/etc/nginx/ssl/${domain}.key"
-        "/etc/ssl/private/${domain}/key.pem"
-        "/etc/letsencrypt/live/${domain}/privkey.pem"
-        "/root/.acme.sh/${domain}/${domain}.key"
+        "/etc/nginx/ssl/private/${clean_domain}/key.pem"
+        "/etc/nginx/ssl/${clean_domain}.key"
+        "/etc/ssl/private/${clean_domain}/key.pem"
+        "/etc/letsencrypt/live/${clean_domain}/privkey.pem"
+        "/root/.acme.sh/${clean_domain}/${clean_domain}.key"
+        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.key"
     )
     
     # 查找证书文件
@@ -49,8 +103,42 @@ find_certificates() {
     if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
         return 0
     else
-        return 1
+        # 尝试通配符证书
+        local wildcard_domain="*.${clean_domain#*.}"
+        cert_paths=(
+            "/etc/nginx/ssl/certs/${wildcard_domain}/fullchain.pem"
+            "/etc/nginx/ssl/${wildcard_domain}.crt"
+            "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
+        )
+        
+        key_paths=(
+            "/etc/nginx/ssl/private/${wildcard_domain}/key.pem"
+            "/etc/nginx/ssl/${wildcard_domain}.key"
+            "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
+        )
+        
+        for cert in "${cert_paths[@]}"; do
+            if [ -f "$cert" ]; then
+                CERT_FILE="$cert"
+                echo -e "${GREEN}找到通配符证书: $cert${NC}"
+                break
+            fi
+        done
+        
+        for key in "${key_paths[@]}"; do
+            if [ -f "$key" ]; then
+                KEY_FILE="$key"
+                echo -e "${GREEN}找到通配符密钥: $key${NC}"
+                break
+            fi
+        done
+        
+        if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
+            return 0
+        fi
     fi
+    
+    return 1
 }
 
 # 创建反向代理配置
@@ -58,23 +146,30 @@ create_proxy_config() {
     echo -e "${YELLOW}>>> 创建反向代理配置${NC}"
     
     # 获取用户输入
-    echo -n "请输入域名 (例如: api.example.com): "
-    read DOMAIN
-    
-    # 验证域名格式
-    if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$ ]]; then
-        echo -e "${RED}错误: 域名格式不正确${NC}"
-        return 1
-    fi
-    
-    echo -n "请输入后端服务端口 (例如: 3000): "
-    read BACKEND_PORT
+    while true; do
+        echo -n "请输入域名 (例如: api.example.com 或 nz.215155.xyz): "
+        read DOMAIN
+        
+        # 允许用户跳过验证
+        if [ -n "$DOMAIN" ]; then
+            echo -e "${YELLOW}使用域名: $DOMAIN${NC}"
+            break
+        else
+            echo -e "${RED}错误: 域名不能为空${NC}"
+        fi
+    done
     
     # 验证端口
-    if ! [[ "$BACKEND_PORT" =~ ^[0-9]+$ ]] || [ "$BACKEND_PORT" -lt 1 ] || [ "$BACKEND_PORT" -gt 65535 ]; then
-        echo -e "${RED}错误: 端口号必须在1-65535之间${NC}"
-        return 1
-    fi
+    while true; do
+        echo -n "请输入后端服务端口 (例如: 3000): "
+        read BACKEND_PORT
+        
+        if [[ "$BACKEND_PORT" =~ ^[0-9]+$ ]] && [ "$BACKEND_PORT" -ge 1 ] && [ "$BACKEND_PORT" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}错误: 端口号必须是1-65535之间的数字${NC}"
+        fi
+    done
     
     echo -n "是否启用WebSocket支持？(y/n): "
     read -n 1 WS_CHOICE
@@ -316,8 +411,6 @@ EOF
         echo -e "\n${YELLOW}提示: 证书路径应为:${NC}"
         echo -e "  /etc/nginx/ssl/certs/$DOMAIN/fullchain.pem"
         echo -e "  /etc/nginx/ssl/private/$DOMAIN/key.pem"
-        echo -e "\n${YELLOW}或者运行证书安装脚本:${NC}"
-        echo -e "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/alpine.nginx.sh)\""
     fi
 }
 
@@ -356,7 +449,7 @@ reload_nginx() {
     fi
 }
 
-# 查看证书状态
+# 检查证书状态
 check_certificates() {
     echo -e "${YELLOW}>>> 检查证书状态${NC}"
     
@@ -371,54 +464,15 @@ check_certificates() {
         fi
     done
     
-    # 检查acme.sh证书
-    if [ -d "/root/.acme.sh" ]; then
-        echo -e "\n${BLUE}acme.sh证书:${NC}"
-        find /root/.acme.sh -name "*.cer" -o -name "*.key" 2>/dev/null | head -10
-    fi
-    
+    # 显示目录结构
     echo -e "\n${BLUE}证书目录结构:${NC}"
-    ls -la /etc/nginx/ssl/ 2>/dev/null || echo "  /etc/nginx/ssl/ 目录不存在"
-}
-
-# 手动指定证书路径
-manual_cert_setup() {
-    echo -e "${YELLOW}>>> 手动配置证书${NC}"
-    
-    echo -n "请输入域名: "
-    read DOMAIN
-    
-    echo -n "请输入证书文件完整路径: "
-    read CERT_PATH
-    
-    echo -n "请输入密钥文件完整路径: "
-    read KEY_PATH
-    
-    if [ ! -f "$CERT_PATH" ]; then
-        echo -e "${RED}错误: 证书文件不存在 - $CERT_PATH${NC}"
-        return 1
+    if [ -d "/etc/nginx/ssl" ]; then
+        tree /etc/nginx/ssl 2>/dev/null || ls -la /etc/nginx/ssl/
+    else
+        echo "  /etc/nginx/ssl/ 目录不存在"
+        echo -e "${YELLOW}创建证书目录...${NC}"
+        mkdir -p /etc/nginx/ssl/{certs,private}
     fi
-    
-    if [ ! -f "$KEY_PATH" ]; then
-        echo -e "${RED}错误: 密钥文件不存在 - $KEY_PATH${NC}"
-        return 1
-    fi
-    
-    # 创建标准目录结构
-    mkdir -p "/etc/nginx/ssl/certs/$DOMAIN"
-    mkdir -p "/etc/nginx/ssl/private/$DOMAIN"
-    
-    # 复制证书到标准位置
-    cp "$CERT_PATH" "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem"
-    cp "$KEY_PATH" "/etc/nginx/ssl/private/$DOMAIN/key.pem"
-    
-    # 设置权限
-    chmod 600 "/etc/nginx/ssl/private/$DOMAIN/key.pem"
-    chmod 644 "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem"
-    
-    echo -e "${GREEN}✅ 证书已复制到标准位置${NC}"
-    echo -e "证书: /etc/nginx/ssl/certs/$DOMAIN/fullchain.pem"
-    echo -e "密钥: /etc/nginx/ssl/private/$DOMAIN/key.pem"
 }
 
 # 主菜单
@@ -427,46 +481,10 @@ show_menu() {
     echo -e "${GREEN}1.${NC} 创建新的反向代理"
     echo -e "${GREEN}2.${NC} 重载Nginx配置"
     echo -e "${GREEN}3.${NC} 检查证书状态"
-    echo -e "${GREEN}4.${NC} 手动配置证书"
-    echo -e "${GREEN}5.${NC} 查看当前配置"
-    echo -e "${GREEN}6.${NC} 测试HTTPS连接"
-    echo -e "${GREEN}7.${NC} 退出"
+    echo -e "${GREEN}4.${NC} 查看当前配置"
+    echo -e "${GREEN}5.${NC} 退出"
     echo -e "${BLUE}========================================${NC}"
-    echo -n "请选择操作 [1-7]: "
-}
-
-# 测试HTTPS连接
-test_https() {
-    echo -e "${YELLOW}>>> 测试HTTPS连接${NC}"
-    
-    echo -n "请输入要测试的域名: "
-    read TEST_DOMAIN
-    
-    if [ -z "$TEST_DOMAIN" ]; then
-        echo -e "${RED}错误: 域名不能为空${NC}"
-        return 1
-    fi
-    
-    echo -e "${BLUE}测试HTTP连接...${NC}"
-    if curl -I -m 10 "http://$TEST_DOMAIN" 2>/dev/null; then
-        echo -e "${GREEN}✅ HTTP连接正常${NC}"
-    else
-        echo -e "${YELLOW}⚠️  HTTP连接失败${NC}"
-    fi
-    
-    echo -e "\n${BLUE}测试HTTPS连接...${NC}"
-    if curl -I -m 10 "https://$TEST_DOMAIN" 2>/dev/null; then
-        echo -e "${GREEN}✅ HTTPS连接正常${NC}"
-    else
-        echo -e "${YELLOW}⚠️  HTTPS连接失败${NC}"
-    fi
-    
-    echo -e "\n${BLUE}测试SSL证书...${NC}"
-    if openssl s_client -connect "$TEST_DOMAIN:443" -servername "$TEST_DOMAIN" </dev/null 2>/dev/null | grep -E "Verify|Certificate chain"; then
-        echo -e "${GREEN}✅ SSL证书检测成功${NC}"
-    else
-        echo -e "${YELLOW}⚠️  SSL证书检测失败${NC}"
-    fi
+    echo -n "请选择操作 [1-5]: "
 }
 
 # 查看当前配置
@@ -474,17 +492,20 @@ show_current_config() {
     echo -e "${YELLOW}>>> 当前Nginx配置${NC}"
     
     echo -e "${BLUE}启用的站点:${NC}"
-    ls -1 /etc/nginx/sites-enabled/*.conf 2>/dev/null | while read conf; do
-        echo -e "\n${GREEN}配置文件: $conf${NC}"
-        echo "配置内容:"
-        grep -E "server_name|listen|proxy_pass|ssl_certificate" "$conf" | head -10
-    done
+    if ls /etc/nginx/sites-enabled/*.conf 2>/dev/null >/dev/null; then
+        for conf in /etc/nginx/sites-enabled/*.conf; do
+            echo -e "\n${GREEN}配置文件: $(basename $conf)${NC}"
+            echo "域名: $(grep -h "server_name" "$conf" | head -1 | awk '{print $2}' | tr -d ';')"
+            echo "端口: $(grep -h "listen" "$conf" | grep -v "listen \[::\]" | head -1 | awk '{print $2}' | tr -d ';')"
+            echo "后端: $(grep -h "proxy_pass" "$conf" | head -1 | awk '{print $2}' | tr -d ';')"
+        done
+    else
+        echo "  没有启用的配置"
+    fi
     
     echo -e "\n${BLUE}Nginx状态:${NC}"
     if pgrep nginx > /dev/null; then
         echo -e "${GREEN}✅ Nginx正在运行${NC}"
-        echo "进程:"
-        ps aux | grep nginx | grep -v grep | head -5
     else
         echo -e "${RED}❌ Nginx未运行${NC}"
     fi
@@ -507,9 +528,9 @@ main() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}  Nginx反向代理配置工具${NC}"
     echo -e "${BLUE}========================================${NC}"
+    echo -e "系统: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"')"
     echo -e "Nginx版本: $(nginx -v 2>&1 | cut -d/ -f2)"
-    echo -e "配置文件: /etc/nginx/nginx.conf"
-    echo -e "证书目录: /etc/nginx/ssl/"
+    echo -e "IP地址: $(hostname -I 2>/dev/null | awk '{print $1}')"
     echo -e "${BLUE}========================================${NC}"
     
     while true; do
@@ -533,15 +554,9 @@ main() {
                 check_certificates
                 ;;
             4)
-                manual_cert_setup
-                ;;
-            5)
                 show_current_config
                 ;;
-            6)
-                test_https
-                ;;
-            7)
+            5)
                 echo -e "${GREEN}退出${NC}"
                 exit 0
                 ;;
