@@ -123,7 +123,7 @@ find_certificates() {
     local clean_domain=${domain#*//}
     clean_domain=${clean_domain%%/*}
     
-    # 可能的证书路径（包含.cer格式）
+    # 可能的证书路径
     local cert_paths=(
         "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
         "/etc/nginx/ssl/certs/${clean_domain}.crt"
@@ -150,60 +150,76 @@ find_certificates() {
     for cert in "${cert_paths[@]}"; do
         if [ -f "$cert" ]; then
             CERT_FILE="$cert"
-            log "INFO" "找到证书: $cert"
-            break
+            KEY_FILE="${cert/fullchain./privkey.}"
+            KEY_FILE="${KEY_FILE/fullchain./}"
+            KEY_FILE="${KEY_FILE/.cer/.key}"
+            KEY_FILE="${KEY_FILE/.crt/.key}"
+            KEY_FILE="${KEY_FILE/.pem/.key}"
+            
+            # 尝试找到对应的key文件
+            if [ ! -f "$KEY_FILE" ]; then
+                KEY_FILE=""
+                for key in "${key_paths[@]}"; do
+                    if [ -f "$key" ]; then
+                        KEY_FILE="$key"
+                        break
+                    fi
+                done
+            fi
+            
+            if [ -n "$KEY_FILE" ]; then
+                log "INFO" "SSL证书配置成功"
+                return 0
+            fi
         fi
     done
     
-    # 查找密钥文件
-    for key in "${key_paths[@]}"; do
-        if [ -f "$key" ]; then
-            KEY_FILE="$key"
-            log "INFO" "找到密钥: $key"
-            break
-        fi
-    done
-    
-    if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
-        return 0
-    else
-        # 尝试通配符证书
-        local wildcard_domain="*.${clean_domain#*.}"
-        local wildcard_cert_paths=(
-            "/etc/nginx/ssl/certs/${wildcard_domain}/fullchain.pem"
-            "/etc/nginx/ssl/${wildcard_domain}.crt"
-            "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
-            "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
+    # 如果没找到，尝试查找父域名或通配符证书
+    if [[ "$clean_domain" == *.* ]]; then
+        # 尝试父域名
+        local parent_domain="${clean_domain#*.}"
+        local parent_certs=(
+            "/root/.acme.sh/${parent_domain}_ecc/fullchain.cer"
+            "/root/.acme.sh/${parent_domain}/fullchain.cer"
         )
         
-        local wildcard_key_paths=(
-            "/etc/nginx/ssl/private/${wildcard_domain}/key.pem"
-            "/etc/nginx/ssl/${wildcard_domain}.key"
-            "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
-            "/root/.acme.sh/${wildcard_domain}_ecc/${wildcard_domain}.key"
-        )
-        
-        for cert in "${wildcard_cert_paths[@]}"; do
+        for cert in "${parent_certs[@]}"; do
             if [ -f "$cert" ]; then
                 CERT_FILE="$cert"
-                log "INFO" "找到通配符证书: $cert"
-                break
+                KEY_FILE="${cert/fullchain./privkey.}"
+                KEY_FILE="${KEY_FILE/fullchain./}"
+                KEY_FILE="${KEY_FILE/.cer/.key}"
+                
+                if [ -f "$KEY_FILE" ]; then
+                    log "INFO" "使用父域名SSL证书"
+                    return 0
+                fi
             fi
         done
         
-        for key in "${wildcard_key_paths[@]}"; do
-            if [ -f "$key" ]; then
-                KEY_FILE="$key"
-                log "INFO" "找到通配符密钥: $key"
-                break
+        # 尝试通配符证书
+        local wildcard_domain="*.${clean_domain#*.}"
+        local wildcard_certs=(
+            "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
+            "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
+        )
+        
+        for cert in "${wildcard_certs[@]}"; do
+            if [ -f "$cert" ]; then
+                CERT_FILE="$cert"
+                KEY_FILE="${cert/fullchain./privkey.}"
+                KEY_FILE="${KEY_FILE/fullchain./}"
+                KEY_FILE="${KEY_FILE/.cer/.key}"
+                
+                if [ -f "$KEY_FILE" ]; then
+                    log "INFO" "使用通配符SSL证书"
+                    return 0
+                fi
             fi
         done
-        
-        if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
-            return 0
-        fi
     fi
     
+    log "WARN" "未找到SSL证书"
     return 1
 }
 
