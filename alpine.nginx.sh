@@ -79,7 +79,7 @@ init_directories() {
     log "INFO" "目录结构初始化完成"
 }
 
-# 域名验证函数
+# 域名验证函数（简化版，兼容Alpine ash）
 validate_domain() {
     local domain=$1
     
@@ -95,35 +95,26 @@ validate_domain() {
         return 1
     fi
     
-    # 简单格式检查
-    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$ ]] && [[ "$domain" =~ \..+ ]]; then
-        # 额外检查：不能以点号开头或结尾，不能有连续点号
-        if [[ "$domain" =~ ^\. ]] || [[ "$domain" =~ \.$ ]] || [[ "$domain" =~ \.\. ]]; then
-            echo -e "${RED}错误: 域名格式不正确 (不能以点号开头/结尾或有连续点号)${NC}"
-            return 1
-        fi
-        
-        # 检查标签长度
-        local IFS="."
-        local labels=($domain)
-        for label in "${labels[@]}"; do
-            if [ ${#label} -gt 63 ]; then
-                echo -e "${RED}错误: 域名标签 '$label' 太长 (超过63个字符)${NC}"
-                return 1
-            fi
-            
-            if [[ ! "$label" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$ ]]; then
-                echo -e "${RED}错误: 域名标签 '$label' 包含无效字符${NC}"
-                return 1
-            fi
-        done
-        
-        echo -e "${GREEN}✅ 域名格式验证通过${NC}"
-        return 0
-    else
-        echo -e "${YELLOW}⚠️  域名格式看起来不标准，但将继续处理${NC}"
+    # 简单检查：至少有一个点号
+    if [[ "$domain" != *.* ]]; then
+        echo -e "${YELLOW}警告: 域名缺少点号，但将继续处理${NC}"
         return 0
     fi
+    
+    # 检查是否以点号开头或结尾
+    if [[ "$domain" == .* ]] || [[ "$domain" == *. ]]; then
+        echo -e "${RED}错误: 域名不能以点号开头或结尾${NC}"
+        return 1
+    fi
+    
+    # 检查连续点号
+    if [[ "$domain" == *..* ]]; then
+        echo -e "${RED}错误: 域名不能有连续点号${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ 域名格式验证通过${NC}"
+    return 0
 }
 
 # 查找证书
@@ -132,7 +123,7 @@ find_certificates() {
     local clean_domain=${domain#*//}
     clean_domain=${clean_domain%%/*}
     
-    # 可能的证书路径
+    # 可能的证书路径（包含.cer格式）
     local cert_paths=(
         "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
         "/etc/nginx/ssl/certs/${clean_domain}.crt"
@@ -141,6 +132,8 @@ find_certificates() {
         "/etc/letsencrypt/live/${clean_domain}/fullchain.pem"
         "/root/.acme.sh/${clean_domain}/fullchain.cer"
         "/root/.acme.sh/${clean_domain}_ecc/fullchain.cer"
+        "/root/.acme.sh/${clean_domain}/${clean_domain}.cer"
+        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.cer"
     )
     
     local key_paths=(
@@ -180,12 +173,14 @@ find_certificates() {
             "/etc/nginx/ssl/certs/${wildcard_domain}/fullchain.pem"
             "/etc/nginx/ssl/${wildcard_domain}.crt"
             "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
+            "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
         )
         
         local wildcard_key_paths=(
             "/etc/nginx/ssl/private/${wildcard_domain}/key.pem"
             "/etc/nginx/ssl/${wildcard_domain}.key"
             "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
+            "/root/.acme.sh/${wildcard_domain}_ecc/${wildcard_domain}.key"
         )
         
         for cert in "${wildcard_cert_paths[@]}"; do
@@ -574,7 +569,7 @@ EOF
     echo -e "${BLUE}WebSocket:${NC} $( [ "$WEBSOCKET" = true ] && echo '启用' || echo '未启用' )"
     echo -e "${BLUE}缓存:${NC} $( [ "$ENABLE_CACHE" = true ] && echo '启用' || echo '未启用' )"
     
-    if [ "$SSL_AVAILABLE" = true ] && [ ! -f "$CERT_FILE" ]; then
+    if [ "$SSL_AVAILABLE" = true ] && [ -f "$CERT_FILE" ]; then
         echo -e "\n${YELLOW}证书路径:${NC}"
         echo -e "  证书: $CERT_FILE"
         echo -e "  密钥: $KEY_FILE"
@@ -702,7 +697,7 @@ check_certificates() {
     for dir in "${cert_dirs[@]}"; do
         if [ -d "$dir" ]; then
             echo -e "\n${GREEN}目录: $dir${NC}"
-            find "$dir" -name "*.pem" -o -name "*.crt" -o -name "*.key" 2>/dev/null | head -20 | while read file; do
+            find "$dir" -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "*.key" 2>/dev/null | head -20 | while read file; do
                 if [ -f "$file" ]; then
                     local size=$(du -h "$file" | cut -f1)
                     local perms=$(stat -c "%a %U:%G" "$file" 2>/dev/null || echo "N/A")
