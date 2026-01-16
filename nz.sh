@@ -29,10 +29,9 @@ server {
     listen [::]:443 ssl http2;
     server_name $DOMAIN;
     
-    # 使用父域名的证书（通配符证书）
-    ssl_certificate /etc/nginx/ssl/certs/215155.xyz/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/private/215155.xyz/key.pem;
-    
+    ssl_certificate /root/.acme.sh/215155.xyz_ecc/fullchain.cer;
+    ssl_certificate_key /root/.acme.sh/215155.xyz_ecc/215155.xyz.key;
+
     # SSL优化
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
