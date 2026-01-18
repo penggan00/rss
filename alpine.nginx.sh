@@ -117,129 +117,22 @@ validate_domain() {
     return 0
 }
 
-# 查找证书
+# 查找证书（返回路径，不设置全局变量）
 find_certificates() {
-    local domain=$1
-    local clean_domain=${domain#*//}
-    clean_domain=${clean_domain%%/*}
+    local domain="${1#*//}"      # 移除协议
+    domain="${domain%%/*}"       # 移除路径
     
-    log "DEBUG" "查找证书，域名: [域名已隐藏]"
+    local cert_file="/etc/nginx/ssl/${domain}.crt"
+    local key_file="/etc/nginx/ssl/${domain}.key"
     
-    # 特别处理特定域名的子域名（通用化版本）
-    # 检查是否有父域名证书可用
-    if [[ "$clean_domain" == *.* ]]; then  # 至少有一个点
-        log "DEBUG" "检测到多级域名，尝试查找父域名证书"
-        
-        # 提取父域名（移除第一个子域名）
-        local parent_domain="${clean_domain#*.}"
-        
-        # 检查父域名证书
-        local parent_cert="/root/.acme.sh/${parent_domain}_ecc/fullchain.cer"
-        local parent_key="/root/.acme.sh/${parent_domain}_ecc/${parent_domain}.key"
-        
-        if [ -f "$parent_cert" ] && [ -f "$parent_key" ]; then
-            CERT_FILE="$parent_cert"
-            KEY_FILE="$parent_key"
-            log "INFO" "找到父域名证书"
-            return 0
-        fi
-        
-        # 检查不带_ecc的路径
-        local parent_cert2="/root/.acme.sh/${parent_domain}/fullchain.cer"
-        local parent_key2="/root/.acme.sh/${parent_domain}/${parent_domain}.key"
-        
-        if [ -f "$parent_cert2" ] && [ -f "$parent_key2" ]; then
-            CERT_FILE="$parent_cert2"
-            KEY_FILE="$parent_key2"
-            log "INFO" "找到父域名证书（非ECC）"
-            return 0
-        fi
-    fi
-    
-    # 可能的证书路径（包含.cer格式）
-    local cert_paths=(
-        "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
-        "/etc/nginx/ssl/certs/${clean_domain}.crt"
-        "/etc/nginx/ssl/${clean_domain}.crt"
-        "/etc/ssl/certs/${clean_domain}/fullchain.pem"
-        "/etc/letsencrypt/live/${clean_domain}/fullchain.pem"
-        "/root/.acme.sh/${clean_domain}/fullchain.cer"
-        "/root/.acme.sh/${clean_domain}_ecc/fullchain.cer"
-        "/root/.acme.sh/${clean_domain}/${clean_domain}.cer"
-        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.cer"
-    )
-    
-    local key_paths=(
-        "/etc/nginx/ssl/private/${clean_domain}/key.pem"
-        "/etc/nginx/ssl/private/${clean_domain}.key"
-        "/etc/nginx/ssl/${clean_domain}.key"
-        "/etc/ssl/private/${clean_domain}/key.pem"
-        "/etc/letsencrypt/live/${clean_domain}/privkey.pem"
-        "/root/.acme.sh/${clean_domain}/${clean_domain}.key"
-        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.key"
-    )
-    
-    # 查找证书文件
-    for cert in "${cert_paths[@]}"; do
-        if [ -f "$cert" ]; then
-            CERT_FILE="$cert"
-            log "INFO" "找到证书文件"
-            break
-        fi
-    done
-    
-    # 查找密钥文件
-    for key in "${key_paths[@]}"; do
-        if [ -f "$key" ]; then
-            KEY_FILE="$key"
-            log "INFO" "找到密钥文件"
-            break
-        fi
-    done
-    
-    if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
+    # 只要文件存在（符号链接也算）就返回成功
+    if { [ -f "$cert_file" ] || [ -L "$cert_file" ]; } && \
+       { [ -f "$key_file" ] || [ -L "$key_file" ]; }; then
+        echo "$cert_file:$key_file"
         return 0
     else
-        # 尝试通配符证书
-        if [[ "$clean_domain" == *.* ]]; then
-            local wildcard_domain="*.${clean_domain#*.}"
-            local wildcard_cert_paths=(
-                "/etc/nginx/ssl/certs/${wildcard_domain}/fullchain.pem"
-                "/etc/nginx/ssl/${wildcard_domain}.crt"
-                "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
-                "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
-            )
-            
-            local wildcard_key_paths=(
-                "/etc/nginx/ssl/private/${wildcard_domain}/key.pem"
-                "/etc/nginx/ssl/${wildcard_domain}.key"
-                "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
-                "/root/.acme.sh/${wildcard_domain}_ecc/${wildcard_domain}.key"
-            )
-            
-            for cert in "${wildcard_cert_paths[@]}"; do
-                if [ -f "$cert" ]; then
-                    CERT_FILE="$cert"
-                    log "INFO" "找到通配符证书"
-                    break
-                fi
-            done
-            
-            for key in "${wildcard_key_paths[@]}"; do
-                if [ -f "$key" ]; then
-                    KEY_FILE="$key"
-                    log "INFO" "找到通配符密钥"
-                    break
-                fi
-            done
-            
-            if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
-                return 0
-            fi
-        fi
+        return 1
     fi
-    
-    return 1
 }
 
 # 生成自签名证书
