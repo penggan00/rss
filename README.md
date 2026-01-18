@@ -17,7 +17,7 @@ docker pull penggan0/rss-full-alpine:latest
 ```
 sudo docker-compose pull
 sudo docker-compose down
-sudo docker-compose up -d
+docker-compose up -d
 
 systemctl restart docker # 重启 Docker
 ```

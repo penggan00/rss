@@ -252,4 +252,8 @@ else
     nginx -t 2>&1
 fi
 EOF
+ln -sf /root/.acme.sh/215155.xyz_ecc/fullchain.cer /etc/nginx/ssl/215155.xyz.crt
+ln -sf /root/.acme.sh/215155.xyz_ecc/215155.xyz.key /etc/nginx/ssl/215155.xyz.key
+echo "alias docker-compose='docker compose'" >> ~/.profile
+source ~/.profile
 )"
