@@ -205,6 +205,7 @@ install_certificate() {
     mkdir -p "/etc/nginx/ssl/certs/$DOMAIN"
     mkdir -p "/etc/nginx/ssl/private/$DOMAIN"
     mkdir -p "/etc/nginx/ssl"
+    mkdir -p "/ygkkkca/"
     
     cd "$ACME_DIR"
     
@@ -216,13 +217,57 @@ install_certificate() {
         --ca-file "/etc/nginx/ssl/certs/$DOMAIN/ca.pem" \
         --reloadcmd "echo '证书安装完成'"
     
+    # 设置权限
+    chmod 644 "/etc/nginx/ssl/certs/$DOMAIN"/*.pem
+    chmod 600 "/etc/nginx/ssl/private/$DOMAIN/key.pem"
+    
     # 创建符号链接
+    
+    # 1. Nginx专用链接
     ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/nginx/ssl/$DOMAIN.crt"
     ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/nginx/ssl/$DOMAIN.key"
     
+    # 2. 系统标准位置链接
+    ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/ssl/certs/$DOMAIN.crt"
+    ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/ssl/private/$DOMAIN.key"
+    
+    # 3. 系统标准PEM格式链接（兼容性）
+    ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/ssl/certs/$DOMAIN.pem"
+    ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/ssl/private/$DOMAIN.pem.key"
+    
+    # 4. PKI标准路径
+    mkdir -p "/etc/pki/tls/certs"
+    mkdir -p "/etc/pki/tls/private"
+    ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/pki/tls/certs/$DOMAIN.crt"
+    ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/pki/tls/private/$DOMAIN.key"
+    
+    # 5. 创建到你指定目录的软链接
+   # echo -e "${YELLOW}>>> 创建到指定目录的软链接...${NC}"
+  #  mkdir -p "/root/ygkkkca"
+    
+    # 公钥链接到指定路径
+   # ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/root/ygkkkca/cert.crt"
+    
+    # 私钥链接到指定路径
+   # ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/root/ygkkkca/private.key"
+    
     echo -e "${GREEN}>>> 证书安装完成${NC}"
+    
+    # 显示重要的链接信息
+    echo ""
+    echo -e "${YELLOW}证书链接位置：${NC}"
+    echo "1. 你指定的路径："
+   # echo "   公钥: /root/ygkkkca/cert.crt"
+   # echo "   私钥: /root/ygkkkca/private.key"
+   # echo ""
+    echo "2. 系统标准路径："
+    echo "   公钥: /etc/ssl/certs/$DOMAIN.crt"
+    echo "   私钥: /etc/ssl/private/$DOMAIN.key"
+    echo ""
+    echo "3. Nginx专用路径："
+    echo "   公钥: /etc/nginx/ssl/$DOMAIN.crt"
+    echo "   私钥: /etc/nginx/ssl/$DOMAIN.key"
 }
-
 # 配置 Nginx 默认站点
 configure_nginx() {
     echo -e "${YELLOW}>>> 配置 Nginx...${NC}"
