@@ -83,9 +83,6 @@ server {
 }
 EOF
 
-# 测试配置
-nginx -t && nginx -s reload
-
 echo "✅ 配置已优化并更新"
 echo "访问: https://nz.215155.xyz"
 echo "配置特点:"

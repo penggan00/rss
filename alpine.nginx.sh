@@ -902,37 +902,9 @@ echo -e "${YELLOW}设置文件权限...${NC}"
 chown -R nginx:nginx /var/www/html /var/log/nginx /var/lib/nginx
 chmod 755 /var/www/html
 
-# 11. 测试并启动
-echo -e "${YELLOW}测试配置...${NC}"
-if nginx -t; then
-    echo -e "${GREEN}✅ 配置测试通过${NC}"
-    
-    echo -e "${YELLOW}启动Nginx...${NC}"
-    nginx
-    
-    sleep 2
-    
-    if pgrep nginx > /dev/null; then
-        echo -e "${GREEN}✅ Nginx启动成功${NC}"
-        
-        # 显示状态
-        echo -e "${YELLOW}运行状态：${NC}"
-        echo "进程："
-        ps aux | grep nginx | grep -v grep
-        
-        echo -e "\n监听端口："
-        (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep nginx || echo "  等待端口监听..."
-        
-        echo -e "\n${GREEN}🎉 修复完成！${NC}"
-        echo "访问测试： curl -I http://localhost"
-    else
-        echo -e "${RED}❌ Nginx启动失败${NC}"
-        echo "查看错误： tail -f /var/log/nginx/error.log"
-    fi
-else
-    echo -e "${RED}❌ 配置测试失败${NC}"
-    nginx -t 2>&1
-fi
+# 11. 
+rc-service nginx start
+rc-update add nginx default
 
 # 设置docker-compose别名
 echo -e "\n${YELLOW}设置docker-compose别名...${NC}"
