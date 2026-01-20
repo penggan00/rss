@@ -756,27 +756,44 @@ check_certificates() {
         fi
     done
     
-        echo -e "\n${BLUE}Nginx SSL目录结构:${NC}"
-        if [ -d "/etc/nginx/ssl" ]; then
-            # 先过滤掉可能的空文件
-            echo -e "${YELLOW}使用安全的tree命令:${NC}"
-            if command -v tree &> /dev/null; then
-                # 使用 -I 选项忽略特定文件
-                tree /etc/nginx/ssl -L 3 -I '*update' 2>/dev/null || {
-                    echo -e "${YELLOW}tree命令出错，使用find替代:${NC}"
-                    find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.key" \) 2>/dev/null | head -20
-                }
-            else
-                echo -e "${YELLOW}tree命令不存在，使用find:${NC}"
-                find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.key" \) 2>/dev/null | head -20
+    # 显示目录结构
+    echo -e "\n${BLUE}Nginx SSL目录结构:${NC}"
+    if [ -d "/etc/nginx/ssl" ]; then
+        echo -e "${GREEN}有效证书文件:${NC}"
+        local count=0
+        find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.cer" \) 2>/dev/null | \
+        while read file; do
+            if [ -s "$file" ] && [ -r "$file" ]; then
+                local expire_date=$(openssl x509 -enddate -noout -in "$file" 2>/dev/null | cut -d= -f2 2>/dev/null)
+                if [ -n "$expire_date" ]; then
+                    count=$((count+1))
+                    local size=$(du -h "$file" 2>/dev/null | cut -f1)
+                    echo "  $count. 📄 $file"
+                    echo "     大小: $size, 过期: $expire_date"
+                fi
             fi
-        else
-            echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
-            echo -e "${YELLOW}创建证书目录...${NC}"
-            mkdir -p /etc/nginx/ssl/{certs,private}
-            chmod 750 /etc/nginx/ssl/private
-            chmod 755 /etc/nginx/ssl/certs
-        fi
+        done
+        
+        echo -e "\n${GREEN}密钥文件:${NC}"
+        find /etc/nginx/ssl -type f -name "*.key" 2>/dev/null | \
+        while read file; do
+            if [ -s "$file" ] && [ -r "$file" ]; then
+                local size=$(du -h "$file" 2>/dev/null | cut -f1)
+                local perms=$(stat -c "%a" "$file" 2>/dev/null || echo "N/A")
+                echo "  🔑 $file ($size, 权限:$perms)"
+            fi
+        done
+        
+        echo -e "\n${GREEN}目录结构:${NC}"
+        echo "/etc/nginx/ssl/"
+        ls -la /etc/nginx/ssl/ | tail -n +2
+    else
+        echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
+        echo -e "${YELLOW}创建证书目录...${NC}"
+        mkdir -p /etc/nginx/ssl/{certs,private}
+        chmod 750 /etc/nginx/ssl/private
+        chmod 755 /etc/nginx/ssl/certs
+    fi
 }
 # 初始化Nginx（完全清理并重新安装）
 init_nginx() {
