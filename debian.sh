@@ -1,680 +1,880 @@
 #!/bin/bash
 
-# ===================================================
-# Debian 12+ Nginx 一键安装配置脚本
-# 直接复制粘贴运行即可
-# ===================================================
-
-set -e  # 遇到错误立即退出
-
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-NC='\033[0m'
+NC='\033[0m' # No Color
+
+# 系统检测
+detect_os() {
+    if [ -f /etc/alpine-release ]; then
+        OS="alpine"
+    elif [ -f /etc/debian_version ]; then
+        OS="debian"
+    elif [ -f /etc/centos-release ] || [ -f /etc/redhat-release ]; then
+        OS="centos"
+    else
+        OS="unknown"
+    fi
+    echo "$OS"
+}
+
+OS=$(detect_os)
 
 # 日志函数
 log() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
-    sleep 0.5
-}
-
-error() {
-    echo -e "${RED}[错误]${NC} $1" >&2
-    exit 1
-}
-
-warn() {
-    echo -e "${YELLOW}[警告]${NC} $1"
-}
-
-info() {
-    echo -e "${BLUE}[信息]${NC} $1"
-}
-
-# 显示横幅
-show_banner() {
-    clear
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}         Debian 12+ Nginx 一键安装配置脚本            ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${GREEN}本脚本将完成以下操作：${NC}"
-    echo "  ✓ 安装 Nginx 最新版"
-    echo "  ✓ 配置优化设置"
-    echo "  ✓ 设置反向代理"
-    echo "  ✓ 配置 SSL 证书"
-    echo "  ✓ 设置开机自启"
-    echo ""
-}
-
-# 检查 Root 权限
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        error "必须使用 root 权限运行此脚本"
-    fi
-}
-
-# 清理旧 Nginx
-clean_old_nginx() {
-    log "步骤 1/8: 清理旧 Nginx 安装"
+    local level=$1
+    local message=$2
+    local color=$NC
     
-    # 停止 Nginx
-    if systemctl is-active nginx &>/dev/null; then
-        log "停止 Nginx 服务..."
-        systemctl stop nginx
-    fi
+    case $level in
+        "INFO") color=$GREEN ;;
+        "WARN") color=$YELLOW ;;
+        "ERROR") color=$RED ;;
+        "DEBUG") color=$BLUE ;;
+    esac
     
-    # 移除旧版本
-    log "移除旧版本 Nginx..."
-    apt-get remove --purge -y nginx* 2>/dev/null || true
-    apt-get autoremove -y 2>/dev/null
-    
-    # 清理目录
-    log "清理配置文件..."
-    rm -rf /etc/nginx
-    rm -rf /var/log/nginx
-    rm -rf /var/cache/nginx
-    rm -rf /var/lib/nginx
-    
-    log "旧 Nginx 清理完成"
+    echo -e "${color}[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message${NC}"
 }
 
-# 安装依赖
+# 安装依赖（兼容不同系统）
 install_dependencies() {
-    log "步骤 2/8: 安装系统依赖"
+    local deps=("$@")
     
-    # 更新系统
-    log "更新系统包列表..."
-    apt-get update -y
-    
-    # 安装基础工具
-    log "安装基础工具..."
-    apt-get install -y curl wget git tar gzip unzip
-    
-    # 安装 SSL 工具
-    log "安装 SSL 工具..."
-    apt-get install -y openssl certbot python3-certbot-nginx
-    
-    log "依赖安装完成"
+    case $OS in
+        "alpine")
+            apk add --no-cache "${deps[@]}" 2>/dev/null
+            ;;
+        "debian"|"ubuntu")
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}" 2>/dev/null
+            ;;
+        "centos"|"rhel"|"fedora")
+            yum install -y "${deps[@]}" 2>/dev/null
+            ;;
+    esac
 }
 
-# 创建目录结构
-create_directories() {
-    log "步骤 3/8: 创建目录结构"
+# 检查依赖
+check_dependencies() {
+    local deps=("nginx" "openssl")
     
-    # 创建主目录
-    mkdir -p /etc/nginx/conf.d
-    mkdir -p /etc/nginx/sites-available
-    mkdir -p /etc/nginx/sites-enabled
-    mkdir -p /etc/nginx/ssl/certs
-    mkdir -p /etc/nginx/ssl/private
+    if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+        deps+=("tree" "procps")  # Debian需要procps来使用pgrep
+    else
+        deps+=("tree")
+    fi
     
-    # 创建网站目录
-    mkdir -p /var/www/html
-    mkdir -p /var/www/ssl
+    local missing=()
     
-    # 创建日志目录
-    mkdir -p /var/log/nginx
-    mkdir -p /var/log/nginx/proxy
+    for dep in "${deps[@]}"; do
+        if ! command -v $dep &> /dev/null; then
+            missing+=("$dep")
+        fi
+    done
     
-    # 创建缓存目录
-    mkdir -p /var/cache/nginx
-    mkdir -p /var/lib/nginx
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "WARN" "缺少以下依赖: ${missing[*]}"
+        read -p "是否安装缺失的依赖？(y/n): " choice
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            install_dependencies "${missing[@]}"
+            if [ $? -ne 0 ]; then
+                log "ERROR" "依赖安装失败"
+                exit 1
+            fi
+        fi
+    fi
+}
+
+# 初始化目录结构
+init_directories() {
+    log "INFO" "初始化目录结构..."
+    
+    # 根据系统确定Nginx用户
+    local nginx_user="nginx"
+    local nginx_group="nginx"
+    
+    if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+        nginx_user="www-data"
+        nginx_group="www-data"
+    fi
+    
+    # 创建必要的目录
+    local dirs=(
+        "/etc/nginx/ssl/certs"
+        "/etc/nginx/ssl/private"
+        "/etc/nginx/sites-available"
+        "/etc/nginx/sites-enabled"
+        "/var/log/nginx/ssl"
+        "/var/www/html"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            chmod 750 "$dir"
+            log "DEBUG" "创建目录: $dir"
+        fi
+    done
     
     # 设置权限
-    chown -R www-data:www-data /var/www
-    chown -R www-data:www-data /var/log/nginx
-    chown -R www-data:www-data /var/cache/nginx
-    chown -R www-data:www-data /var/lib/nginx
-    chmod 755 /var/www
-    chmod 750 /var/log/nginx/proxy
+    chown -R $nginx_user:$nginx_group /etc/nginx/ssl/private
     chmod 700 /etc/nginx/ssl/private
+    chmod 644 /etc/nginx/ssl/certs/* 2>/dev/null
     
-    log "目录结构创建完成"
-}
-
-# 安装 Nginx
-install_nginx() {
-    log "步骤 4/8: 安装 Nginx"
-    
-    # 安装 Nginx
-    log "安装 Nginx..."
-    apt-get install -y nginx
-    
-    # 检查安装
-    if ! command -v nginx &>/dev/null; then
-        error "Nginx 安装失败"
+    # Debian特有：确保sites-enabled在nginx.conf中被包含
+    if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+        if [ -f /etc/nginx/nginx.conf ] && ! grep -q "sites-enabled" /etc/nginx/nginx.conf; then
+            # 检查是否已经包含sites-enabled
+            if grep -q "include /etc/nginx/conf.d/\*.conf" /etc/nginx/nginx.conf; then
+                # 在conf.d行后添加sites-enabled
+                sed -i '/include \/etc\/nginx\/conf.d\/\*.conf;/a\    include /etc/nginx/sites-enabled/*;' /etc/nginx/nginx.conf
+            fi
+        fi
     fi
     
-    log "Nginx 版本: $(nginx -v 2>&1)"
-    log "Nginx 安装完成"
+    log "INFO" "目录结构初始化完成"
 }
 
-# 配置 Nginx
-configure_nginx() {
-    log "步骤 5/8: 配置 Nginx"
+# 域名验证函数（简化版，兼容Alpine ash和Bash）
+validate_domain() {
+    local domain=$1
     
-    # 备份原始配置
-    cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
-    
-    # 创建优化配置
-    cat > /etc/nginx/nginx.conf << 'EOF'
-user www-data;
-worker_processes auto;
-pid /run/nginx.pid;
-
-events {
-    worker_connections 1024;
-    multi_accept on;
-}
-
-http {
-    # 基础设置
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-    
-    # 日志格式
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-    
-    # 性能优化
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 100M;
-    
-    # SSL 设置
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    
-    # 访问日志
-    access_log /var/log/nginx/access.log main;
-    error_log /var/log/nginx/error.log;
-    
-    # Gzip 压缩
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml text/javascript 
-               application/json application/javascript application/xml+rss 
-               application/atom+xml image/svg+xml;
-    
-    # 包含其他配置
-    include /etc/nginx/conf.d/*.conf;
-    include /etc/nginx/sites-enabled/*;
-}
-EOF
-    
-    # 创建默认网站配置
-    cat > /etc/nginx/sites-available/default << 'EOF'
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    
-    root /var/www/html;
-    index index.html index.htm;
-    
-    server_name _;
-    
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-EOF
-    
-    # 启用默认网站
-    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
-    
-    # 创建欢迎页面
-    cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nginx 安装成功</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 50px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .container {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 40px;
-            display: inline-block;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 20px;
-        }
-        p {
-            font-size: 1.2em;
-            margin-bottom: 30px;
-        }
-        .success {
-            font-size: 4em;
-            margin-bottom: 20px;
-        }
-        .info {
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            text-align: left;
-        }
-        code {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="success">🎉</div>
-        <h1>Nginx 安装成功！</h1>
-        <p>您的服务器已经配置完成</p>
-        
-        <div class="info">
-            <strong>服务器信息：</strong><br>
-            - 系统: Debian $(lsb_release -rs)<br>
-            - 时间: <span id="time"></span><br>
-            - IP: <span id="ip"></span>
-        </div>
-        
-        <div class="info">
-            <strong>管理命令：</strong><br>
-            <code>systemctl status nginx</code> - 查看状态<br>
-            <code>nginx -t</code> - 测试配置<br>
-            <code>systemctl reload nginx</code> - 重载配置
-        </div>
-        
-        <p>现在您可以开始配置反向代理了</p>
-    </div>
-    
-    <script>
-        // 显示当前时间
-        function updateTime() {
-            const now = new Date();
-            document.getElementById('time').textContent = 
-                now.toLocaleString('zh-CN');
-        }
-        setInterval(updateTime, 1000);
-        updateTime();
-        
-        // 获取 IP
-        fetch('https://api.ipify.org?format=json')
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('ip').textContent = data.ip;
-            })
-            .catch(() => {
-                document.getElementById('ip').textContent = '未知';
-            });
-    </script>
-</body>
-</html>
-EOF
-    
-    log "Nginx 配置完成"
-}
-
-# 配置系统服务
-configure_service() {
-    log "步骤 6/8: 配置系统服务"
-    
-    # 创建优化的服务文件
-    cat > /lib/systemd/system/nginx.service << 'EOF'
-[Unit]
-Description=A high performance web server and a reverse proxy server
-Documentation=man:nginx(8)
-After=network.target
-
-[Service]
-Type=forking
-PIDFile=/run/nginx.pid
-ExecStartPre=/usr/sbin/nginx -t -q -g 'daemon on; master_process on;'
-ExecStart=/usr/sbin/nginx -g 'daemon on; master_process on;'
-ExecReload=/usr/sbin/nginx -g 'daemon on; master_process on;' -s reload
-ExecStop=-/sbin/start-stop-daemon --quiet --stop --retry QUIT/5 --pidfile /run/nginx.pid
-TimeoutStopSec=5
-KillMode=mixed
-
-User=www-data
-Group=www-data
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    # 重新加载 systemd
-    systemctl daemon-reload
-    
-    # 启用开机自启
-    systemctl enable nginx
-    
-    log "系统服务配置完成"
-}
-
-# 测试 Nginx
-test_nginx() {
-    log "步骤 7/8: 测试 Nginx"
-    
-    # 测试配置文件
-    log "测试配置文件..."
-    if nginx -t; then
-        log "✅ 配置文件测试通过"
-    else
-        error "❌ 配置文件测试失败"
-    fi
-    
-    # 启动 Nginx
-    log "启动 Nginx 服务..."
-    systemctl start nginx
-    
-    # 检查状态
-    sleep 2
-    if systemctl is-active nginx &>/dev/null; then
-        log "✅ Nginx 启动成功"
-    else
-        error "❌ Nginx 启动失败"
-    fi
-    
-    # 测试访问
-    log "测试 Web 访问..."
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost | grep -q "200"; then
-        log "✅ Web 服务运行正常"
-    else
-        warn "⚠️  Web 服务访问测试失败"
-    fi
-}
-
-# 创建管理脚本
-create_management_script() {
-    log "步骤 8/8: 创建管理脚本"
-    
-    # 创建管理脚本
-    cat > /usr/local/bin/nginx-manager << 'EOF'
-#!/bin/bash
-
-# Nginx 管理脚本
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-show_menu() {
-    clear
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}         Nginx 管理脚本                    ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${GREEN}1.${NC} 查看 Nginx 状态"
-    echo -e "${GREEN}2.${NC} 测试配置文件"
-    echo -e "${GREEN}3.${NC} 重载 Nginx"
-    echo -e "${GREEN}4.${NC} 重启 Nginx"
-    echo -e "${GREEN}5.${NC} 停止 Nginx"
-    echo -e "${GREEN}6.${NC} 查看错误日志"
-    echo -e "${GREEN}7.${NC} 查看访问日志"
-    echo -e "${GREEN}8.${NC} 添加反向代理"
-    echo -e "${GREEN}9.${NC} 申请 SSL 证书"
-    echo -e "${GREEN}0.${NC} 退出"
-    echo ""
-}
-
-view_status() {
-    echo -e "${YELLOW}=== Nginx 状态 ===${NC}"
-    systemctl status nginx --no-pager
-    echo ""
-    echo -e "${YELLOW}=== 进程信息 ===${NC}"
-    ps aux | grep nginx | grep -v grep
-    echo ""
-    echo -e "${YELLOW}=== 端口监听 ===${NC}"
-    netstat -tulpn | grep nginx
-}
-
-test_config() {
-    echo -e "${YELLOW}测试 Nginx 配置...${NC}"
-    if nginx -t; then
-        echo -e "${GREEN}✅ 配置测试通过${NC}"
-    else
-        echo -e "${RED}❌ 配置测试失败${NC}"
-    fi
-}
-
-add_proxy() {
-    echo -e "${YELLOW}添加反向代理${NC}"
-    read -p "请输入域名 (如: example.com): " domain
-    read -p "请输入本地端口 (如: 3000): " port
-    
-    if [[ -z "$domain" || -z "$port" ]]; then
-        echo -e "${RED}域名和端口不能为空${NC}"
+    # 空值检查
+    if [ -z "$domain" ]; then
+        echo -e "${RED}错误: 域名不能为空${NC}"
         return 1
     fi
     
-    # 创建配置文件
-    cat > /etc/nginx/conf.d/${domain}.conf << EOF
-# 反向代理配置
-# 生成时间: $(date)
-
-# HTTP 重定向
-server {
-    listen 80;
-    server_name ${domain};
+    # 长度检查
+    if [ ${#domain} -gt 255 ]; then
+        echo -e "${RED}错误: 域名太长${NC}"
+        return 1
+    fi
     
-    location / {
-        return 301 https://\$server_name\$request_uri;
-    }
+    # 简单检查：至少有一个点号
+    if [[ "$domain" != *.* ]]; then
+        echo -e "${YELLOW}警告: 域名缺少点号，但将继续处理${NC}"
+        return 0
+    fi
+    
+    # 检查是否以点号开头或结尾
+    if [[ "$domain" == .* ]] || [[ "$domain" == *. ]]; then
+        echo -e "${RED}错误: 域名不能以点号开头或结尾${NC}"
+        return 1
+    fi
+    
+    # 检查连续点号
+    if [[ "$domain" == *..* ]]; then
+        echo -e "${RED}错误: 域名不能有连续点号${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ 域名格式验证通过${NC}"
+    return 0
 }
 
-# HTTPS 代理
+# 查找证书
+find_certificates() {
+    local domain=$1
+    local clean_domain=${domain#*//}
+    clean_domain=${clean_domain%%/*}
+    
+    log "DEBUG" "查找证书，域名: [域名已隐藏]"
+    
+    # 特别处理特定域名的子域名（通用化版本）
+    # 检查是否有父域名证书可用
+    if [[ "$clean_domain" == *.* ]]; then  # 至少有一个点
+        log "DEBUG" "检测到多级域名，尝试查找父域名证书"
+        
+        # 提取父域名（移除第一个子域名）
+        local parent_domain="${clean_domain#*.}"
+        
+        # 检查父域名证书
+        local parent_cert="/root/.acme.sh/${parent_domain}_ecc/fullchain.cer"
+        local parent_key="/root/.acme.sh/${parent_domain}_ecc/${parent_domain}.key"
+        
+        if [ -f "$parent_cert" ] && [ -f "$parent_key" ]; then
+            CERT_FILE="$parent_cert"
+            KEY_FILE="$parent_key"
+            log "INFO" "找到父域名证书"
+            return 0
+        fi
+        
+        # 检查不带_ecc的路径
+        local parent_cert2="/root/.acme.sh/${parent_domain}/fullchain.cer"
+        local parent_key2="/root/.acme.sh/${parent_domain}/${parent_domain}.key"
+        
+        if [ -f "$parent_cert2" ] && [ -f "$parent_key2" ]; then
+            CERT_FILE="$parent_cert2"
+            KEY_FILE="$parent_key2"
+            log "INFO" "找到父域名证书（非ECC）"
+            return 0
+        fi
+    fi
+    
+    # 可能的证书路径（包含.cer格式）
+    local cert_paths=(
+        "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
+        "/etc/nginx/ssl/certs/${clean_domain}.crt"
+        "/etc/nginx/ssl/${clean_domain}.crt"
+        "/etc/ssl/certs/${clean_domain}/fullchain.pem"
+        "/etc/letsencrypt/live/${clean_domain}/fullchain.pem"
+        "/root/.acme.sh/${clean_domain}/fullchain.cer"
+        "/root/.acme.sh/${clean_domain}_ecc/fullchain.cer"
+        "/root/.acme.sh/${clean_domain}/${clean_domain}.cer"
+        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.cer"
+    )
+    
+    local key_paths=(
+        "/etc/nginx/ssl/private/${clean_domain}/key.pem"
+        "/etc/nginx/ssl/private/${clean_domain}.key"
+        "/etc/nginx/ssl/${clean_domain}.key"
+        "/etc/ssl/private/${clean_domain}/key.pem"
+        "/etc/letsencrypt/live/${clean_domain}/privkey.pem"
+        "/root/.acme.sh/${clean_domain}/${clean_domain}.key"
+        "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.key"
+    )
+    
+    # 查找证书文件
+    for cert in "${cert_paths[@]}"; do
+        if [ -f "$cert" ]; then
+            CERT_FILE="$cert"
+            log "INFO" "找到证书文件"
+            break
+        fi
+    done
+    
+    # 查找密钥文件
+    for key in "${key_paths[@]}"; do
+        if [ -f "$key" ]; then
+            KEY_FILE="$key"
+            log "INFO" "找到密钥文件"
+            break
+        fi
+    done
+    
+    if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
+        return 0
+    else
+        # 尝试通配符证书
+        if [[ "$clean_domain" == *.* ]]; then
+            local wildcard_domain="*.${clean_domain#*.}"
+            local wildcard_cert_paths=(
+                "/etc/nginx/ssl/certs/${wildcard_domain}/fullchain.pem"
+                "/etc/nginx/ssl/${wildcard_domain}.crt"
+                "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
+                "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
+            )
+            
+            local wildcard_key_paths=(
+                "/etc/nginx/ssl/private/${wildcard_domain}/key.pem"
+                "/etc/nginx/ssl/${wildcard_domain}.key"
+                "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
+                "/root/.acme.sh/${wildcard_domain}_ecc/${wildcard_domain}.key"
+            )
+            
+            for cert in "${wildcard_cert_paths[@]}"; do
+                if [ -f "$cert" ]; then
+                    CERT_FILE="$cert"
+                    log "INFO" "找到通配符证书"
+                    break
+                fi
+            done
+            
+            for key in "${wildcard_key_paths[@]}"; do
+                if [ -f "$key" ]; then
+                    KEY_FILE="$key"
+                    log "INFO" "找到通配符密钥"
+                    break
+                fi
+            done
+            
+            if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ]; then
+                return 0
+            fi
+        fi
+    fi
+    
+    return 1
+}
+
+# 生成自签名证书
+generate_self_signed_cert() {
+    local domain=$1
+    local cert_dir="/etc/nginx/ssl/certs/${domain}"
+    local key_dir="/etc/nginx/ssl/private/${domain}"
+    
+    mkdir -p "$cert_dir" "$key_dir"
+    
+    log "INFO" "为 $domain 生成自签名证书..."
+    
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "${key_dir}/key.pem" \
+        -out "${cert_dir}/fullchain.pem" \
+        -subj "/C=CN/ST=Beijing/L=Beijing/O=Development/CN=${domain}" \
+        2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        CERT_FILE="${cert_dir}/fullchain.pem"
+        KEY_FILE="${key_dir}/key.pem"
+        
+        # 根据系统确定Nginx用户
+        local nginx_user="nginx"
+        if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+            nginx_user="www-data"
+        fi
+        
+        # 设置权限
+        chmod 644 "$CERT_FILE"
+        chmod 600 "$KEY_FILE"
+        chown $nginx_user:$nginx_user "$KEY_FILE"
+        
+        log "INFO" "自签名证书生成成功"
+        return 0
+    else
+        log "ERROR" "自签名证书生成失败"
+        return 1
+    fi
+}
+
+# 创建反向代理配置
+create_proxy_config() {
+    log "INFO" "开始创建反向代理配置"
+    
+    # 获取用户输入
+    while true; do
+        echo -ne "${CYAN}请输入域名${NC} (例如: api.example.com): "
+        read DOMAIN
+        
+        if [ -n "$DOMAIN" ]; then
+            validate_domain "$DOMAIN" && break
+        else
+            echo -e "${RED}错误: 域名不能为空${NC}"
+        fi
+    done
+    
+    # 验证端口
+    while true; do
+        echo -ne "${CYAN}请输入后端服务端口${NC} (例如: 3000): "
+        read BACKEND_PORT
+        
+        if [[ "$BACKEND_PORT" =~ ^[0-9]+$ ]] && [ "$BACKEND_PORT" -ge 1 ] && [ "$BACKEND_PORT" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}错误: 端口号必须是1-65535之间的数字${NC}"
+        fi
+    done
+    
+    # 其他选项
+    echo -ne "${CYAN}是否启用WebSocket支持？${NC} (y/n): "
+    read -n 1 WS_CHOICE
+    echo
+    [[ $WS_CHOICE =~ ^[Yy]$ ]] && WEBSOCKET=true || WEBSOCKET=false
+    
+    echo -ne "${CYAN}是否强制HTTPS？${NC} (y/n): "
+    read -n 1 HTTPS_CHOICE
+    echo
+    [[ $HTTPS_CHOICE =~ ^[Yy]$ ]] && FORCE_HTTPS=true || FORCE_HTTPS=false
+    
+    echo -ne "${CYAN}是否启用缓存？${NC} (y/n): "
+    read -n 1 CACHE_CHOICE
+    echo
+    [[ $CACHE_CHOICE =~ ^[Yy]$ ]] && ENABLE_CACHE=true || ENABLE_CACHE=false
+    
+    # 查找证书
+    log "INFO" "正在查找证书..."
+    SSL_AVAILABLE=false
+    
+    if find_certificates "$DOMAIN"; then
+        SSL_AVAILABLE=true
+        log "INFO" "找到SSL证书"
+    else
+        log "WARN" "未找到SSL证书"
+        echo -ne "${YELLOW}是否生成自签名证书？${NC} (y/n): "
+        read -n 1 CERT_CHOICE
+        echo
+        
+        if [[ $CERT_CHOICE =~ ^[Yy]$ ]]; then
+            if generate_self_signed_cert "$DOMAIN"; then
+                SSL_AVAILABLE=true
+                log "INFO" "已生成自签名证书"
+            fi
+        fi
+        
+        if [ "$SSL_AVAILABLE" = false ] && [ "$FORCE_HTTPS" = true ]; then
+            log "WARN" "选择了强制HTTPS但未找到证书，将使用HTTP模式"
+            FORCE_HTTPS=false
+        fi
+    fi
+    
+    # 配置文件名
+    CONFIG_FILE="/etc/nginx/sites-available/${DOMAIN}.conf"
+    
+    log "INFO" "生成配置文件: $CONFIG_FILE"
+    
+    # 生成配置
+    cat > "$CONFIG_FILE" << EOF
+# 反向代理配置: $DOMAIN -> 127.0.0.1:$BACKEND_PORT
+# 生成时间: $(date)
+# SSL: $( [ "$SSL_AVAILABLE" = true ] && echo "已启用" || echo "未启用" )
+# WebSocket: $( [ "$WEBSOCKET" = true ] && echo "已启用" || echo "未启用" )
+
+# HTTP服务器 - 用于重定向或直接服务
 server {
-    listen 443 ssl;
-    server_name ${domain};
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
     
-    # SSL 证书路径（需要先申请）
-    ssl_certificate /etc/nginx/ssl/certs/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/private/${domain}/key.pem;
+    # 安全头部
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
     
+    # 访问日志
+    access_log /var/log/nginx/${DOMAIN}_access.log;
+    error_log /var/log/nginx/${DOMAIN}_error.log warn;
+EOF
+
+    # 如果有证书且强制HTTPS，添加重定向
+    if [ "$SSL_AVAILABLE" = true ] && [ "$FORCE_HTTPS" = true ]; then
+        cat >> "$CONFIG_FILE" << EOF
+    
+    # 强制HTTPS重定向
+    return 301 https://\$server_name\$request_uri;
+}
+EOF
+    else
+        # HTTP直接代理
+        cat >> "$CONFIG_FILE" << EOF
+    
+    # 代理设置
     location / {
-        proxy_pass http://localhost:${port};
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        # 基础代理头
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
+        
+        # 连接设置
+        proxy_buffering off;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 60s;
+        
+        # 保持活动连接
+        proxy_set_header Connection "";
+        
+        # 禁用代理缓冲
+        proxy_request_buffering off;
+    }
+EOF
+        
+        # 如果启用缓存
+        if [ "$ENABLE_CACHE" = true ]; then
+            cat >> "$CONFIG_FILE" << EOF
+    
+    # 静态文件缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_cache proxy_cache;
+        proxy_cache_valid 200 302 1h;
+        proxy_cache_valid 404 1m;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        add_header X-Cache-Status \$upstream_cache_status;
+    }
+EOF
+        fi
+        
+        # 如果启用WebSocket，添加配置
+        if [ "$WEBSOCKET" = true ]; then
+            cat >> "$CONFIG_FILE" << EOF
+    
+    # WebSocket支持
+    location /ws/ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+    
+    location ~ ^/(socket\.io|websocket)/ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+EOF
+        fi
+        
+        echo "}" >> "$CONFIG_FILE"
+    fi
+    
+    # 如果有证书，添加HTTPS服务器配置
+    if [ "$SSL_AVAILABLE" = true ]; then
+        cat >> "$CONFIG_FILE" << EOF
+
+# HTTPS服务器配置
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $DOMAIN;
+    
+    # SSL证书
+    ssl_certificate $CERT_FILE;
+    ssl_certificate_key $KEY_FILE;
+    
+    # SSL优化
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers off;
+    
+    # 安全头部
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # 访问日志
+    access_log /var/log/nginx/ssl/${DOMAIN}_access.log;
+    error_log /var/log/nginx/ssl/${DOMAIN}_error.log warn;
+    
+    # 代理设置
+    location / {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        # 基础代理头
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
+        
+        # 连接设置
+        proxy_buffering off;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 60s;
+        
+        # 保持活动连接
+        proxy_set_header Connection "";
+        
+        # 禁用代理缓冲
+        proxy_request_buffering off;
+    }
+EOF
+        
+        # 如果启用缓存
+        if [ "$ENABLE_CACHE" = true ]; then
+            cat >> "$CONFIG_FILE" << EOF
+    
+    # 静态文件缓存 (HTTPS)
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_cache proxy_cache;
+        proxy_cache_valid 200 302 1h;
+        proxy_cache_valid 404 1m;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        add_header X-Cache-Status \$upstream_cache_status;
+    }
+EOF
+        fi
+        
+        # HTTPS服务器的WebSocket配置
+        if [ "$WEBSOCKET" = true ]; then
+            cat >> "$CONFIG_FILE" << EOF
+    
+    # WebSocket支持 (HTTPS)
+    location /ws/ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         
-        # WebSocket 支持
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+    
+    location ~ ^/(socket\.io|websocket)/ {
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
         proxy_http_version 1.1;
+        
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
-}
 EOF
-    
-    echo -e "${GREEN}✅ 反向代理配置已创建${NC}"
-    echo -e "配置文件: /etc/nginx/conf.d/${domain}.conf"
-    echo -e "请先申请 SSL 证书: certbot --nginx -d ${domain}"
-}
+        fi
+        
+        echo "}" >> "$CONFIG_FILE"
+        
+        # 添加缓存配置
+        if [ "$ENABLE_CACHE" = true ]; then
+            cat >> "$CONFIG_FILE" << EOF
 
-ssl_cert() {
-    echo -e "${YELLOW}申请 SSL 证书${NC}"
-    
-    if ! command -v certbot &>/dev/null; then
-        echo -e "${RED}certbot 未安装，正在安装...${NC}"
-        apt-get update
-        apt-get install -y certbot python3-certbot-nginx
+# 代理缓存配置
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=proxy_cache:10m 
+                 max_size=1g inactive=60m use_temp_path=off;
+EOF
+        fi
     fi
     
-    read -p "请输入域名 (如: example.com): " domain
-    if [[ -z "$domain" ]]; then
-        echo -e "${RED}域名不能为空${NC}"
-        return 1
+    # 启用配置
+    mkdir -p /etc/nginx/sites-enabled
+    ln -sf "$CONFIG_FILE" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    
+    echo -e "\n${GREEN}✅ 配置创建成功${NC}"
+    echo -e "${BLUE}配置文件:${NC} $CONFIG_FILE"
+    echo -e "${BLUE}域名:${NC} $DOMAIN"
+    echo -e "${BLUE}后端服务:${NC} 127.0.0.1:$BACKEND_PORT"
+    echo -e "${BLUE}SSL:${NC} $( [ "$SSL_AVAILABLE" = true ] && echo '启用' || echo '未启用' )"
+    echo -e "${BLUE}强制HTTPS:${NC} $( [ "$FORCE_HTTPS" = true ] && echo '是' || echo '否' )"
+    echo -e "${BLUE}WebSocket:${NC} $( [ "$WEBSOCKET" = true ] && echo '启用' || echo '未启用' )"
+    echo -e "${BLUE}缓存:${NC} $( [ "$ENABLE_CACHE" = true ] && echo '启用' || echo '未启用' )"
+    
+    if [ "$SSL_AVAILABLE" = true ] && [ -f "$CERT_FILE" ]; then
+        echo -e "\n${YELLOW}证书路径:${NC}"
+        echo -e "  证书: $CERT_FILE"
+        echo -e "  密钥: $KEY_FILE"
     fi
-    
-    echo -e "${YELLOW}正在为 ${domain} 申请证书...${NC}"
-    certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --email admin@${domain} || {
-        echo -e "${RED}证书申请失败${NC}"
-        echo -e "${YELLOW}请检查:${NC}"
-        echo "1. 域名是否解析到本服务器"
-        echo "2. 80/443 端口是否开放"
-        return 1
-    }
-    
-    echo -e "${GREEN}✅ SSL 证书申请成功${NC}"
 }
 
-main() {
-    while true; do
-        show_menu
-        read -p "请选择操作 (0-9): " choice
-        
-        case $choice in
-            1)
-                view_status
-                ;;
-            2)
-                test_config
-                ;;
-            3)
-                echo -e "${YELLOW}重载 Nginx...${NC}"
-                systemctl reload nginx && echo -e "${GREEN}✅ 重载成功${NC}" || echo -e "${RED}❌ 重载失败${NC}"
-                ;;
-            4)
-                echo -e "${YELLOW}重启 Nginx...${NC}"
-                systemctl restart nginx && echo -e "${GREEN}✅ 重启成功${NC}" || echo -e "${RED}❌ 重启失败${NC}"
-                ;;
-            5)
-                echo -e "${YELLOW}停止 Nginx...${NC}"
-                systemctl stop nginx && echo -e "${GREEN}✅ 停止成功${NC}" || echo -e "${RED}❌ 停止失败${NC}"
-                ;;
-            6)
-                echo -e "${YELLOW}=== 错误日志 (最后50行) ===${NC}"
-                tail -50 /var/log/nginx/error.log
-                ;;
-            7)
-                echo -e "${YELLOW}=== 访问日志 (最后50行) ===${NC}"
-                tail -50 /var/log/nginx/access.log
-                ;;
-            8)
-                add_proxy
-                ;;
-            9)
-                ssl_cert
-                ;;
-            0)
-                echo "再见！"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}无效选择${NC}"
-                ;;
-        esac
-        
-        echo ""
-        read -p "按 Enter 键继续..."
-    done
-}
-
-main "$@"
-EOF
+# 删除站点配置
+delete_site() {
+    log "INFO" "删除站点配置"
     
-    # 设置权限
-    chmod +x /usr/local/bin/nginx-manager
+    # 列出所有启用的站点
+    echo -e "${YELLOW}当前启用的站点:${NC}"
+    local i=1
+    local sites=()
     
-    log "管理脚本创建完成"
-}
-
-# 显示完成信息
-show_completion() {
-    clear
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}                  安装完成！                           ${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${GREEN}✅ Nginx 安装配置已完成${NC}"
-    echo ""
-    echo -e "${YELLOW}📋 安装摘要：${NC}"
-    echo "  - Nginx 已安装并运行"
-    echo "  - 优化配置已应用"
-    echo "  - 系统服务已配置"
-    echo "  - 管理脚本已创建"
-    echo ""
-    echo -e "${YELLOW}🔧 管理命令：${NC}"
-    echo "  查看状态: systemctl status nginx"
-    echo "  测试配置: nginx -t"
-    echo "  重载配置: systemctl reload nginx"
-    echo "  管理菜单: nginx-manager"
-    echo ""
-    echo -e "${YELLOW}🌐 访问地址：${NC}"
-    local_ip=$(hostname -I | awk '{print $1}')
-    echo "  本地访问: http://localhost"
-    echo "  远程访问: http://${local_ip}"
-    echo ""
-    echo -e "${YELLOW}📁 重要目录：${NC}"
-    echo "  配置文件: /etc/nginx/"
-    echo "  网站文件: /var/www/html/"
-    echo "  日志文件: /var/log/nginx/"
-    echo "  SSL证书: /etc/nginx/ssl/"
-    echo ""
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo ""
-    
-    # 测试访问
-    echo -e "${YELLOW}正在测试 Web 服务...${NC}"
-    if curl -s -o /dev/null -w "HTTP状态码: %{http_code}\n" http://localhost; then
-        echo -e "${GREEN}✅ Web 服务运行正常${NC}"
+    if ls /etc/nginx/sites-enabled/*.conf 2>/dev/null >/dev/null; then
+        for conf in /etc/nginx/sites-enabled/*.conf; do
+            local domain=$(basename "$conf" .conf)
+            sites+=("$domain")
+            echo -e "  ${GREEN}$i.${NC} $domain"
+            ((i++))
+        done
     else
-        echo -e "${RED}⚠️  Web 服务可能有问题${NC}"
+        echo -e "${RED}没有启用的站点配置${NC}"
+        return
     fi
     
-    echo ""
-    echo -e "${GREEN}现在可以运行 'nginx-manager' 来管理 Nginx 了${NC}"
-}
-
-# 主安装函数
-main_install() {
-    show_banner
-    
-    # 确认安装
-    read -p "是否继续安装？(y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo "安装已取消"
-        exit 0
+    if [ ${#sites[@]} -eq 0 ]; then
+        echo -e "${RED}没有站点可删除${NC}"
+        return
     fi
     
-    # 检查 root
-    check_root
+    echo -ne "\n${CYAN}请选择要删除的站点编号${NC} (1-${#sites[@]}): "
+    read choice
     
-    # 执行安装步骤
-    clean_old_nginx
-    install_dependencies
-    create_directories
-    install_nginx
-    configure_nginx
-    configure_service
-    test_nginx
-    create_management_script
-    show_completion
+    if [[ $choice =~ ^[0-9]+$ ]] && [ $choice -ge 1 ] && [ $choice -le ${#sites[@]} ]; then
+        local domain=${sites[$((choice-1))]}
+        
+        echo -e "${YELLOW}确定要删除站点 '$domain' 吗？${NC}"
+        echo -ne "${RED}此操作将删除配置文件和符号链接${NC} (y/n): "
+        read -n 1 confirm
+        echo
+        
+        if [[ $confirm =~ ^[Yy]$ ]]; then
+            # 删除符号链接
+            rm -f "/etc/nginx/sites-enabled/${domain}.conf"
+            
+            # 删除配置文件
+            if [ -f "/etc/nginx/sites-available/${domain}.conf" ]; then
+                rm -f "/etc/nginx/sites-available/${domain}.conf"
+            fi
+            
+            # 删除日志文件
+            rm -f "/var/log/nginx/${domain}"*.log 2>/dev/null
+            rm -f "/var/log/nginx/ssl/${domain}"*.log 2>/dev/null
+            
+            log "INFO" "站点 '$domain' 已删除"
+            
+            # 建议重载Nginx
+            echo -ne "${YELLOW}是否现在重载Nginx？${NC} (y/n): "
+            read -n 1 reload
+            echo
+            if [[ $reload =~ ^[Yy]$ ]]; then
+                reload_nginx
+            fi
+        else
+            echo -e "${GREEN}取消删除操作${NC}"
+        fi
+    else
+        echo -e "${RED}无效的选择${NC}"
+    fi
 }
 
-# 如果直接运行，执行安装
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main_install
-fi
+# 测试并重载Nginx（兼容不同系统）
+reload_nginx() {
+    log "INFO" "测试Nginx配置..."
+    
+    if nginx -t 2>&1; then
+        log "INFO" "配置测试通过"
+        
+        echo -e "${YELLOW}重载Nginx...${NC}"
+        
+        local reloaded=false
+        
+        # 尝试不同的重载方式
+        if nginx -s reload 2>/dev/null; then
+            reloaded=true
+        elif [ "$OS" = "alpine" ]; then
+            if rc-service nginx reload 2>/dev/null; then
+                reloaded=true
+            fi
+        elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+            if systemctl reload nginx 2>/dev/null; then
+                reloaded=true
+            fi
+        elif systemctl reload nginx 2>/dev/null; then
+            reloaded=true
+        fi
+        
+        if [ "$reloaded" = true ]; then
+            log "INFO" "Nginx重载成功"
+        else
+            # 尝试重启
+            echo -e "${YELLOW}重载失败，尝试重启...${NC}"
+            if [ "$OS" = "alpine" ]; then
+                rc-service nginx restart 2>/dev/null && reloaded=true
+            elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+                systemctl restart nginx 2>/dev/null && reloaded=true
+            elif systemctl restart nginx 2>/dev/null; then
+                reloaded=true
+            fi
+            
+            if [ "$reloaded" = true ]; then
+                log "INFO" "Nginx重启成功"
+            else
+                log "ERROR" "Nginx重载/重启失败，请手动检查"
+                return 1
+            fi
+        fi
+        
+        # 显示配置摘要
+        show_config_summary
+        return 0
+    else
+        log "ERROR" "配置测试失败"
+        echo -e "${YELLOW}错误详情:${NC}"
+        nginx -t 2>&1 | tail -10
+        return 1
+    fi
+}
+
+# 检查证书状态
+check_certificates() {
+    log "INFO" "检查证书状态"
+    
+    echo -e "${BLUE}搜索证书目录...${NC}"
+    
+    # 检查主要证书目录
+    local cert_dirs=(
+        "/etc/nginx/ssl"
+        "/etc/letsencrypt/live"
+        "/root/.acme.sh"
+    )
+    
+    for dir in "${cert_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            echo -e "\n${GREEN}目录: $dir${NC}"
+            find "$dir" -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "*.key" 2>/dev/null | head -20 | while read file; do
+                if [ -f "$file" ]; then
+                    local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                    local perms=$(stat -c "%a %U:%G" "$file" 2>/dev/null || echo "N/A")
+                    local type=""
+                    
+                    if [[ "$file" =~ \.crt$|\.pem$|\.cer$ ]]; then
+                        type="证书"
+                        echo -e "  📄 $file ($size, $perms)"
+                        
+                        # 检查证书过期时间
+                        local expire_date=$(openssl x509 -enddate -noout -in "$file" 2>/dev/null | cut -d= -f2)
+                        if [ -n "$expire_date" ]; then
+                            echo -e "    过期时间: $expire_date"
+                        fi
+                    elif [[ "$file" =~ \.key$ ]]; then
+                        type="密钥"
+                        echo -e "  🔑 $file ($size, $perms)"
+                    fi
+                fi
+            done
+        fi
+    done
+    
+    # 显示目录结构
+    echo -e "\n${BLUE}Nginx SSL目录结构:${NC}"
+    if [ -d "/etc/nginx/ssl" ]; then
+        echo -e "${GREEN}有效证书文件:${NC}"
+        local count=0
+        find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.cer" \) 2>/dev/null | \
+        while read file; do
+            if [ -s "$file" ] && [ -r "$file" ]; then
+                local expire_date=$(openssl x509 -enddate -noout -in "$file" 2>/dev/null | cut -d= -f2 2>/dev/null)
+                if [ -n "$expire_date" ]; then
+                    count=$((count+1))
+                    local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                    echo "  $count. 📄 $file"
+                    echo "     大小: $size, 过期: $expire_date"
+                fi
+            fi
+        done
+        
+        echo -e "\n${GREEN}密钥文件:${NC}"
+        find /etc/nginx/ssl -type f -name "*.key" 2>/dev/null | \
+        while read file; do
+            if [ -s "$file" ] && [ -r "$file" ]; then
+                local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                local perms=$(stat -c "%a" "$file" 2>/dev/null || echo "N/A")
+                echo "  🔑 $file ($size, 权限:$perms)"
+            fi
+        done
+        
+        echo -e "\n${GREEN}目录结构:${NC}"
+        echo "/etc/nginx/ssl/"
+        ls -la /etc/nginx/ssl/ 2>/dev/null | tail -n +2 || echo "无法列出目录"
+    else
+        echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
+        echo -e "${YELLOW}创建证书目录...${NC}"
+        mkdir -p /etc/nginx/ssl/{certs,private}
