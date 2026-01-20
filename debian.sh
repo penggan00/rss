@@ -11,19 +11,55 @@ NC='\033[0m' # No Color
 
 # 系统检测
 detect_os() {
-    if [ -f /etc/alpine-release ]; then
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+        OS_NAME=$NAME
+    elif [ -f /etc/alpine-release ]; then
         OS="alpine"
-    elif [ -f /etc/debian_version ]; then
-        OS="debian"
-    elif [ -f /etc/centos-release ] || [ -f /etc/redhat-release ]; then
-        OS="centos"
+        OS_VERSION=$(cat /etc/alpine-release)
+        OS_NAME="Alpine Linux"
     else
-        OS="unknown"
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     fi
-    echo "$OS"
 }
 
-OS=$(detect_os)
+# 初始化系统变量
+detect_os
+log "DEBUG" "检测到系统: $OS_NAME $OS_VERSION ($OS)"
+
+# 包管理器命令
+case $OS in
+    alpine)
+        PKG_MANAGER="apk"
+        PKG_INSTALL="add"
+        PKG_REMOVE="del --purge"
+        PKG_UPDATE="update"
+        PKG_QUERY="info"
+        NGINX_SERVICE="rc-service nginx"
+        NGINX_USER="nginx"
+        NGINX_GROUP="nginx"
+        ;;
+    debian|ubuntu)
+        PKG_MANAGER="apt-get"
+        PKG_INSTALL="install -y"
+        PKG_REMOVE="purge -y"
+        PKG_UPDATE="update"
+        PKG_QUERY="show"
+        NGINX_SERVICE="systemctl"
+        NGINX_USER="www-data"
+        NGINX_GROUP="www-data"
+        ;;
+    *)
+        log "WARN" "未知系统，尝试使用默认值"
+        PKG_MANAGER="apt-get"
+        PKG_INSTALL="install -y"
+        NGINX_SERVICE="systemctl"
+        NGINX_USER="nginx"
+        NGINX_GROUP="nginx"
+        ;;
+esac
 
 # 日志函数
 log() {
@@ -41,31 +77,14 @@ log() {
     echo -e "${color}[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message${NC}"
 }
 
-# 安装依赖（兼容不同系统）
-install_dependencies() {
-    local deps=("$@")
-    
-    case $OS in
-        "alpine")
-            apk add --no-cache "${deps[@]}" 2>/dev/null
-            ;;
-        "debian"|"ubuntu")
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}" 2>/dev/null
-            ;;
-        "centos"|"rhel"|"fedora")
-            yum install -y "${deps[@]}" 2>/dev/null
-            ;;
-    esac
-}
-
 # 检查依赖
 check_dependencies() {
     local deps=("nginx" "openssl")
     
+    # 根据不同系统调整依赖
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-        deps+=("tree" "procps")  # Debian需要procps来使用pgrep
-    else
+        deps+=("tree")
+    elif [ "$OS" = "alpine" ]; then
         deps+=("tree")
     fi
     
@@ -81,11 +100,17 @@ check_dependencies() {
         log "WARN" "缺少以下依赖: ${missing[*]}"
         read -p "是否安装缺失的依赖？(y/n): " choice
         if [[ $choice =~ ^[Yy]$ ]]; then
-            install_dependencies "${missing[@]}"
-            if [ $? -ne 0 ]; then
-                log "ERROR" "依赖安装失败"
-                exit 1
-            fi
+            $PKG_MANAGER $PKG_UPDATE
+            for dep in "${missing[@]}"; do
+                case $dep in
+                    nginx)
+                        $PKG_MANAGER $PKG_INSTALL nginx-full || $PKG_MANAGER $PKG_INSTALL nginx
+                        ;;
+                    *)
+                        $PKG_MANAGER $PKG_INSTALL "$dep"
+                        ;;
+                esac
+            done
         fi
     fi
 }
@@ -94,24 +119,30 @@ check_dependencies() {
 init_directories() {
     log "INFO" "初始化目录结构..."
     
-    # 根据系统确定Nginx用户
-    local nginx_user="nginx"
-    local nginx_group="nginx"
-    
+    # 根据系统调整目录路径
+    local nginx_conf_dir="/etc/nginx"
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-        nginx_user="www-data"
-        nginx_group="www-data"
+        nginx_conf_dir="/etc/nginx"
+        # Debian默认使用sites-available/enabled结构
+        local dirs=(
+            "/etc/nginx/ssl/certs"
+            "/etc/nginx/ssl/private"
+            "/etc/nginx/sites-available"
+            "/etc/nginx/sites-enabled"
+            "/var/log/nginx/ssl"
+            "/var/www/html"
+        )
+    elif [ "$OS" = "alpine" ]; then
+        nginx_conf_dir="/etc/nginx"
+        local dirs=(
+            "/etc/nginx/ssl/certs"
+            "/etc/nginx/ssl/private"
+            "/etc/nginx/sites-available"
+            "/etc/nginx/sites-enabled"
+            "/var/log/nginx/ssl"
+            "/var/www/html"
+        )
     fi
-    
-    # 创建必要的目录
-    local dirs=(
-        "/etc/nginx/ssl/certs"
-        "/etc/nginx/ssl/private"
-        "/etc/nginx/sites-available"
-        "/etc/nginx/sites-enabled"
-        "/var/log/nginx/ssl"
-        "/var/www/html"
-    )
     
     for dir in "${dirs[@]}"; do
         if [ ! -d "$dir" ]; then
@@ -122,17 +153,22 @@ init_directories() {
     done
     
     # 设置权限
-    chown -R $nginx_user:$nginx_group /etc/nginx/ssl/private
+    chown -R $NGINX_USER:$NGINX_GROUP /etc/nginx/ssl/private
     chmod 700 /etc/nginx/ssl/private
-    chmod 644 /etc/nginx/ssl/certs/* 2>/dev/null
     
-    # Debian特有：确保sites-enabled在nginx.conf中被包含
-    if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-        if [ -f /etc/nginx/nginx.conf ] && ! grep -q "sites-enabled" /etc/nginx/nginx.conf; then
-            # 检查是否已经包含sites-enabled
-            if grep -q "include /etc/nginx/conf.d/\*.conf" /etc/nginx/nginx.conf; then
-                # 在conf.d行后添加sites-enabled
-                sed -i '/include \/etc\/nginx\/conf.d\/\*.conf;/a\    include /etc/nginx/sites-enabled/*;' /etc/nginx/nginx.conf
+    # 尝试设置证书权限
+    chmod 644 /etc/nginx/ssl/certs/* 2>/dev/null || true
+    
+    # 确保sites-enabled在nginx.conf中被包含
+    if [ -f "/etc/nginx/nginx.conf" ]; then
+        if ! grep -q "sites-enabled" /etc/nginx/nginx.conf; then
+            # 检查是否已经有include指令
+            if grep -q "conf.d" /etc/nginx/nginx.conf; then
+                # 在conf.d后面添加sites-enabled
+                sed -i '/include.*conf\.d/a\    include /etc/nginx/sites-enabled/*;' /etc/nginx/nginx.conf
+            elif grep -q "http {" /etc/nginx/nginx.conf; then
+                # 在http块内添加
+                sed -i '/http {/a\\    include /etc/nginx/sites-enabled/*;' /etc/nginx/nginx.conf
             fi
         fi
     fi
@@ -140,7 +176,7 @@ init_directories() {
     log "INFO" "目录结构初始化完成"
 }
 
-# 域名验证函数（简化版，兼容Alpine ash和Bash）
+# 域名验证函数
 validate_domain() {
     local domain=$1
     
@@ -184,14 +220,12 @@ find_certificates() {
     local clean_domain=${domain#*//}
     clean_domain=${clean_domain%%/*}
     
-    log "DEBUG" "查找证书，域名: [域名已隐藏]"
+    log "DEBUG" "查找证书，域名: $clean_domain"
     
-    # 特别处理特定域名的子域名（通用化版本）
-    # 检查是否有父域名证书可用
-    if [[ "$clean_domain" == *.* ]]; then  # 至少有一个点
+    # 特别处理特定域名的子域名
+    if [[ "$clean_domain" == *.* ]]; then
         log "DEBUG" "检测到多级域名，尝试查找父域名证书"
         
-        # 提取父域名（移除第一个子域名）
         local parent_domain="${clean_domain#*.}"
         
         # 检查父域名证书
@@ -205,7 +239,6 @@ find_certificates() {
             return 0
         fi
         
-        # 检查不带_ecc的路径
         local parent_cert2="/root/.acme.sh/${parent_domain}/fullchain.cer"
         local parent_key2="/root/.acme.sh/${parent_domain}/${parent_domain}.key"
         
@@ -217,7 +250,7 @@ find_certificates() {
         fi
     fi
     
-    # 可能的证书路径（包含.cer格式）
+    # 可能的证书路径
     local cert_paths=(
         "/etc/nginx/ssl/certs/${clean_domain}/fullchain.pem"
         "/etc/nginx/ssl/certs/${clean_domain}.crt"
@@ -228,6 +261,8 @@ find_certificates() {
         "/root/.acme.sh/${clean_domain}_ecc/fullchain.cer"
         "/root/.acme.sh/${clean_domain}/${clean_domain}.cer"
         "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.cer"
+        "/etc/ssl/certs/${clean_domain}.crt"
+        "/etc/ssl/private/${clean_domain}.key"
     )
     
     local key_paths=(
@@ -238,13 +273,14 @@ find_certificates() {
         "/etc/letsencrypt/live/${clean_domain}/privkey.pem"
         "/root/.acme.sh/${clean_domain}/${clean_domain}.key"
         "/root/.acme.sh/${clean_domain}_ecc/${clean_domain}.key"
+        "/etc/ssl/private/${clean_domain}.key"
     )
     
     # 查找证书文件
     for cert in "${cert_paths[@]}"; do
         if [ -f "$cert" ]; then
             CERT_FILE="$cert"
-            log "INFO" "找到证书文件"
+            log "INFO" "找到证书文件: $cert"
             break
         fi
     done
@@ -253,7 +289,7 @@ find_certificates() {
     for key in "${key_paths[@]}"; do
         if [ -f "$key" ]; then
             KEY_FILE="$key"
-            log "INFO" "找到密钥文件"
+            log "INFO" "找到密钥文件: $key"
             break
         fi
     done
@@ -269,6 +305,7 @@ find_certificates() {
                 "/etc/nginx/ssl/${wildcard_domain}.crt"
                 "/root/.acme.sh/${wildcard_domain}/fullchain.cer"
                 "/root/.acme.sh/${wildcard_domain}_ecc/fullchain.cer"
+                "/etc/ssl/certs/${wildcard_domain}.crt"
             )
             
             local wildcard_key_paths=(
@@ -276,6 +313,7 @@ find_certificates() {
                 "/etc/nginx/ssl/${wildcard_domain}.key"
                 "/root/.acme.sh/${wildcard_domain}/${wildcard_domain}.key"
                 "/root/.acme.sh/${wildcard_domain}_ecc/${wildcard_domain}.key"
+                "/etc/ssl/private/${wildcard_domain}.key"
             )
             
             for cert in "${wildcard_cert_paths[@]}"; do
@@ -323,16 +361,10 @@ generate_self_signed_cert() {
         CERT_FILE="${cert_dir}/fullchain.pem"
         KEY_FILE="${key_dir}/key.pem"
         
-        # 根据系统确定Nginx用户
-        local nginx_user="nginx"
-        if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-            nginx_user="www-data"
-        fi
-        
         # 设置权限
         chmod 644 "$CERT_FILE"
         chmod 600 "$KEY_FILE"
-        chown $nginx_user:$nginx_user "$KEY_FILE"
+        chown $NGINX_USER:$NGINX_GROUP "$KEY_FILE"
         
         log "INFO" "自签名证书生成成功"
         return 0
@@ -358,7 +390,6 @@ create_proxy_config() {
         fi
     done
     
-    # 验证端口
     while true; do
         echo -ne "${CYAN}请输入后端服务端口${NC} (例如: 3000): "
         read BACKEND_PORT
@@ -495,7 +526,7 @@ EOF
 EOF
         fi
         
-        # 如果启用WebSocket，添加配置
+        # WebSocket配置
         if [ "$WEBSOCKET" = true ]; then
             cat >> "$CONFIG_FILE" << EOF
     
@@ -745,7 +776,34 @@ delete_site() {
     fi
 }
 
-# 测试并重载Nginx（兼容不同系统）
+# 服务控制函数
+service_control() {
+    local action=$1
+    local service=$2
+    
+    case $OS in
+        alpine)
+            rc-service $service $action
+            ;;
+        debian|ubuntu)
+            systemctl $action $service
+            ;;
+        *)
+            if command -v systemctl >/dev/null; then
+                systemctl $action $service
+            elif command -v rc-service >/dev/null; then
+                rc-service $service $action
+            elif command -v service >/dev/null; then
+                service $service $action
+            else
+                log "ERROR" "无法找到服务管理工具"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 测试并重载Nginx
 reload_nginx() {
     log "INFO" "测试Nginx配置..."
     
@@ -754,41 +812,22 @@ reload_nginx() {
         
         echo -e "${YELLOW}重载Nginx...${NC}"
         
-        local reloaded=false
-        
-        # 尝试不同的重载方式
-        if nginx -s reload 2>/dev/null; then
-            reloaded=true
-        elif [ "$OS" = "alpine" ]; then
-            if rc-service nginx reload 2>/dev/null; then
-                reloaded=true
-            fi
-        elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-            if systemctl reload nginx 2>/dev/null; then
-                reloaded=true
-            fi
-        elif systemctl reload nginx 2>/dev/null; then
-            reloaded=true
-        fi
-        
-        if [ "$reloaded" = true ]; then
+        # 使用系统特定的重载方式
+        if service_control "reload" "nginx"; then
             log "INFO" "Nginx重载成功"
         else
-            # 尝试重启
-            echo -e "${YELLOW}重载失败，尝试重启...${NC}"
-            if [ "$OS" = "alpine" ]; then
-                rc-service nginx restart 2>/dev/null && reloaded=true
-            elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
-                systemctl restart nginx 2>/dev/null && reloaded=true
-            elif systemctl restart nginx 2>/dev/null; then
-                reloaded=true
-            fi
-            
-            if [ "$reloaded" = true ]; then
-                log "INFO" "Nginx重启成功"
+            # 尝试直接reload
+            if nginx -s reload 2>/dev/null; then
+                log "INFO" "Nginx重载成功"
             else
-                log "ERROR" "Nginx重载/重启失败，请手动检查"
-                return 1
+                # 尝试重启
+                echo -e "${YELLOW}重载失败，尝试重启...${NC}"
+                if service_control "restart" "nginx"; then
+                    log "INFO" "Nginx重启成功"
+                else
+                    log "ERROR" "Nginx重载/重启失败"
+                    return 1
+                fi
             fi
         fi
         
@@ -814,6 +853,7 @@ check_certificates() {
         "/etc/nginx/ssl"
         "/etc/letsencrypt/live"
         "/root/.acme.sh"
+        "/etc/ssl/certs"
     )
     
     for dir in "${cert_dirs[@]}"; do
@@ -821,7 +861,7 @@ check_certificates() {
             echo -e "\n${GREEN}目录: $dir${NC}"
             find "$dir" -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "*.key" 2>/dev/null | head -20 | while read file; do
                 if [ -f "$file" ]; then
-                    local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                    local size=$(du -h "$file" | cut -f1)
                     local perms=$(stat -c "%a %U:%G" "$file" 2>/dev/null || echo "N/A")
                     local type=""
                     
@@ -854,7 +894,7 @@ check_certificates() {
                 local expire_date=$(openssl x509 -enddate -noout -in "$file" 2>/dev/null | cut -d= -f2 2>/dev/null)
                 if [ -n "$expire_date" ]; then
                     count=$((count+1))
-                    local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                    local size=$(du -h "$file" 2>/dev/null | cut -f1)
                     echo "  $count. 📄 $file"
                     echo "     大小: $size, 过期: $expire_date"
                 fi
@@ -865,7 +905,7 @@ check_certificates() {
         find /etc/nginx/ssl -type f -name "*.key" 2>/dev/null | \
         while read file; do
             if [ -s "$file" ] && [ -r "$file" ]; then
-                local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "N/A")
+                local size=$(du -h "$file" 2>/dev/null | cut -f1)
                 local perms=$(stat -c "%a" "$file" 2>/dev/null || echo "N/A")
                 echo "  🔑 $file ($size, 权限:$perms)"
             fi
@@ -873,8 +913,781 @@ check_certificates() {
         
         echo -e "\n${GREEN}目录结构:${NC}"
         echo "/etc/nginx/ssl/"
-        ls -la /etc/nginx/ssl/ 2>/dev/null | tail -n +2 || echo "无法列出目录"
+        ls -la /etc/nginx/ssl/ | tail -n +2
     else
         echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
         echo -e "${YELLOW}创建证书目录...${NC}"
         mkdir -p /etc/nginx/ssl/{certs,private}
+        chmod 750 /etc/nginx/ssl/private
+        chmod 755 /etc/nginx/ssl/certs
+    fi
+}
+
+# 初始化Nginx（完全清理并重新安装）
+init_nginx() {
+    log "INFO" "开始初始化Nginx（完全清理并重新安装）"
+    
+    echo -e "${YELLOW}警告：此操作将完全清理并重新安装Nginx${NC}"
+    echo -e "${RED}所有自定义配置将被删除！${NC}"
+    echo -ne "是否继续？(y/n): "
+    read -n 1 confirm
+    echo
+    
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}操作已取消${NC}"
+        return
+    fi
+    
+    # 根据系统执行不同的初始化
+    if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+        init_nginx_debian
+    else
+        init_nginx_alpine
+    fi
+}
+
+# Debian系统初始化
+init_nginx_debian() {
+    bash -c "$(cat << 'EOF'
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo -e "${YELLOW}>>> 开始修复Nginx (Debian/Ubuntu)...${NC}"
+
+# 1. 停止Nginx
+echo -e "${YELLOW}停止Nginx进程...${NC}"
+systemctl stop nginx 2>/dev/null
+pkill nginx 2>/dev/null
+sleep 2
+
+# 2. 备份现有配置
+BACKUP_DIR="/var/backups/nginx/backup_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+echo -e "${YELLOW}备份现有配置到 $BACKUP_DIR...${NC}"
+cp -r /etc/nginx "$BACKUP_DIR/" 2>/dev/null
+cp -r /var/www/html "$BACKUP_DIR/" 2>/dev/null
+
+# 3. 完全卸载Nginx
+echo -e "${YELLOW}卸载Nginx...${NC}"
+apt-get purge nginx nginx-common nginx-full -y
+apt-get autoremove -y
+
+# 4. 清理残留
+echo -e "${YELLOW}清理残留文件...${NC}"
+rm -rf /etc/nginx /var/lib/nginx /var/log/nginx /run/nginx /usr/share/nginx
+
+# 5. 重新安装
+echo -e "${YELLOW}重新安装Nginx...${NC}"
+apt-get update
+apt-get install nginx-full -y
+
+# 6. 创建必要的目录
+echo -e "${YELLOW}创建目录结构...${NC}"
+mkdir -p /etc/nginx/{sites-available,sites-enabled,ssl/{certs,private}}
+mkdir -p /var/log/nginx/ssl
+mkdir -p /var/www/html
+mkdir -p /var/cache/nginx
+
+# 7. 设置权限
+chown -R www-data:www-data /var/www/html /var/log/nginx
+chmod 755 /var/www/html
+chmod 750 /etc/nginx/ssl/private
+
+# 8. 创建默认配置文件
+echo -e "${YELLOW}创建默认配置...${NC}"
+
+# 查找mime.types
+MIME_TYPES=$(find /usr -name "mime.types" 2>/dev/null | head -1)
+if [ -z "$MIME_TYPES" ]; then
+    MIME_TYPES="/etc/nginx/mime.types"
+fi
+
+# 创建nginx.conf
+cat > /etc/nginx/nginx.conf << 'EOC'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 1024;
+    multi_accept on;
+}
+
+http {
+    include       $MIME_TYPES;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout  65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    # 日志格式
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log main;
+    error_log   /var/log/nginx/error.log warn;
+
+    # Gzip压缩
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/javascript application/xml+rss 
+               application/json;
+
+    # 包含其他配置
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+EOC
+
+# 9. 创建默认站点
+cat > /etc/nginx/sites-available/default << 'EOC'
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    
+    root /var/www/html;
+    index index.html index.htm;
+    
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+EOC
+
+# 10. 创建测试页面
+cat > /var/www/html/index.html << 'EOC'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nginx修复成功 - Debian</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+               text-align: center; padding: 50px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; 
+                     padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .success { color: #28a745; font-weight: bold; font-size: 24px; }
+        .info { margin: 20px 0; padding: 20px; background: #f8f9fa; border-radius: 5px; 
+                text-align: left; }
+        .status { display: inline-block; padding: 5px 10px; border-radius: 3px; 
+                  font-size: 12px; margin-left: 10px; }
+        .up { background: #d4edda; color: #155724; }
+        .down { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✅ Nginx修复成功 - Debian/Ubuntu</h1>
+        <div class="info">
+            <p><strong>状态：</strong> 
+                <span class="success">运行正常</span>
+                <span class="status up">UP</span>
+            </p>
+            <p><strong>系统：</strong> Debian/Ubuntu</p>
+            <p><strong>时间：</strong> <span id="datetime"></span></p>
+            <p><strong>Nginx版本：</strong> $(nginx -v 2>&1 | cut -d/ -f2)</p>
+            <p><strong>服务用户：</strong> www-data</p>
+            <p><strong>配置目录：</strong> /etc/nginx/</p>
+        </div>
+        <p>反向代理工具已准备好使用！</p>
+    </div>
+    <script>
+        document.getElementById('datetime').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>
+EOC
+
+# 11. 启用默认站点
+ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
+
+# 12. 测试并启动
+echo -e "${YELLOW}测试配置...${NC}"
+if nginx -t; then
+    echo -e "${GREEN}✅ 配置测试通过${NC}"
+    
+    echo -e "${YELLOW}启动Nginx...${NC}"
+    systemctl start nginx
+    
+    sleep 2
+    
+    if systemctl is-active --quiet nginx; then
+        echo -e "${GREEN}✅ Nginx启动成功${NC}"
+        
+        # 显示状态
+        echo -e "${YELLOW}运行状态：${NC}"
+        systemctl status nginx --no-pager | head -10
+        
+        echo -e "\n${GREEN}🎉 修复完成！${NC}"
+        echo "访问测试： curl -I http://localhost"
+        echo "备份位置： $BACKUP_DIR"
+    else
+        echo -e "${RED}❌ Nginx启动失败${NC}"
+        echo "查看错误： journalctl -u nginx --no-pager | tail -20"
+    fi
+else
+    echo -e "${RED}❌ 配置测试失败${NC}"
+    nginx -t 2>&1
+fi
+EOF
+)"
+}
+
+# Alpine系统初始化
+init_nginx_alpine() {
+    bash -c "$(cat << 'EOF'
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo -e "${YELLOW}>>> 开始修复Nginx (Alpine)...${NC}"
+
+# 1. 停止Nginx
+echo -e "${YELLOW}停止Nginx进程...${NC}"
+pkill nginx 2>/dev/null
+sleep 2
+
+# 2. 卸载所有相关包
+echo -e "${YELLOW}卸载Nginx包...${NC}"
+apk del nginx nginx-* --purge 2>/dev/null
+
+# 3. 清理残留文件
+echo -e "${YELLOW}清理残留文件...${NC}"
+rm -rf /etc/nginx /var/lib/nginx /var/log/nginx /run/nginx /usr/share/nginx
+
+# 4. 更新并重新安装
+echo -e "${YELLOW}更新包列表并重新安装...${NC}"
+apk update
+apk add nginx
+
+# 5. 检查安装的文件
+echo -e "${YELLOW}检查安装的文件...${NC}"
+apk info -L nginx | grep -E "mime.types|nginx.conf"
+
+# 6. 查找mime.types的实际位置
+echo -e "${YELLOW}查找mime.types文件...${NC}"
+MIME_TYPES=$(find / -name "mime.types" 2>/dev/null | head -1)
+if [ -z "$MIME_TYPES" ]; then
+    echo -e "${RED}未找到mime.types文件，尝试手动创建${NC}"
+    
+    # 如果没有找到，创建一个基本的mime.types
+    mkdir -p /usr/share/nginx
+    cat > /usr/share/nginx/mime.types << 'EOC'
+types {
+    text/html                                        html htm shtml;
+    text/css                                         css;
+    text/xml                                         xml;
+    image/gif                                        gif;
+    image/jpeg                                       jpeg jpg;
+    application/javascript                           js;
+    application/atom+xml                             atom;
+    application/rss+xml                              rss;
+
+    text/mathml                                      mml;
+    text/plain                                       txt;
+    text/vnd.sun.j2me.app-descriptor                 jad;
+    text/vnd.wap.wml                                 wml;
+    text/x-component                                 htc;
+
+    image/png                                        png;
+    image/svg+xml                                    svg svgz;
+    image/tiff                                       tif tiff;
+    image/vnd.wap.wbmp                               wbmp;
+    image/webp                                       webp;
+    image/x-icon                                     ico;
+    image/x-jng                                      jng;
+    image/x-ms-bmp                                   bmp;
+
+    font/woff                                        woff;
+    font/woff2                                       woff2;
+
+    application/java-archive                         jar war ear;
+    application/json                                 json;
+    application/mac-binhex40                         hqx;
+    application/msword                               doc;
+    application/pdf                                  pdf;
+    application/postscript                           ps eps ai;
+    application/rtf                                  rtf;
+    application/vnd.apple.mpegurl                    m3u8;
+    application/vnd.google-earth.kml+xml             kml;
+    application/vnd.google-earth.kmz                 kmz;
+    application/vnd.ms-excel                         xls;
+    application/vnd.ms-fontobject                    eot;
+    application/vnd.ms-powerpoint                    ppt;
+    application/vnd.oasis.opendocument.graphics      odg;
+    application/vnd.oasis.opendocument.presentation  odp;
+    application/vnd.oasis.opendocument.spreadsheet   ods;
+    application/vnd.oasis.opendocument.text          odt;
+    application/vnd.openxmlformats-officedocument.presentationml.presentation pptx;
+    application/vnd.openxmlformats-officedocument.spreadsheetml.sheet         xlsx;
+    application/vnd.openxmlformats-officedocument.wordprocessingml.document   docx;
+    application/vnd.wap.wmlc                        wmlc;
+    application/x-7z-compressed                     7z;
+    application/x-cocoa                             cco;
+    application/x-java-archive-diff                  jardiff;
+    application/x-java-jnlp-file                     jnlp;
+    application/x-makeself                           run;
+    application/x-perl                               pl pm;
+    application/x-pilot                              prc pdb;
+    application/x-rar-compressed                     rar;
+    application/x-redhat-package-manager             rpm;
+    application/x-sea                                sea;
+    application/x-shockwave-flash                    swf;
+    application/x-stuffit                            sit;
+    application/x-tcl                                tcl tk;
+    application/x-x509-ca-cert                       der pem crt;
+    application/x-xpinstall                          xpi;
+    application/xhtml+xml                            xhtml;
+    application/xspf+xml                             xspf;
+    application/zip                                  zip;
+
+    application/octet-stream                         bin exe dll;
+    application/octet-stream                         deb;
+    application/octet-stream                         dmg;
+    application/octet-stream                         iso img;
+    application/octet-stream                         msi msp msm;
+
+    audio/midi                                       mid midi kar;
+    audio/mpeg                                       mp3;
+    audio/ogg                                        ogg;
+    audio/x-m4a                                      m4a;
+    audio/x-realaudio                                ra;
+
+    video/3gpp                                       3gpp 3gp;
+    video/mp2t                                       ts;
+    video/mp4                                        mp4;
+    video/mpeg                                       mpeg mpg;
+    video/quicktime                                  mov;
+    video/webm                                       webm;
+    video/x-flv                                      flv;
+    video/x-m4v                                      m4v;
+    video/x-mng                                      mng;
+    video/x-ms-asf                                   asx asf;
+    video/x-ms-wmv                                   wmv;
+    video/x-msvideo                                  avi;
+}
+EOC
+    MIME_TYPES="/usr/share/nginx/mime.types"
+    echo -e "${GREEN}已创建基本的mime.types文件${NC}"
+else
+    echo -e "${GREEN}找到mime.types: $MIME_TYPES${NC}"
+fi
+
+# 7. 创建目录结构
+echo -e "${YELLOW}创建目录结构...${NC}"
+mkdir -p /etc/nginx/{conf.d,sites-available,sites-enabled,ssl}
+mkdir -p /var/log/nginx /run/nginx /var/www/html /var/lib/nginx/logs
+mkdir -p $(dirname "$MIME_TYPES")
+
+# 8. 创建正确的nginx配置
+echo -e "${YELLOW}创建nginx配置...${NC}"
+cat > /etc/nginx/nginx.conf << EOC
+user nginx;
+worker_processes auto;
+pid /run/nginx/nginx.pid;
+
+events {
+    worker_connections 1024;
+    multi_accept on;
+}
+
+http {
+    include       $MIME_TYPES;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout  65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    # 日志
+    access_log  /var/log/nginx/access.log;
+    error_log   /var/log/nginx/error.log;
+
+    # Gzip压缩
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/javascript application/xml+rss 
+               application/json;
+
+    # 包含其他配置
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+EOC
+
+echo -e "${GREEN}配置已写入 /etc/nginx/nginx.conf${NC}"
+
+# 9. 创建默认网页
+echo -e "${YELLOW}创建默认网页...${NC}"
+cat > /var/www/html/index.html << 'EOC'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nginx修复成功 - Alpine</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        .success { color: #28a745; font-weight: bold; }
+        .info { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>✅ Nginx修复成功 - Alpine</h1>
+    <div class="info">
+        <p><strong>状态：</strong> <span class="success">运行正常</span></p>
+        <p><strong>系统：</strong> Alpine Linux</p>
+        <p><strong>时间：</strong> <span id="datetime"></span></p>
+        <p><strong>Nginx版本：</strong> $(nginx -v 2>&1 | cut -d/ -f2)</p>
+        <p><strong>服务用户：</strong> nginx</p>
+    </div>
+    <script>
+        document.getElementById('datetime').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>
+EOC
+
+# 10. 设置权限
+echo -e "${YELLOW}设置文件权限...${NC}"
+chown -R nginx:nginx /var/www/html /var/log/nginx /var/lib/nginx
+chmod 755 /var/www/html
+
+# 11. 测试并启动
+echo -e "${YELLOW}测试配置...${NC}"
+if nginx -t; then
+    echo -e "${GREEN}✅ 配置测试通过${NC}"
+    
+    echo -e "${YELLOW}启动Nginx...${NC}"
+    nginx
+    
+    sleep 2
+    
+    if pgrep nginx > /dev/null; then
+        echo -e "${GREEN}✅ Nginx启动成功${NC}"
+        
+        # 显示状态
+        echo -e "${YELLOW}运行状态：${NC}"
+        echo "进程："
+        ps aux | grep nginx | grep -v grep
+        
+        echo -e "\n监听端口："
+        (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep nginx || echo "  等待端口监听..."
+        
+        echo -e "\n${GREEN}🎉 修复完成！${NC}"
+        echo "访问测试： curl -I http://localhost"
+    else
+        echo -e "${RED}❌ Nginx启动失败${NC}"
+        echo "查看错误： tail -f /var/log/nginx/error.log"
+    fi
+else
+    echo -e "${RED}❌ 配置测试失败${NC}"
+    nginx -t 2>&1
+fi
+
+# 设置docker-compose别名
+echo -e "\n${YELLOW}设置docker-compose别名...${NC}"
+echo "alias docker-compose='docker compose'" >> ~/.profile
+source ~/.profile
+echo -e "${GREEN}别名设置完成${NC}"
+EOF
+)"
+}
+
+# 显示配置摘要
+show_config_summary() {
+    echo -e "\n${BLUE}================ 配置摘要 ================${NC}"
+    
+    # 显示启用的站点
+    echo -e "${GREEN}当前启用的代理:${NC}"
+    if ls /etc/nginx/sites-enabled/*.conf 2>/dev/null >/dev/null; then
+        for conf in /etc/nginx/sites-enabled/*.conf; do
+            local domain=$(grep "server_name" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            local port=$(grep "listen" "$conf" | grep -v "listen \[::\]" | head -1 | awk '{print $2}' | tr -d ';')
+            local backend=$(grep "proxy_pass" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            echo -e "  🌐 $domain (端口: $port) -> $backend"
+        done
+    else
+        echo -e "  没有启用的配置"
+    fi
+    
+    # 显示监听端口
+    echo -e "\n${GREEN}监听端口:${NC}"
+    if command -v netstat &> /dev/null; then
+        netstat -tulpn 2>/dev/null | grep -E ":80\>|:443\>" | awk '{print "  " $4}'
+    elif command -v ss &> /dev/null; then
+        ss -tulpn 2>/dev/null | grep -E ":80\>|:443\>" | awk '{print "  " $5}'
+    else
+        echo "  无法获取端口信息"
+    fi
+    
+    # 显示Nginx状态
+    echo -e "\n${GREEN}Nginx状态:${NC}"
+    if service_control "is-active" "nginx" 2>/dev/null; then
+        echo -e "  ✅ 正在运行"
+        if [ "$OS" = "alpine" ]; then
+            echo -e "  主进程PID: $(cat /run/nginx/nginx.pid 2>/dev/null || pgrep -o nginx)"
+        elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+            echo -e "  主进程PID: $(systemctl show nginx --property=MainPID --value)"
+        fi
+    else
+        echo -e "  ❌ 未运行"
+    fi
+    
+    echo -e "${BLUE}========================================${NC}"
+}
+
+# 查看当前配置
+show_current_config() {
+    echo -e "${YELLOW}>>> 当前Nginx配置${NC}"
+    
+    # 检查Nginx主配置
+    echo -e "${BLUE}Nginx主配置:${NC}"
+    if [ -f "/etc/nginx/nginx.conf" ]; then
+        echo -e "  路径: /etc/nginx/nginx.conf"
+        echo -e "  大小: $(du -h /etc/nginx/nginx.conf | cut -f1)"
+        echo -e "  修改时间: $(stat -c "%y" /etc/nginx/nginx.conf 2>/dev/null | cut -d'.' -f1)"
+    else
+        echo -e "  ❌ 主配置文件不存在"
+    fi
+    
+    # 显示启用的站点
+    echo -e "\n${BLUE}启用的站点配置:${NC}"
+    if ls /etc/nginx/sites-enabled/*.conf 2>/dev/null >/dev/null; then
+        for conf in /etc/nginx/sites-enabled/*.conf; do
+            echo -e "\n${GREEN}配置文件: $(basename "$conf")${NC}"
+            echo "  路径: $conf"
+            echo "  大小: $(du -h "$conf" | cut -f1)"
+            echo "  修改时间: $(stat -c "%y" "$conf" 2>/dev/null | cut -d'.' -f1)"
+            
+            # 提取关键信息
+            local domain=$(grep -h "server_name" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            local port=$(grep -h "listen" "$conf" | grep -v "listen \[::\]" | head -1 | awk '{print $2}' | tr -d ';' | cut -d' ' -f1)
+            local backend=$(grep -h "proxy_pass" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            local ssl=$(grep -h "ssl_certificate" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            
+            echo "  域名: $domain"
+            echo "  端口: $port"
+            echo "  后端: $backend"
+            
+            if [ -n "$ssl" ]; then
+                echo "  SSL证书: $ssl"
+                if [ -f "$ssl" ]; then
+                    echo -e "  ✅ 证书文件存在"
+                else
+                    echo -e "  ❌ 证书文件不存在"
+                fi
+            fi
+        done
+    else
+        echo "  没有启用的配置"
+    fi
+    
+    # 显示可用配置
+    echo -e "\n${BLUE}可用的站点配置:${NC}"
+    if ls /etc/nginx/sites-available/*.conf 2>/dev/null >/dev/null; then
+        for conf in /etc/nginx/sites-available/*.conf; do
+            local enabled="❌"
+            if [ -L "/etc/nginx/sites-enabled/$(basename "$conf")" ]; then
+                enabled="✅"
+            fi
+            echo "  $enabled $(basename "$conf")"
+        done
+    else
+        echo "  没有可用的配置"
+    fi
+}
+
+# 显示系统信息
+show_system_info() {
+    echo -e "\n${BLUE}========== 系统信息 ==========${NC}"
+    
+    # OS信息
+    echo -e "${GREEN}操作系统:${NC}"
+    echo "  $OS_NAME $OS_VERSION"
+    echo "  类型: $OS"
+    
+    # Nginx信息
+    echo -e "${GREEN}Nginx版本:${NC}"
+    nginx -v 2>&1 | sed 's/^/  /'
+    
+    # 内存信息
+    echo -e "${GREEN}内存使用:${NC}"
+    if command -v free &> /dev/null; then
+        free -h | awk 'NR==2{printf "  总: %s, 已用: %s, 可用: %s\n", $2, $3, $7}'
+    fi
+    
+    # 磁盘信息
+    echo -e "${GREEN}磁盘空间:${NC}"
+    df -h / | awk 'NR==2{printf "  总: %s, 已用: %s, 可用: %s\n", $2, $3, $4}'
+    
+    # IP地址
+    echo -e "${GREEN}IP地址:${NC}"
+    hostname -I 2>/dev/null | awk '{print "  " $1}' || ip addr show 2>/dev/null | grep -oP 'inet \K[\d.]+' | grep -v '127.0.0.1' | head -3 | sed 's/^/  /'
+    
+    # Nginx用户
+    echo -e "${GREEN}Nginx运行用户:${NC}"
+    echo "  $NGINX_USER:$NGINX_GROUP"
+    
+    echo -e "${BLUE}===============================${NC}"
+}
+
+# 备份配置
+backup_config() {
+    local backup_dir="/var/backups/nginx/$(date +%Y%m%d_%H%M%S)"
+    
+    log "INFO" "备份Nginx配置到 $backup_dir"
+    
+    mkdir -p "$backup_dir"
+    
+    # 备份配置文件
+    cp -r /etc/nginx/nginx.conf "$backup_dir/" 2>/dev/null
+    cp -r /etc/nginx/sites-available "$backup_dir/" 2>/dev/null
+    cp -r /etc/nginx/sites-enabled "$backup_dir/" 2>/dev/null
+    cp -r /etc/nginx/ssl "$backup_dir/" 2>/dev/null
+    
+    # 备份日志文件
+    tar -czf "$backup_dir/logs.tar.gz" /var/log/nginx/*.log 2>/dev/null
+    
+    # 创建备份信息文件
+    cat > "$backup_dir/backup.info" << EOF
+备份时间: $(date)
+系统类型: $OS $OS_VERSION
+备份目录: $backup_dir
+备份内容:
+- Nginx主配置
+- 站点可用配置
+- 站点启用配置
+- SSL证书
+- 日志文件
+
+文件列表:
+$(find "$backup_dir" -type f | sed 's|^|  |')
+EOF
+    
+    echo -e "${GREEN}✅ 备份完成${NC}"
+    echo -e "备份位置: $backup_dir"
+    echo -e "备份大小: $(du -sh "$backup_dir" | cut -f1)"
+}
+
+# 主菜单
+show_menu() {
+    clear
+    echo -e "\n${BLUE}========================================${NC}"
+    echo -e "${GREEN}      Nginx反向代理配置工具${NC}"
+    echo -e "${YELLOW}系统: $OS $OS_VERSION${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    
+    show_system_info
+    
+    echo -e "\n${GREEN}1.${NC} 创建新的反向代理"
+    echo -e "${GREEN}2.${NC} 删除站点配置"
+    echo -e "${GREEN}3.${NC} 重载Nginx配置"
+    echo -e "${GREEN}4.${NC} 检查证书状态"
+    echo -e "${GREEN}5.${NC} 查看当前配置"
+    echo -e "${GREEN}6.${NC} 备份Nginx配置"
+    echo -e "${GREEN}7.${NC} 初始化目录结构"
+    echo -e "${GREEN}8.${NC} 初始化Nginx（完全清理重装）"
+    echo -e "${GREEN}9.${NC} 显示系统信息"
+    echo -e "${GREEN}10.${NC} 退出"
+    echo -e "${BLUE}========================================${NC}"
+    echo -ne "请选择操作 [1-10]: "
+}
+
+# 主函数
+main() {
+    # 检查root权限
+    if [ "$EUID" -ne 0 ]; then 
+        echo -e "${RED}请使用root权限运行此脚本${NC}"
+        exit 1
+    fi
+    
+    # 检查Nginx是否安装
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${RED}Nginx未安装，请先安装Nginx${NC}"
+        echo -e "${YELLOW}安装命令:${NC}"
+        if [ "$OS" = "alpine" ]; then
+            echo "  apk add nginx"
+        elif [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
+            echo "  apt-get update && apt-get install nginx -y"
+        fi
+        exit 1
+    fi
+    
+    # 检查依赖
+    check_dependencies
+    
+    # 初始化目录
+    init_directories
+    
+    while true; do
+        show_menu
+        read choice
+        
+        case $choice in
+            1)
+                create_proxy_config
+                echo -ne "\n${YELLOW}是否现在重载Nginx？${NC} (y/n): "
+                read -n 1 reload
+                echo
+                if [[ $reload =~ ^[Yy]$ ]]; then
+                    reload_nginx
+                fi
+                ;;
+            2)
+                delete_site
+                ;;
+            3)
+                reload_nginx
+                ;;
+            4)
+                check_certificates
+                ;;
+            5)
+                show_current_config
+                ;;
+            6)
+                backup_config
+                ;;
+            7)
+                init_directories
+                ;;
+            8)
+                init_nginx
+                ;;
+            9)
+                show_system_info
+                ;;
+            10)
+                echo -e "${GREEN}退出${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效选择${NC}"
+                ;;
+        esac
+        
+        if [ "$choice" != "10" ]; then
+            echo -ne "\n${YELLOW}按Enter继续...${NC}"
+            read
+        fi
+    done
+}
+
+# 运行主函数
+main
