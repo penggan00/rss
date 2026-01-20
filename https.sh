@@ -37,6 +37,32 @@ show_help() {
     echo "注意："
     echo "  1. Cloudflare API Token 需要 DNS 编辑权限"
     echo "  2. 域名必须在 Cloudflare 管理"
+    echo ""
+    echo "支持的系统："
+    echo "  ✅ Debian 9/10/11/12"
+    echo "  ✅ Ubuntu 18.04/20.04/22.04"
+    echo "  ✅ Alpine Linux"
+    echo "  ✅ CentOS/RHEL 7/8/9"
+}
+
+# 检测操作系统
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        VERSION=$VERSION_ID
+    elif [ -f /etc/debian_version ]; then
+        OS="debian"
+        VERSION=$(cat /etc/debian_version)
+    elif [ -f /etc/alpine-release ]; then
+        OS="alpine"
+        VERSION=$(cat /etc/alpine-release)
+    else
+        OS=$(uname -s)
+        VERSION=$(uname -r)
+    fi
+    
+    echo "检测到系统: $OS $VERSION"
 }
 
 # 解析命令行参数
@@ -106,11 +132,42 @@ check_root() {
 # 安装依赖
 install_deps() {
     echo -e "${YELLOW}>>> 安装依赖...${NC}"
-    if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y curl git openssl nginx cron
-    elif command -v apk &> /dev/null; then
-        apk update && apk add curl git openssl nginx busybox-initscripts busybox-suid
-    fi
+    
+    # 检测操作系统并安装相应依赖
+    detect_os
+    
+    case $OS in
+        debian|ubuntu)
+            echo "检测到 Debian/Ubuntu 系统"
+            apt-get update
+            apt-get install -y curl git openssl nginx cron
+            ;;
+        alpine)
+            echo "检测到 Alpine Linux 系统"
+            apk update
+            apk add curl git openssl nginx busybox-initscripts busybox-suid
+            ;;
+        centos|rhel|fedora)
+            echo "检测到 CentOS/RHEL/Fedora 系统"
+            yum install -y curl git openssl nginx crontabs
+            ;;
+        *)
+            echo "未知系统，尝试安装基础依赖..."
+            # 尝试通用安装
+            if command -v apt-get &> /dev/null; then
+                apt-get update && apt-get install -y curl git openssl nginx cron
+            elif command -v yum &> /dev/null; then
+                yum install -y curl git openssl nginx crontabs
+            elif command -v apk &> /dev/null; then
+                apk update && apk add curl git openssl nginx busybox-initscripts busybox-suid
+            else
+                echo -e "${RED}无法安装依赖，请手动安装 curl, git, openssl, nginx${NC}"
+                exit 1
+            fi
+            ;;
+    esac
+    
+    echo -e "${GREEN}>>> 依赖安装完成${NC}"
 }
 
 # 安装 acme.sh
@@ -139,12 +196,13 @@ install_acme() {
     
     # 创建续期脚本
     cat > "/opt/cert-manager/renew-all.sh" << 'EOF'
-#!/bin/sh
+#!/bin/bash
 
 # 设置日志文件
 LOG_FILE="/opt/cert-manager/logs/renewal-$(date +%Y%m%d-%H%M%S).log"
 
 echo "===== 证书续期检查开始 $(date) =====" >> "$LOG_FILE"
+echo "系统: $(uname -a)" >> "$LOG_FILE"
 
 # 加载所有域名的配置
 if [ -f "/opt/cert-manager/config/domains.list" ]; then
@@ -172,7 +230,7 @@ if [ -f "/opt/cert-manager/config/domains.list" ]; then
                     ./acme.sh --install-cert -d "$DOMAIN" \
                         --key-file "/etc/nginx/ssl/private/$DOMAIN/key.pem" \
                         --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
-                        --reloadcmd "nginx -s reload || rc-service nginx restart" \
+                        --reloadcmd "systemctl reload nginx 2>/dev/null || nginx -s reload 2>/dev/null || rc-service nginx restart 2>/dev/null" \
                         --force 2>&1 >> "$LOG_FILE"
                 else
                     echo "⚠️  $DOMAIN 证书尚未需要续期" >> "$LOG_FILE"
@@ -185,25 +243,42 @@ fi
 echo "===== 证书续期检查结束 $(date) =====" >> "$LOG_FILE"
 
 # 清理30天前的日志
-find /opt/cert-manager/logs -name "renewal-*.log" -mtime +30 -delete
+find /opt/cert-manager/logs -name "renewal-*.log" -mtime +30 -delete 2>/dev/null || true
 EOF
     
     # 设置执行权限
     chmod +x "/opt/cert-manager/renew-all.sh"
     
-    # 确保 crond 已安装并启动
-    if command -v apk &> /dev/null; then
-        rc-service crond start 2>/dev/null || true
-        rc-update add crond 2>/dev/null || true
-    fi
+    # 设置定时任务
+    setup_cron_job
+}
+
+# 设置定时任务（根据系统类型）
+setup_cron_job() {
+    echo -e "${YELLOW}>>> 配置定时任务...${NC}"
     
-    # 添加到 crontab（每天凌晨2点检查）
-    echo "0 2 * * * /opt/cert-manager/renew-all.sh" >> /etc/crontabs/root
+    detect_os
     
-    # 重启 crond 服务
-    if command -v rc-service &> /dev/null; then
-        rc-service crond restart 2>/dev/null || true
-    fi
+    # 根据系统类型设置定时任务
+    case $OS in
+        debian|ubuntu|centos|rhel|fedora)
+            # 使用 cron
+            echo "0 2 * * * /opt/cert-manager/renew-all.sh" >> /etc/crontab
+            systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null || true
+            echo "已添加到 /etc/crontab"
+            ;;
+        alpine)
+            # Alpine 使用 crond
+            echo "0 2 * * * /opt/cert-manager/renew-all.sh" >> /etc/crontabs/root
+            rc-service crond restart 2>/dev/null || true
+            echo "已添加到 /etc/crontabs/root"
+            ;;
+        *)
+            # 通用方法
+            (crontab -l 2>/dev/null; echo "0 2 * * * /opt/cert-manager/renew-all.sh") | crontab -
+            echo "已添加到用户 crontab"
+            ;;
+    esac
     
     echo -e "${GREEN}>>> 已设置自动续期${NC}"
     echo -e "  - 每天凌晨2点自动检查"
@@ -290,7 +365,7 @@ install_certificate() {
         --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
         --cert-file "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" \
         --ca-file "/etc/nginx/ssl/certs/$DOMAIN/ca.pem" \
-        --reloadcmd "nginx -s reload || rc-service nginx restart || true"
+        --reloadcmd "systemctl reload nginx 2>/dev/null || nginx -s reload 2>/dev/null || rc-service nginx restart 2>/dev/null || true"
     
     # 设置权限
     chmod 644 "/etc/nginx/ssl/certs/$DOMAIN"/*.pem
@@ -319,7 +394,19 @@ check_renewal_status() {
     
     # 检查定时任务
     echo "当前定时任务:"
-    cat /etc/crontabs/root 2>/dev/null || echo "没有定时任务"
+    detect_os
+    
+    case $OS in
+        debian|ubuntu|centos|rhel|fedora)
+            cat /etc/crontab 2>/dev/null | grep renew-all || echo "没有找到定时任务"
+            ;;
+        alpine)
+            cat /etc/crontabs/root 2>/dev/null | grep renew-all || echo "没有找到定时任务"
+            ;;
+        *)
+            crontab -l 2>/dev/null | grep renew-all || echo "没有找到定时任务"
+            ;;
+    esac
     
     # 检查证书过期时间
     if [ -f "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" ]; then
@@ -352,11 +439,19 @@ check_renewal_status() {
         echo "❌ 续期脚本未找到"
     fi
     
-    # 检查 crond 状态
-    if ps aux | grep -q "[c]rond"; then
-        echo "✅ crond 服务正在运行"
-    else
-        echo "❌ crond 服务未运行"
+    # 检查定时服务状态
+    if command -v systemctl &> /dev/null; then
+        if systemctl is-active cron &>/dev/null || systemctl is-active crond &>/dev/null; then
+            echo "✅ 定时服务正在运行"
+        else
+            echo "❌ 定时服务未运行"
+        fi
+    elif command -v rc-service &> /dev/null; then
+        if rc-service crond status &>/dev/null; then
+            echo "✅ crond 服务正在运行"
+        else
+            echo "❌ crond 服务未运行"
+        fi
     fi
 }
 
@@ -414,14 +509,19 @@ EOF
     fi
     
     # 启动或重启 Nginx
-    if command -v systemctl &> /dev/null && systemctl is-active nginx &>/dev/null; then
-        systemctl restart nginx
-    elif command -v rc-service &> /dev/null && rc-service nginx status &>/dev/null; then
-        rc-service nginx restart
-    else
-        pkill nginx 2>/dev/null
-        nginx
-    fi
+    detect_os
+    
+    case $OS in
+        debian|ubuntu|centos|rhel|fedora)
+            systemctl restart nginx 2>/dev/null || nginx -s reload 2>/dev/null || nginx
+            ;;
+        alpine)
+            rc-service nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || nginx
+            ;;
+        *)
+            nginx -s reload 2>/dev/null || nginx
+            ;;
+    esac
     
     echo -e "${GREEN}>>> Nginx 配置完成${NC}"
 }
@@ -456,8 +556,13 @@ show_success() {
     echo "  cd $ACME_DIR && export CF_Token=\"$CF_TOKEN\" && ./acme.sh --renew -d \"$DOMAIN\" --days 30"
     echo ""
     echo "查看续期状态:"
-    echo "  cat /etc/crontabs/root"
+    echo "  cat /etc/crontab"
     echo "  tail -f /opt/cert-manager/logs/renewal-*.log"
+    echo ""
+    echo "支持的系统:"
+    echo "  ✅ Debian/Ubuntu"
+    echo "  ✅ Alpine Linux"
+    echo "  ✅ CentOS/RHEL"
     echo ""
 }
 
