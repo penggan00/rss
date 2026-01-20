@@ -756,21 +756,27 @@ check_certificates() {
         fi
     done
     
-    # 显示目录结构
-    echo -e "\n${BLUE}Nginx SSL目录结构:${NC}"
-    if [ -d "/etc/nginx/ssl" ]; then
-        if command -v tree &> /dev/null; then
-            tree /etc/nginx/ssl -L 3 2>/dev/null || ls -laR /etc/nginx/ssl/
+        echo -e "\n${BLUE}Nginx SSL目录结构:${NC}"
+        if [ -d "/etc/nginx/ssl" ]; then
+            # 先过滤掉可能的空文件
+            echo -e "${YELLOW}使用安全的tree命令:${NC}"
+            if command -v tree &> /dev/null; then
+                # 使用 -I 选项忽略特定文件
+                tree /etc/nginx/ssl -L 3 -I '*update' 2>/dev/null || {
+                    echo -e "${YELLOW}tree命令出错，使用find替代:${NC}"
+                    find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.key" \) 2>/dev/null | head -20
+                }
+            else
+                echo -e "${YELLOW}tree命令不存在，使用find:${NC}"
+                find /etc/nginx/ssl -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.key" \) 2>/dev/null | head -20
+            fi
         else
-            ls -la /etc/nginx/ssl/
+            echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
+            echo -e "${YELLOW}创建证书目录...${NC}"
+            mkdir -p /etc/nginx/ssl/{certs,private}
+            chmod 750 /etc/nginx/ssl/private
+            chmod 755 /etc/nginx/ssl/certs
         fi
-    else
-        echo -e "${YELLOW}/etc/nginx/ssl/ 目录不存在${NC}"
-        echo -e "${YELLOW}创建证书目录...${NC}"
-        mkdir -p /etc/nginx/ssl/{certs,private}
-        chmod 750 /etc/nginx/ssl/private
-        chmod 755 /etc/nginx/ssl/certs
-    fi
 }
 # 初始化Nginx（完全清理并重新安装）
 init_nginx() {
