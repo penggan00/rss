@@ -107,9 +107,9 @@ check_root() {
 install_deps() {
     echo -e "${YELLOW}>>> 安装依赖...${NC}"
     if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y curl git openssl nginx
+        apt-get update && apt-get install -y curl git openssl nginx cron
     elif command -v apk &> /dev/null; then
-        apk update && apk add curl git openssl nginx
+        apk update && apk add curl git openssl nginx busybox-initscripts busybox-suid
     fi
 }
 
@@ -133,6 +133,82 @@ install_acme() {
     ./acme.sh --set-default-ca --server letsencrypt
     
     echo -e "${GREEN}>>> acme.sh 安装完成${NC}"
+    
+    # ==================== 设置自动续期 ====================
+    echo -e "${YELLOW}>>> 设置自动续期...${NC}"
+    
+    # 创建续期脚本
+    cat > "/opt/cert-manager/renew-all.sh" << 'EOF'
+#!/bin/sh
+
+# 设置日志文件
+LOG_FILE="/opt/cert-manager/logs/renewal-$(date +%Y%m%d-%H%M%S).log"
+
+echo "===== 证书续期检查开始 $(date) =====" >> "$LOG_FILE"
+
+# 加载所有域名的配置
+if [ -f "/opt/cert-manager/config/domains.list" ]; then
+    while read DOMAIN; do
+        if [ -n "$DOMAIN" ]; then
+            CONFIG_FILE="/opt/cert-manager/config/${DOMAIN}.env"
+            if [ -f "$CONFIG_FILE" ]; then
+                # 加载域名特定的配置
+                . "$CONFIG_FILE"
+                
+                echo "检查域名: $DOMAIN" >> "$LOG_FILE"
+                
+                # 运行 acme.sh 续期检查
+                cd /opt/cert-manager/acme.sh
+                export CF_Token="$CF_TOKEN"
+                
+                # 检查并续期证书（过期前30天自动续期）
+                ./acme.sh --renew -d "$DOMAIN" --days 30 --home "/opt/cert-manager/acme.sh" 2>&1 >> "$LOG_FILE"
+                
+                RENEW_RESULT=$?
+                if [ $RENEW_RESULT -eq 0 ]; then
+                    echo "✅ $DOMAIN 证书续期成功" >> "$LOG_FILE"
+                    
+                    # 重新安装证书到 Nginx
+                    ./acme.sh --install-cert -d "$DOMAIN" \
+                        --key-file "/etc/nginx/ssl/private/$DOMAIN/key.pem" \
+                        --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
+                        --reloadcmd "nginx -s reload || rc-service nginx restart" \
+                        --force 2>&1 >> "$LOG_FILE"
+                else
+                    echo "⚠️  $DOMAIN 证书尚未需要续期" >> "$LOG_FILE"
+                fi
+            fi
+        fi
+    done < "/opt/cert-manager/config/domains.list"
+fi
+
+echo "===== 证书续期检查结束 $(date) =====" >> "$LOG_FILE"
+
+# 清理30天前的日志
+find /opt/cert-manager/logs -name "renewal-*.log" -mtime +30 -delete
+EOF
+    
+    # 设置执行权限
+    chmod +x "/opt/cert-manager/renew-all.sh"
+    
+    # 确保 crond 已安装并启动
+    if command -v apk &> /dev/null; then
+        rc-service crond start 2>/dev/null || true
+        rc-update add crond 2>/dev/null || true
+    fi
+    
+    # 添加到 crontab（每天凌晨2点检查）
+    echo "0 2 * * * /opt/cert-manager/renew-all.sh" >> /etc/crontabs/root
+    
+    # 重启 crond 服务
+    if command -v rc-service &> /dev/null; then
+        rc-service crond restart 2>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}>>> 已设置自动续期${NC}"
+    echo -e "  - 每天凌晨2点自动检查"
+    echo -e "  - 证书过期前30天自动续期"
+    echo -e "  - 续期日志: /opt/cert-manager/logs/renewal-*.log"
 }
 
 # 验证 API Token
@@ -205,7 +281,6 @@ install_certificate() {
     mkdir -p "/etc/nginx/ssl/certs/$DOMAIN"
     mkdir -p "/etc/nginx/ssl/private/$DOMAIN"
     mkdir -p "/etc/nginx/ssl"
-    mkdir -p "/ygkkkca/"
     
     cd "$ACME_DIR"
     
@@ -215,59 +290,76 @@ install_certificate() {
         --fullchain-file "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" \
         --cert-file "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" \
         --ca-file "/etc/nginx/ssl/certs/$DOMAIN/ca.pem" \
-        --reloadcmd "echo '证书安装完成'"
+        --reloadcmd "nginx -s reload || rc-service nginx restart || true"
     
     # 设置权限
     chmod 644 "/etc/nginx/ssl/certs/$DOMAIN"/*.pem
     chmod 600 "/etc/nginx/ssl/private/$DOMAIN/key.pem"
     
     # 创建符号链接
-    
-    # 1. Nginx专用链接
     ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/nginx/ssl/$DOMAIN.crt"
     ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/nginx/ssl/$DOMAIN.key"
     
-    # 2. 系统标准位置链接
     ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/ssl/certs/$DOMAIN.crt"
     ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/ssl/private/$DOMAIN.key"
     
-    # 3. 系统标准PEM格式链接（兼容性）
     ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/ssl/certs/$DOMAIN.pem"
     ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/ssl/private/$DOMAIN.pem.key"
     
-    # 4. PKI标准路径
-    mkdir -p "/etc/pki/tls/certs"
-    mkdir -p "/etc/pki/tls/private"
+    mkdir -p "/etc/pki/tls/certs" "/etc/pki/tls/private"
     ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/etc/pki/tls/certs/$DOMAIN.crt"
     ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/etc/pki/tls/private/$DOMAIN.key"
     
-    # 5. 创建到你指定目录的软链接
-   # echo -e "${YELLOW}>>> 创建到指定目录的软链接...${NC}"
-  #  mkdir -p "/root/ygkkkca"
-    
-    # 公钥链接到指定路径
-   # ln -sf "/etc/nginx/ssl/certs/$DOMAIN/fullchain.pem" "/root/ygkkkca/cert.crt"
-    
-    # 私钥链接到指定路径
-   # ln -sf "/etc/nginx/ssl/private/$DOMAIN/key.pem" "/root/ygkkkca/private.key"
-    
     echo -e "${GREEN}>>> 证书安装完成${NC}"
-    
-    # 显示重要的链接信息
-    echo ""
-    echo -e "${YELLOW}证书链接位置：${NC}"
-    echo "1. 你指定的路径："
-   # echo "   公钥: /root/ygkkkca/cert.crt"
-   # echo "   私钥: /root/ygkkkca/private.key"
-   # echo ""
-    echo "2. 系统标准路径："
-    echo "   公钥: /etc/ssl/certs/$DOMAIN.crt"
-    echo "   私钥: /etc/ssl/private/$DOMAIN.key"
-    echo ""
-    echo "3. Nginx专用路径："
-    echo "   公钥: /etc/nginx/ssl/$DOMAIN.crt"
-    echo "   私钥: /etc/nginx/ssl/$DOMAIN.key"
 }
+
+# 检查证书续期状态
+check_renewal_status() {
+    echo -e "${YELLOW}>>> 检查证书续期状态...${NC}"
+    
+    # 检查定时任务
+    echo "当前定时任务:"
+    cat /etc/crontabs/root 2>/dev/null || echo "没有定时任务"
+    
+    # 检查证书过期时间
+    if [ -f "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" ]; then
+        echo ""
+        echo "证书过期时间:"
+        openssl x509 -in "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" -noout -dates
+        
+        # 计算剩余天数
+        expiry_date=$(openssl x509 -in "/etc/nginx/ssl/certs/$DOMAIN/cert.pem" -noout -enddate | cut -d= -f2)
+        expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$expiry_date" +%s 2>/dev/null)
+        current_epoch=$(date +%s)
+        days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
+        
+        echo ""
+        echo "证书剩余天数: $days_left 天"
+        
+        if [ $days_left -le 30 ]; then
+            echo "⚠️  证书将在 $days_left 天后过期，将在过期前自动续期"
+        else
+            echo "✅ 证书状态良好，还有 $days_left 天过期"
+        fi
+    fi
+    
+    # 检查续期脚本是否存在
+    if [ -f "/opt/cert-manager/renew-all.sh" ]; then
+        echo ""
+        echo "✅ 续期脚本已安装: /opt/cert-manager/renew-all.sh"
+    else
+        echo ""
+        echo "❌ 续期脚本未找到"
+    fi
+    
+    # 检查 crond 状态
+    if ps aux | grep -q "[c]rond"; then
+        echo "✅ crond 服务正在运行"
+    else
+        echo "❌ crond 服务未运行"
+    fi
+}
+
 # 配置 Nginx 默认站点
 configure_nginx() {
     echo -e "${YELLOW}>>> 配置 Nginx...${NC}"
@@ -350,10 +442,22 @@ show_success() {
     echo "  快捷方式: /etc/nginx/ssl/$DOMAIN.crt"
     echo "  快捷方式: /etc/nginx/ssl/$DOMAIN.key"
     echo ""
-    echo "现在可以使用证书配置反向代理了！"
+    echo "自动续期设置:"
+    echo "  ✅ 已设置自动续期"
+    echo "  ✅ 每天凌晨2点检查证书"
+    echo "  ✅ 证书过期前30天自动续期"
+    echo "  ✅ 续期后自动重载 Nginx"
+    echo "  ✅ 续期脚本: /opt/cert-manager/renew-all.sh"
     echo ""
-    echo "下次更新证书命令:"
-    echo "  cd $ACME_DIR && export CF_Token=\"$CF_TOKEN\" && ./acme.sh --renew -d \"$DOMAIN\" --force"
+    echo "续期日志位置:"
+    echo "  /opt/cert-manager/logs/renewal-*.log"
+    echo ""
+    echo "手动续期命令:"
+    echo "  cd $ACME_DIR && export CF_Token=\"$CF_TOKEN\" && ./acme.sh --renew -d \"$DOMAIN\" --days 30"
+    echo ""
+    echo "查看续期状态:"
+    echo "  cat /etc/crontabs/root"
+    echo "  tail -f /opt/cert-manager/logs/renewal-*.log"
     echo ""
 }
 
@@ -384,7 +488,7 @@ main() {
     # 安装依赖
     install_deps
     
-    # 安装 acme.sh
+    # 安装 acme.sh（包含自动续期设置）
     install_acme
     
     # 验证 API Token
@@ -402,6 +506,9 @@ main() {
     
     # 配置 Nginx
     configure_nginx
+    
+    # 检查续期状态
+    check_renewal_status
     
     # 显示成功信息
     show_success
