@@ -30,12 +30,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/githu
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 
-*/5 * * * * /bin/bash ~/rss/mail.sh
-#10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh
-#10 06 * * 6-7 /bin/bash ~/rss/usd.sh
-30 06,15,23 * * 1-5 /bin/bash ~/rss/usd.sh
-30 06 * * 6-7 /bin/bash ~/rss/usd.sh
-#22 2 * * * /bin/bash ~/rss/rssmail.sh
+(crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
+(crontab -l 2>/dev/null; echo "10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
+(crontab -l 2>/dev/null; echo "10 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
+(crontab -l 2>/dev/null; echo "22 2 * * * /bin/bash ~/rss/rssmail.sh") | crontab -
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
 pip install aiosqlite
