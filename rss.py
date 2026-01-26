@@ -514,36 +514,42 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
 
 @retry(
     stop=stop_after_attempt(1),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
+    wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
 async def fetch_feed(session, feed_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
     parsed = urlparse(feed_url)
-    is_rsshub = parsed.netloc == "rsshub.app"
-    if is_rsshub:
-        try_domains = BACKUP_DOMAINS + ["rsshub.app"]
-        canonical_url = feed_url.replace(parsed.netloc, "rsshub.app")
+    
+    # 构建尝试的域名列表
+    if parsed.netloc == "rsshub.app":
+        try_domains = [parsed.netloc] + BACKUP_DOMAINS
     else:
         try_domains = [parsed.netloc]
-        canonical_url = feed_url
+    
     for domain in try_domains:
-        modified_url = feed_url.replace(parsed.netloc, domain)
+        current_url = feed_url.replace(parsed.netloc, domain)
+        
         try:
             async with semaphore:
-                async with session.get(modified_url, headers=headers, timeout=30) as response:
+                async with session.get(current_url, headers=headers, timeout=30) as response:
                     if response.status in (503, 403, 404, 429):
                         continue
                     response.raise_for_status()
-                    return parse(await response.read()), canonical_url
+                    
+                    feed_data = parse(await response.read())
+                    
+                    # ✅ 关键修复：无论用哪个备用域名，都返回原始feed_url
+                    # 这样不同域名访问同一RSS源时，数据库状态会合并在一起
+                    return feed_data, feed_url
+
         except aiohttp.ClientResponseError as e:
             if e.status in (503, 403, 404, 429):
                 continue
-        except Exception as e:
-        #    logger.error(f"请求失败: {modified_url}, 错误: {e}")
+        except Exception:
             continue
-   # logger.error(f"所有域名尝试失败: {feed_url}")
-    return None, canonical_url
+    
+    return None, feed_url  # ✅ 失败时也返回原始feed_url
 
 async def translate_with_credentials(secret_id, secret_key, text):
     loop = asyncio.get_running_loop()
@@ -1062,7 +1068,6 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
     processor = group_config["processor"]
     bot_token = group_config["bot_token"]
     batch_send_interval = group_config.get("batch_send_interval", None)
-    # 新增：是否单独发送每条消息
     send_separately = group_config.get("send_separately", False)
     
     try:
@@ -1081,34 +1086,40 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                 if not feed_data or not feed_data.entries:
                     continue
                     
+                # 使用规范URL作为key（现在canonical_url始终是原始feed_url）
                 processed_ids = global_status.get(canonical_url, set())
                 new_entries = []
                 seen_in_batch = set()
                 new_hashes_in_batch = set()  # 当前批次的内容哈希去重
 
                 for entry in feed_data.entries:
+                    # 直接使用RSSHub返回的原始链接，不需要修改
                     entry_id = get_entry_identifier(entry)
                     content_hash = get_entry_content_hash(entry)
                     
                     # 统一使用内容哈希去重（主要修复）
                     if await db.has_content_hash(group_key, content_hash):
+                        logger.debug(f"跳过重复内容哈希: {content_hash[:16]}...")
                         continue
                         
                     if entry_id in processed_ids or entry_id in seen_in_batch:
+                        logger.debug(f"跳过重复条目ID: {entry_id[:16]}...")
                         continue
                         
                     # 在当前批次中也用内容哈希去重
                     if content_hash in new_hashes_in_batch:
+                        logger.debug(f"跳过批次内重复内容哈希: {content_hash[:16]}...")
                         continue  
                         
                     # ✅ 过滤检查
                     if not await should_send_entry(entry, processor):
-                        continue  # 跳过不符合过滤条件的条目
+                        logger.debug(f"跳过不符合过滤条件的条目: {getattr(entry, 'title', '无标题')[:50]}")
+                        continue
 
                     seen_in_batch.add(entry_id)
                     new_hashes_in_batch.add(content_hash)
                     new_entries.append((entry, content_hash, entry_id))
-                    
+                                        
                 if new_entries:
                     if batch_send_interval and not send_separately:
                         # 批量发送模式：存入待发送队列
@@ -1195,6 +1206,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         
     except Exception as e:
         logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
+
 async def main():
     logger.info("🚀 RSS Bot 开始执行")
     
