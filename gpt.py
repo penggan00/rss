@@ -27,14 +27,14 @@ TG_TOKEN = os.getenv("TELEGRAM_GEMINI_KEY")
 GOOGLE_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
-DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-2.5-flash")
+DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-3-flash-preview")
 
 # 超时配置
 POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
 AVAILABLE_MODELS = {
-    "gemini-2.5-flash": "(平衡性能)",
+    "gemini-3-flash-preview": "(平衡性能)",
     "deepseek-chat":    "(通用对话)",
     "deepseek-reasoner":"(推理专用)",
     "deepseek-coder":   "(编程专用)"
@@ -441,7 +441,7 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
         processing_msg = await bot.send_message(chat_id, DOWNLOAD_PIC_NOTIFY, reply_to_message_id=message_id)
         
         image = Image.open(io.BytesIO(photo_file))
-        user_session = get_user_session(user_id, "gemini-2.5-flash")
+        user_session = get_user_session(user_id, "gemini-3-flash-preview")
         
         enhanced_message = f"用中文回复：{user_message}" if user_message else "用中文描述这张图片"
         contents = [enhanced_message, image]
@@ -509,7 +509,7 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
 {current_model}
 
 **gemini:**
-`/model gemini-2.5-flash`  (平衡性能)
+`/model gemini-3-flash-preview`  (平衡性能)
 
 **deekseek:**
 `/model deepseek-chat`          (通用对话)
