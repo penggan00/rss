@@ -209,7 +209,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,
-   #     "batch_send_interval": 890,
+        "batch_send_interval": 1790,
         "history_days": 3,
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
