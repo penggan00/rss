@@ -10,8 +10,8 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻",
         "urls": [
-            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
-       #     'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
+      #      'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+            'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
         #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
@@ -314,7 +314,6 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQFEBaHCJrHu2hzDA_69WQg', # 国漫说
             'https://www.youtube.com/feeds/videos.xml?channel_id=UChJ8YKw6E1rjFHVS9vovrZw', # BNE TV - 新西兰中文国际频道
           #  'https://www.youtube.com/feeds/videos.xml?channel_id=UCJncdiH3BQUBgCroBmhsUhQ', # 观察者网
-            'https://www.youtube.com/feeds/videos.xml?channel_id=UCSYBgX9pWGiUAcBxjnj6JCQ', # 郭正亮頻道
         # 影视
             'https://www.youtube.com/feeds/videos.xml?channel_id=UC7Xeh7thVIgs_qfTlwC-dag', # Marc TV
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
