@@ -355,6 +355,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "社交媒体",
         "urls": [
         #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
+            'https://www.apkmirror.com/feed/', # apk
          #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
         #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
         #    'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
