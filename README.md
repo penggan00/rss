@@ -1,8 +1,8 @@
 ```
 mkdir ~/rss
 git clone https://github.com/penggan00/rss.git
-git clone https://github.com/EdNovas/dongguaTV.git
-
+git clone https://github.com/DIYgod/RSSHub.git
+git@github.com:DIYgod/RSSHub.git
 # 安装
 /bin/bash ~/rss/setup.sh
 /bin/bash ~/rss/github.sh
@@ -52,7 +52,7 @@ python3 main.py
 python3 usd.py
 source rss_venv/bin/activate
 python3 rss.py
-python3 gpt.py
+python3 main.py
 
 
 ```
