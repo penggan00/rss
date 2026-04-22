@@ -409,7 +409,7 @@ RSS_GROUPS = [ # RSS 组配置列表
            'https://penggan0-rsstt.hf.space', #rsstt保活
 
         ],
-        "group_key": "ZONGHE_RSS_FEEDS",
+        "group_key": "ZONGHE_RSSTT_FEEDS",
         "interval": 86300,       # 60分钟
      #   "batch_send_interval": 21590,   # 批量推送
         "history_days": 300,     # 新增，保留300天
@@ -418,11 +418,6 @@ RSS_GROUPS = [ # RSS 组配置列表
             "translate": False,     #翻译开关
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "[{subject}]({url})",
-            "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "keywords": ["电子书", "epub", "mobi", "pdf", "azw3"]  # 本组关键词列表
-            },
             "preview": False,            # 禁止预览
             "show_count": False          #计数
         }
