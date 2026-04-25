@@ -405,12 +405,12 @@ RSS_GROUPS = [ # RSS 组配置列表
          #   'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
-          #  'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
-           'https://penggan0-rsstt.hf.space', #rsstt保活
+            'https://penggan0-iopenlist.hf.space',  #openlist
+            'https://penggan0-rsstt.hf.space', #rsstt保活
 
         ],
         "group_key": "ZONGHE_RSSTT_FEEDS",
-        "interval": 86300,       # 60分钟
+        "interval": 36000,       # 600分钟
      #   "batch_send_interval": 21590,   # 批量推送
         "history_days": 300,     # 新增，保留300天
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
