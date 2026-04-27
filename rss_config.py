@@ -397,7 +397,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "preview": False,                             # 禁止预览
             "show_count": False                       #计数
         }
-    }
+    },
     # ================== 保活 ==================
     {
         "name": "保活",
@@ -421,5 +421,5 @@ RSS_GROUPS = [ # RSS 组配置列表
             "preview": False,            # 禁止预览
             "show_count": False          #计数
         }
-    },
+    }
 ]
