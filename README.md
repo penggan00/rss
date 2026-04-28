@@ -47,7 +47,7 @@ pip install frontend
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 main.py
+python3 gpt.py
 ```
 python3 usd.py
 source rss_venv/bin/activate
