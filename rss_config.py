@@ -33,7 +33,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "translate": True,       #翻译开
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": True,         # False 禁止预览  True 允许预览
+            "preview": False,         # False 禁止预览  True 允许预览
             "show_count": False         # ✅新增
         }
     },
