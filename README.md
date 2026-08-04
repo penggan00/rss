@@ -7,7 +7,7 @@ git@github.com:DIYgod/RSSHub.git
 /bin/bash ~/rss/setup.sh
 /bin/bash ~/rss/github.sh
 chmod +x ~/rss/{rss.sh,ssh.sh,usd.sh,mail.sh}
-chmod +x ~/rss/ss.sh
+chmod +x ~/rss/github.sh
 ```
 ```
 docker pull penggan0/rss-full:latest
@@ -30,10 +30,14 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/githu
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 
+(crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
+(crontab -l 2>/dev/null; echo "24 14 * * * /bin/bash ~/rss/github.sh") | crontab -
 (crontab -l 2>/dev/null; echo "10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
 (crontab -l 2>/dev/null; echo "10 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
 (crontab -l 2>/dev/null; echo "22 2 * * * /bin/bash ~/rss/rssmail.sh") | crontab -
+# SEV00
+(crontab -l 2>/dev/null; echo "0 0 */22 * * /bin/bash /root/rss/ssh.sh") | crontab -
 ```
 pip install beautifulsoup4 html5lib html2text md2tgmd python-dotenv requests
 pip install aiosqlite
@@ -52,8 +56,8 @@ python3 gpt.py
 python3 usd.py
 source rss_venv/bin/activate
 python3 rss.py
-python3 main.py
-
+python3 mail.py
+python3 html.py
 
 ```
 #安装依赖

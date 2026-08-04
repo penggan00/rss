@@ -38,14 +38,6 @@ BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
 DATABASE_FILE = BASE_DIR / "rss.db"
 
-def clean_old_log():
-    """日志文件超过10MB就删除"""
-    log_file = BASE_DIR / "rss.log"
-    if log_file.exists():
-        size_mb = log_file.stat().st_size / 1024 / 1024
-        if size_mb > 10:  # 超过10MB
-            log_file.unlink()  # 直接删除
-
 logging.basicConfig(
     filename=BASE_DIR / "rss.log",
     level=logging.WARNING,
@@ -1064,176 +1056,191 @@ async def process_batch_send(group, db: RSSDatabase):
 
 # ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
-    """处理单个RSS组"""
-    try:  # ✅ 添加异常捕获
-        group_name = group_config["name"]
-        group_key = group_config["group_key"]
-        processor = group_config["processor"]
-        bot_token = group_config["bot_token"]
-        batch_send_interval = group_config.get("batch_send_interval", None)
-        send_separately = group_config.get("send_separately", False)
+    """在组处理中添加退出检查"""
+    global SHOULD_EXIT
+    
+    if SHOULD_EXIT:
+        logger.info("收到退出信号，停止处理组任务")
+        return
         
-        try:
-            last_run = await db.load_last_run_time(group_key)
-            now = datetime.now(pytz.utc).timestamp()
-            if (now - last_run) < group_config["interval"]:
-                return
-                
-            bot = Bot(token=bot_token)
-            for index, feed_url in enumerate(group_config["urls"]):
-                try:
-                    if index > 0:
-                        await asyncio.sleep(1)
-                        
-                    feed_data, canonical_url = await fetch_feed(session, feed_url)
-                    if not feed_data or not feed_data.entries:
+    group_name = group_config["name"]
+    group_key = group_config["group_key"]
+    processor = group_config["processor"]
+    bot_token = group_config["bot_token"]
+    batch_send_interval = group_config.get("batch_send_interval", None)
+    send_separately = group_config.get("send_separately", False)
+    
+    try:
+        last_run = await db.load_last_run_time(group_key)
+        now = datetime.now(pytz.utc).timestamp()
+        if (now - last_run) < group_config["interval"]:
+            return
+            
+        bot = Bot(token=bot_token)
+        for index, feed_url in enumerate(group_config["urls"]):
+            try:
+                if index > 0:
+                    await asyncio.sleep(1)
+                    
+                feed_data, canonical_url = await fetch_feed(session, feed_url)
+                if not feed_data or not feed_data.entries:
+                    continue
+                    
+                # 使用规范URL作为key（现在canonical_url始终是原始feed_url）
+                processed_ids = global_status.get(canonical_url, set())
+                new_entries = []
+                seen_in_batch = set()
+                new_hashes_in_batch = set()  # 当前批次的内容哈希去重
+
+                for entry in feed_data.entries:
+                    # 直接使用RSSHub返回的原始链接，不需要修改
+                    entry_id = get_entry_identifier(entry)
+                    content_hash = get_entry_content_hash(entry)
+                    
+                    # 统一使用内容哈希去重（主要修复）
+                    if await db.has_content_hash(group_key, content_hash):
+                        logger.debug(f"跳过重复内容哈希: {content_hash[:16]}...")
                         continue
                         
-                    processed_ids = global_status.get(canonical_url, set())
-                    new_entries = []
-                    seen_in_batch = set()
-                    new_hashes_in_batch = set()  # 当前批次的内容哈希去重
-
-                    for entry in feed_data.entries:
-                        # 直接使用RSSHub返回的原始链接，不需要修改
-                        entry_id = get_entry_identifier(entry)
-                        content_hash = get_entry_content_hash(entry)
+                    if entry_id in processed_ids or entry_id in seen_in_batch:
+                        logger.debug(f"跳过重复条目ID: {entry_id[:16]}...")
+                        continue
                         
-                        # 统一使用内容哈希去重（主要修复）
-                        if await db.has_content_hash(group_key, content_hash):
-                            logger.debug(f"跳过重复内容哈希: {content_hash[:16]}...")
-                            continue
-                            
-                        if entry_id in processed_ids or entry_id in seen_in_batch:
-                            logger.debug(f"跳过重复条目ID: {entry_id[:16]}...")
-                            continue
-                            
-                        # 在当前批次中也用内容哈希去重
-                        if content_hash in new_hashes_in_batch:
-                            logger.debug(f"跳过批次内重复内容哈希: {content_hash[:16]}...")
-                            continue  
-                            
-                        # ✅ 过滤检查
-                        if not await should_send_entry(entry, processor):
-                            logger.debug(f"跳过不符合过滤条件的条目: {getattr(entry, 'title', '无标题')[:50]}")
-                            continue
+                    # 在当前批次中也用内容哈希去重
+                    if content_hash in new_hashes_in_batch:
+                        logger.debug(f"跳过批次内重复内容哈希: {content_hash[:16]}...")
+                        continue  
+                        
+                    # ✅ 过滤检查
+                    if not await should_send_entry(entry, processor):
+                        logger.debug(f"跳过不符合过滤条件的条目: {getattr(entry, 'title', '无标题')[:50]}")
+                        continue
 
-                        seen_in_batch.add(entry_id)
-                        new_hashes_in_batch.add(content_hash)
-                        new_entries.append((entry, content_hash, entry_id))
-                                            
-                    if new_entries:
-                        if batch_send_interval and not send_separately:
-                            # 批量发送模式：存入待发送队列
-                            for entry, content_hash, entry_id in new_entries:
-                                raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
-                                if processor.get("translate", False) and is_need_translate(raw_subject):
-                                    translated_subject = await auto_translate_text(raw_subject)
-                                else:
-                                    translated_subject = raw_subject
-                                    
-                                await db.add_pending_message(
-                                    group_key, 
-                                    canonical_url, 
-                                    entry_id, 
-                                    content_hash,
-                                    getattr(entry, "title", ""), 
-                                    translated_subject, 
-                                    getattr(entry, "link", ""), 
-                                    getattr(entry, "summary", ""),
-                                    get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
-                                    feed_data.feed.get('title', "") 
-                                )
-                                await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                processed_ids.add(entry_id)
+                    seen_in_batch.add(entry_id)
+                    new_hashes_in_batch.add(content_hash)
+                    new_entries.append((entry, content_hash, entry_id))
+                                        
+                if new_entries:
+                    if batch_send_interval and not send_separately:
+                        # 批量发送模式：存入待发送队列
+                        for entry, content_hash, entry_id in new_entries:
+                            raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
+                            if processor["translate"] and is_need_translate(raw_subject):
+                                translated_subject = await auto_translate_text(raw_subject)
+                            else:
+                                translated_subject = raw_subject
                                 
-                            global_status[canonical_url] = processed_ids
-                        elif send_separately:
-                            # 单独发送模式：每条消息单独发送
-                            messages_data = await generate_single_messages(
-                                feed_data, 
-                                [e for e,_,_ in new_entries], 
+                            await db.add_pending_message(
+                                group_key, 
+                                canonical_url, 
+                                entry_id, 
+                                content_hash,
+                                getattr(entry, "title", ""), 
+                                translated_subject, 
+                                getattr(entry, "link", ""), 
+                                getattr(entry, "summary", ""),
+                                get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
+                                feed_data.feed.get('title', "") 
+                            )
+                            await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                            processed_ids.add(entry_id)
+                            
+                        global_status[canonical_url] = processed_ids
+                    elif send_separately:
+                        # 单独发送模式：每条消息单独发送
+                        messages_data = await generate_single_messages(
+                            feed_data, 
+                            [e for e,_,_ in new_entries], 
+                            processor
+                        )
+                        
+                        if messages_data:
+                            sent_count = await send_single_messages_separately(
+                                bot,
+                                TELEGRAM_CHAT_ID[0],
+                                messages_data,
                                 processor
                             )
                             
-                            if messages_data:
-                                sent_count = await send_single_messages_separately(
-                                    bot,
-                                    TELEGRAM_CHAT_ID[0],
-                                    messages_data,
-                                    processor
-                                )
-                                
-                                # 保存已发送的消息状态
-                                for i, (entry, content_hash, entry_id) in enumerate(new_entries):
-                                    if i < sent_count:  # 只保存成功发送的消息
-                                        await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                        processed_ids.add(entry_id)
-                                global_status[canonical_url] = processed_ids
-                                
-                                if processor.get("show_count", False):
-                                    summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
-                                    try:
-                                        await send_single_message(
-                                            bot,
-                                            TELEGRAM_CHAT_ID[0],
-                                            summary_msg,
-                                            disable_web_page_preview=True
-                                        )
-                                    except:
-                                        pass
-                        else:
-                            # 立即批量发送模式（原来的逻辑）
-                            feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
-                            if feed_message:
+                            # 保存已发送的消息状态
+                            for i, (entry, content_hash, entry_id) in enumerate(new_entries):
+                                if i < sent_count:  # 只保存成功发送的消息
+                                    await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                    processed_ids.add(entry_id)
+                            global_status[canonical_url] = processed_ids
+                            
+                            if processor.get("show_count", False):
+                                summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
                                 try:
                                     await send_single_message(
                                         bot,
                                         TELEGRAM_CHAT_ID[0],
-                                        feed_message,
-                                        disable_web_page_preview=not processor.get("preview", True)
+                                        summary_msg,
+                                        disable_web_page_preview=True
                                     )
-                                    for entry, content_hash, entry_id in new_entries:
-                                        await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                        processed_ids.add(entry_id)
-                                    global_status[canonical_url] = processed_ids
-                                except Exception as send_error:
-                                    logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
-                                    raise
-                                    
-                except Exception as e:
-                    logger.error(f"❌ 处理失败 [{feed_url}]: {e}")
-                    continue  # ✅ 单个feed失败不影响其他feed
-                    
-            await db.save_last_run_time(group_key, now)
-            
-        except Exception as e:
-            logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
-            raise  # ✅ 重新抛出，让调用方知道失败
-            
-    except Exception as e:  # ✅ 最外层异常捕获
-        logger.error(f"❌ 组处理失败 [{group_config.get('name', '未知')}]: {e}", exc_info=True)
-        raise  # ✅ 重新抛出，让上层知道失败
+                                except:
+                                    pass
+                    else:
+                        # 立即批量发送模式（原来的逻辑）
+                        feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
+                        if feed_message:
+                            try:
+                                await send_single_message(
+                                    bot,
+                                    TELEGRAM_CHAT_ID[0],
+                                    feed_message,
+                                    disable_web_page_preview=not processor.get("preview", True)
+                                )
+                                for entry, content_hash, entry_id in new_entries:
+                                    await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                    processed_ids.add(entry_id)
+                                global_status[canonical_url] = processed_ids
+                            except Exception as send_error:
+                                logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
+                                raise
+                                
+            except Exception as e:
+                logger.error(f"❌ 处理失败 [{feed_url}]: {e}")
+                
+        await db.save_last_run_time(group_key, now)
+        
+    except Exception as e:
+        logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
 
 async def main():
-    clean_old_log() 
     logger.info("🚀 RSS Bot 开始执行")
+    
+    # 快速数据库连接检查（60秒超时）
+    try:
+        db_test = RSSDatabase()
+        await asyncio.wait_for(db_test.open(), timeout=60)  # 60秒超时
+        await db_test.ensure_initialized()
+        await db_test.close()
+    #    logger.info("✅ 数据库连接检查通过")
+    except asyncio.TimeoutError:
+        logger.error("❌ 数据库连接超时（60秒），程序退出")
+        return
+    except Exception as e:
+        logger.error(f"❌ 数据库连接失败: {e}，程序退出")
+        return
     
     start_time = time.time()
     max_retries = 3
+    retry_delay = 60
     
     for attempt in range(max_retries):
         try:
             await run_main_logic()
             logger.info(f"✅ RSS Bot 执行完成，耗时: {time.time() - start_time:.2f}秒")
-            return  # 成功就退出
-            
+            break  # 成功执行则退出循环
         except Exception as e:
-            logger.error(f"运行失败 (尝试 {attempt + 1}/{max_retries}): {e}", exc_info=True)
+            logger.error(f"主程序运行失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                await asyncio.sleep(60)
+                logger.info(f"{retry_delay}秒后重试...")
+                await asyncio.sleep(retry_delay)
             else:
                 logger.critical("达到最大重试次数，程序退出")
+                return
 
 async def run_main_logic():
     lock_file = None
@@ -1244,77 +1251,81 @@ async def run_main_logic():
         lock_file = open(LOCK_FILE, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         logger.info("🔒 成功获取文件锁")
+    except OSError:
+        logger.warning("⛔ 无法获取文件锁，已有实例在运行，程序退出")
+        return
+    except Exception as e:
+        logger.error(f"文件锁异常: {str(e)}")
+        return
         
-        # 连接数据库（加超时）
+    try:
+        # 数据库连接（由于在main()中已经检查过，这里直接连接）
         logger.info("🔗 正在连接数据库...")
-        await asyncio.wait_for(db.open(), timeout=30)
+        await db.open()  # 直接连接，不再重试
         await db.ensure_initialized()
         logger.info("✅ 数据库连接成功")
         
-        # 清理历史记录（每个组独立，失败不影响其他）
+        # 清理历史记录
+        logger.info("🧹 正在清理历史记录...")
         for group in RSS_GROUPS:
+            days = group.get("history_days", 30)
             try:
-                days = group.get("history_days", 30)
                 await db.cleanup_history(days, group["group_key"])
             except Exception as e:
-                logger.error(f"清理历史失败 [{group.get('name')}]: {e}")
-        
-        # 主处理
+                logger.error(f"清理历史记录异常: 组={group['group_key']}, 错误={e}")
+                
+        # 主处理逻辑
         logger.info("🚀 开始处理 RSS 订阅...")
         async with aiohttp.ClientSession() as session:
             status = await db.load_status()
             tasks = []
             
             for group in RSS_GROUPS:
-                tasks.append(process_group(session, group, status, db))
+                try:
+                    task = asyncio.create_task(
+                        process_group(session, group, status, db)
+                    )
+                    tasks.append(task)
+                except Exception as e:
+                    logger.error(f"⚠️ 创建任务失败 [{group['name']}]: {str(e)}")
             
-            # 所有组并行处理，某个失败不影响其他
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             
-            # 记录失败
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"组 {RSS_GROUPS[i].get('name')} 失败: {result}")
-            
-            # 批量发送（同样容错）
-            batch_tasks = []
-            for group in RSS_GROUPS:
-                if group.get("batch_send_interval"):
-                    batch_tasks.append(process_batch_send(group, db))
-            
+            # 批量发送任务
+            batch_tasks = [
+                process_batch_send(group, db) 
+                for group in RSS_GROUPS 
+                if group.get("batch_send_interval")
+            ]
             if batch_tasks:
-                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, Exception):
-                        logger.error(f"批量发送失败: {result}")
-        
-    except asyncio.TimeoutError:
-        logger.error("❌ 数据库连接超时")
-        raise
-    except fcntl.error as e:
-        logger.error(f"❌ 获取文件锁失败: {e}")
-        raise
+                await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+    except asyncio.CancelledError:
+        logger.warning("⏹️ 任务被取消")
     except Exception as e:
-        logger.error(f"主逻辑异常: {str(e)}", exc_info=True)
-        raise
+        logger.error(f"主逻辑执行异常: {str(e)}")
+        raise  # 重新抛出以便外层捕获
     finally:
-        # 清理资源
-        try:
-            if db:
-                await db.close()
-                logger.debug("数据库连接已关闭")
-        except Exception as e:
-            logger.error(f"关闭数据库失败: {e}")
-        
-        try:
-            if lock_file:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                lock_file.close()
-                if LOCK_FILE.exists():
-                    LOCK_FILE.unlink()
-                    logger.debug("文件锁已释放")
-        except Exception as e:
-            logger.error(f"释放文件锁失败: {e}")
+        # 确保资源清理
+        await cleanup_resources(db, lock_file)
+
+async def cleanup_resources(db, lock_file):
+    """清理资源"""
+    try:
+        if db:
+            await db.close()
+    except Exception as e:
+        logger.error(f"关闭数据库失败: {e}")
+    
+    try:
+        if lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            if LOCK_FILE.exists():
+                LOCK_FILE.unlink()
+    except Exception as e:
+        logger.error(f"释放文件锁失败: {e}")
 
 if __name__ == "__main__":
     for s in (signal.SIGINT, signal.SIGTERM):
