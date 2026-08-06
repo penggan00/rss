@@ -48,6 +48,8 @@ pip install frontend
 ```
 ```
 # 创建虚拟环境
+sudo apt update
+sudo apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate

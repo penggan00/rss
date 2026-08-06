@@ -5,6 +5,8 @@ import re
 import asyncio
 import psutil
 import time
+import subprocess
+import shlex
 from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import wraps
@@ -22,15 +24,11 @@ import logging
 # 基础配置（必须最先初始化）
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(PROJECT_ROOT, 'qq.log')
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -150,6 +148,7 @@ class AsyncTranslationCache:
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
+        self._update_lock = asyncio.Lock()  # 独立的更新锁，避免与 get 冲突
         self._init_done = False
         
     async def init_db(self):
@@ -224,9 +223,9 @@ class AsyncTranslationCache:
             return None
             
     async def _update_access_count(self, source_text: str, source_lang: str, target_lang: str):
-        """更新访问计数"""
+        """更新访问计数（使用独立锁，避免与get冲突）"""
         try:
-            async with self._lock:
+            async with self._update_lock:
                 await self._conn.execute(
                     '''
                     UPDATE translations 
@@ -237,7 +236,7 @@ class AsyncTranslationCache:
                 )
                 await self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to update access count: {e}")
+            logger.debug(f"Update access count skipped: {e}")
         
     async def set(self, source_text: str, source_lang: str, target_lang: str, translated_text: str) -> bool:
         """写入缓存"""
@@ -397,7 +396,7 @@ class TencentTranslator:
                 # 在线程池中执行同步API调用
                 result = await loop.run_in_executor(
                     None, 
-                    self._call_api_sync,  # 使用独立的同步方法
+                    self._call_api_sync,
                     text, 
                     source_lang, 
                     target_lang
@@ -587,6 +586,34 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
         idx = end_idx
 
 # ============================================================
+# 系统命令执行
+# ============================================================
+@require_auth
+async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """执行系统命令"""
+    command = ' '.join(context.args) if context.args else None
+    
+    if not command:
+        await update.message.reply_text("用法: /cmd 命令")
+        return
+    if command == 'top' or command.startswith('top '):
+        command = 'top -b -n 1 | head -20'
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=15, cwd='/root'
+        )
+        output = result.stdout or result.stderr or "(无输出)"
+        
+        if len(output) > 3500:
+            output = output[:3500] + "\n...截断"
+        
+        await update.message.reply_text(f"```\n{output}\n```", parse_mode='Markdown')
+    except subprocess.TimeoutExpired:
+        await update.message.reply_text("⏰ 超时")
+    except Exception as e:
+        await update.message.reply_text(f"❌ {e}")
+
+# ============================================================
 # 系统状态命令
 # ============================================================
 @require_auth
@@ -650,7 +677,7 @@ async def startup(application: Application):
     except Exception as e:
         logger.warning(f"Translator warmup failed: {e}")
     
-    logger.info(f"Bot started. Log: {LOG_FILE}")
+    logger.info("Bot started")
 
 async def shutdown(application: Application):
     """应用关闭清理"""
@@ -682,6 +709,7 @@ def main():
         
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         application.add_handler(CommandHandler("htop", htop_command))
+        application.add_handler(CommandHandler("cmd", cmd_command))
         
         application.post_init = startup
         application.post_shutdown = shutdown
