@@ -11,7 +11,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "name": "国际新闻",
         "urls": [
       #      'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
-            'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
+         #   'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
         #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
@@ -153,7 +153,7 @@ RSS_GROUPS = [ # RSS 组配置列表
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
           #  'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
-           'https://penggan0-rsstt.hf.space', #rsstt保活
+         #  'https://penggan0-rsstt.hf.space', #rsstt保活
 
         ],
         "group_key": "ZONGHE_RSS_FEEDS",
@@ -185,7 +185,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://rsshub.app/weibo/user/1891035762',  # 交警
        #     'https://rsshub.app/weibo/user/3917937138',  # 发布
         #    'https://rsshub.app/weibo/user/3213094623',  # 邮政
-            'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
+          #  'https://rsshub.app/weibo/user/2818241427',  # 冒险岛
 
         ],
         "group_key": "FIFTH_RSSSA_FEEDS",
@@ -242,8 +242,8 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "vps",
         "urls": [
-            'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
-            'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
+          #  'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+          #  'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
         ],
         "group_key": "FIFTH_RSS_RRSS_SAN",
         "interval": 3590,      # 60分钟 
@@ -407,7 +407,7 @@ RSS_GROUPS = [ # RSS 组配置列表
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
             'https://penggan0-iopenlist.hf.space',  #openlist
-            'https://penggan0-rsstt.hf.space', #rsstt保活
+         #   'https://penggan0-rsstt.hf.space', #rsstt保活
 
         ],
         "group_key": "ZONGHE_RSSTT_FEEDS",
