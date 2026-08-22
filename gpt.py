@@ -1,6 +1,10 @@
 #source rss_venv/bin/activate
 #pip install python-dotenv python-telegram-bot Pillow google-generativeai md2tgmd aiohttp
 # sudo systemctl restart gpt.service
+
+
+#/root/rss/rss_venv/bin/python -m pip install "python-telegram-bot[job-queue]" 这个是什么意思。
+#/root/rss/rss_venv/bin/python /root/rss/gpt.py
 import asyncio
 import os
 import time
@@ -27,17 +31,16 @@ TG_TOKEN = os.getenv("TELEGRAM_GEMINI_KEY")
 GOOGLE_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
-DEFAULT_MODEL = os.getenv("GPT_ENGINE", "gemini-3-flash-preview")
+DEFAULT_MODEL = os.getenv("GPT_ENGINE")
 
 # 超时配置
 POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
 # 可用模型列表
 AVAILABLE_MODELS = {
-    "gemini-3-flash-preview": "(平衡性能)",
-    "deepseek-chat":    "(通用对话)",
-    "deepseek-reasoner":"(推理专用)",
-    "deepseek-coder":   "(编程专用)"
+    "gemini-3.5-flash-lite": "(免费)",
+    "deepseek-v4-flash":    "(通用对话)",
+    "deepseek-v4-pro":"(推理专用)"
 }
 
 # 错误信息配置
@@ -441,7 +444,7 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
         processing_msg = await bot.send_message(chat_id, DOWNLOAD_PIC_NOTIFY, reply_to_message_id=message_id)
         
         image = Image.open(io.BytesIO(photo_file))
-        user_session = get_user_session(user_id, "gemini-3-flash-preview")
+        user_session = get_user_session(user_id, "gemini-3.5-flash-lite")
         
         enhanced_message = f"用中文回复：{user_message}" if user_message else "用中文描述这张图片"
         contents = [enhanced_message, image]
@@ -507,14 +510,12 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 **当前模型：**
 {current_model}
-
 **gemini:**
-`/model gemini-3-flash-preview`  (平衡性能)
+`/model gemini-3.5-flash-lite`  (免费)
 
 **deekseek:**
-`/model deepseek-chat`          (通用对话)
-`/model deepseek-coder`        (编程专用)
-`/model deepseek-reasoner`  (推理专用)
+`/model deepseek-v4-flash`          (通用对话)
+`/model deepseek-v4-pro`  (推理专用)
 
 **直接点击上面的命令即可切换**
         """
