@@ -377,28 +377,59 @@ class RSSDatabase:
                 await self.conn.commit()
 
     async def cleanup_history(self, days, feed_group):
+        """清理历史数据，包括 rss_status 和 pending_messages"""
         now = time.time()
         cutoff_ts = now - days * 86400
 
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
+                # 检查上次清理时间，24小时内不重复清理
                 row = await conn.fetchrow(
-                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1", feed_group
+                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1", 
+                    feed_group
                 )
                 last_cleanup = row['last_cleanup_time'] if row else 0
                 if now - last_cleanup < 86400:
                     return
+
+                # 1. 清理 rss_status（原有逻辑）
                 await conn.execute(
                     "DELETE FROM rss_status WHERE feed_group=$1 AND entry_timestamp<$2",
                     feed_group, cutoff_ts
                 )
+
+                # 2. ✅ 新增：清理 pending_messages（已发送）
+                await conn.execute(
+                    """
+                    DELETE FROM pending_messages 
+                    WHERE feed_group = $1 
+                    AND sent = 1 
+                    AND entry_timestamp < $2
+                    """,
+                    feed_group, cutoff_ts
+                )
+
+                # 3. ✅ 新增：清理 pending_messages（未发送但超时）
+                await conn.execute(
+                    """
+                    DELETE FROM pending_messages 
+                    WHERE feed_group = $1 
+                    AND sent = 0 
+                    AND entry_timestamp < $2
+                    """,
+                    feed_group, cutoff_ts
+                )
+
+                # 更新清理时间戳
                 await conn.execute("""
                     INSERT INTO cleanup_timestamps (feed_group, last_cleanup_time)
                     VALUES ($1, $2)
-                    ON CONFLICT (feed_group) DO UPDATE SET last_cleanup_time=EXCLUDED.last_cleanup_time
+                    ON CONFLICT (feed_group) DO UPDATE SET last_cleanup_time = EXCLUDED.last_cleanup_time
                 """, feed_group, now)
-        else:
+
+        else:  # SQLite
             async with self.conn.cursor() as c:
+                # 检查上次清理时间
                 await c.execute(
                     "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group = ?",
                     (feed_group,)
@@ -407,14 +438,40 @@ class RSSDatabase:
                 last_cleanup = result[0] if result else 0
                 if now - last_cleanup < 86400:
                     return
+
+                # 1. 清理 rss_status
                 await c.execute(
                     "DELETE FROM rss_status WHERE feed_group=? AND entry_timestamp < ?",
                     (feed_group, cutoff_ts)
                 )
-                await c.execute("""
-                    INSERT OR REPLACE INTO cleanup_timestamps (feed_group, last_cleanup_time)
-                    VALUES (?, ?)
-                """, (feed_group, now))
+
+                # 2. ✅ 新增：清理 pending_messages（已发送）
+                await c.execute(
+                    """
+                    DELETE FROM pending_messages 
+                    WHERE feed_group = ? 
+                    AND sent = 1 
+                    AND entry_timestamp < ?
+                    """,
+                    (feed_group, cutoff_ts)
+                )
+
+                # 3. ✅ 新增：清理 pending_messages（未发送但超时）
+                await c.execute(
+                    """
+                    DELETE FROM pending_messages 
+                    WHERE feed_group = ? 
+                    AND sent = 0 
+                    AND entry_timestamp < ?
+                    """,
+                    (feed_group, cutoff_ts)
+                )
+
+                # 更新清理时间戳
+                await c.execute(
+                    "INSERT OR REPLACE INTO cleanup_timestamps (feed_group, last_cleanup_time) VALUES (?, ?)",
+                    (feed_group, now)
+                )
                 await self.conn.commit()
 
 # ========== 业务逻辑 ==========
