@@ -27,7 +27,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "interval": 3590,      # 60分钟 
       #  "batch_send_interval": 14390,   # 4小时批量推送
         "send_separately": False,  # 新增：设置为True时，每条消息单独发送
-        "history_days": 180,     # 新增，保留30天
+        "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
@@ -50,7 +50,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 1790,      # 30分钟
         "batch_send_interval": 3590,   # 批量推送←加上即
-        "history_days": 300,     # 新增，保留30天
+        "history_days": 7,     # 新增，保留7天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": False,       #翻译 False: 关闭 / True: 开启
@@ -73,7 +73,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FOURTH_RSS_FEEDS",
         "interval": 700,       # 10分钟 
         "batch_send_interval": 21590,   # 批量推送
-        "history_days": 7,     # 新增，保留3天
+        "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
@@ -95,7 +95,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FOURTH_RRSS_FEEDS",
         "interval": 700,       # 10分钟 
         "batch_send_interval": 21590,   # 批量推送
-        "history_days": 7,     # 新增，保留3天
+        "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
@@ -129,13 +129,13 @@ RSS_GROUPS = [ # RSS 组配置列表
           #  'https://rsshub.app/telegram/channel/zaobaosg', # 新加坡联合早报
           #  'https://rsshub.app/telegram/channel/rocCHL',  # 小鹏
       #      'https://rsshub.app/telegram/channel/tnews365', # 竹新社
-            'https://www.v2ex.com/index.xml',  # V2EX
+      #      'https://www.v2ex.com/index.xml',  # V2EX
             'https://www.52pojie.cn/forum.php?mod=rss',  # 吾爱破解
         ],
         "group_key": "TOURTH_RSS_FEEDS",
         "interval": 1790,       # 30分钟
         "batch_send_interval": 35990,   # 批量推送
-        "history_days": 180,     # 新增，保留3天
+        "history_days": 90,     # 新增，保留3天
         "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
@@ -159,7 +159,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "ZONGHE_RSS_FEEDS",
         "interval": 3590,       # 60分钟
         "batch_send_interval": 21590,   # 批量推送
-        "history_days": 300,     # 新增，保留300天
+        "history_days": 90,     # 新增，保留300天
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关
@@ -191,7 +191,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FIFTH_RSSSA_FEEDS",
         "interval": 3590,    # 1小时
         "batch_send_interval": 17990,   # 批量推送    
-        "history_days": 300,     # 新增，保留300天
+        "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
             "translate": False,     #翻译关
@@ -212,7 +212,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FIFTH_RSS_RSS_SAN", 
         "interval": 240,
         "batch_send_interval": 1790,
-        "history_days": 3,
+        "history_days": 2,
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,
@@ -242,8 +242,8 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "vps",
         "urls": [
-          #  'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
-          #  'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
+            'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+            'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
         ],
         "group_key": "FIFTH_RSS_RRSS_SAN",
         "interval": 3590,      # 60分钟 
@@ -288,7 +288,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "YOUTUBE_RSSS_FEEDS", # YouTube频道
         "interval": 3590,      # 60分钟
        # "batch_send_interval": 10800,   # 批量推送
-        "history_days": 720,     # 新增，保留30天
+        "history_days": 360,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
         "processor": {
             "translate": False,                    #翻译关
@@ -335,7 +335,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
         "interval": 3590,     # 1小时
         "batch_send_interval": 71990,   # 批量推送
-        "history_days": 720,     # 新增，保留300天
+        "history_days": 360,     # 新增，保留300天
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
         "translate": False,                    #翻译关
@@ -356,8 +356,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "社交媒体",
         "urls": [
-        #    'https://rsshub.app/twitter/media/clawcloud43609', # claw.cloud
-            'https://www.apkmirror.com/feed/', # apk
+         #   'https://www.apkmirror.com/feed/', # apk
          #   'https://rsshub.app/twitter/media/ElonMuskAOC',   # Elon Musk
         #    'https://rsshub.app/twitter/media/elonmusk',   # Elon Musk
         #    'https://rsshub.app/telegram/channel/netcupoffical',  #netcpu
@@ -367,7 +366,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FIFTH_RSS_FEEDS",   # YouTube频道
         "interval": 7000,    # 2小时
         "batch_send_interval": 71990,   # 批量推送
-        "history_days": 360,     # 新增，保留30天
+        "history_days": 90,     # 新增，保留30天
         "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
         "processor": {
             "translate": True,          #翻译开
@@ -413,7 +412,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "ZONGHE_RSSTT_FEEDS",
         "interval": 36000,       # 600分钟
      #   "batch_send_interval": 21590,   # 批量推送
-        "history_days": 300,     # 新增，保留300天
+        "history_days": 3,     # 新增，保留3天
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
             "translate": False,     #翻译开关

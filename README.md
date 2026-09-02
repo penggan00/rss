@@ -30,7 +30,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/githu
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 
-(crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+(crontab -l 2>/dev/null; echo "5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh") | crontab -
+(crontab -l 2>/dev/null; echo "*/10 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
 (crontab -l 2>/dev/null; echo "24 14 * * * /bin/bash ~/rss/github.sh") | crontab -
 (crontab -l 2>/dev/null; echo "10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
@@ -53,7 +54,7 @@ sudo apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 gpt.py
+python3 rss.py
 ```
 python3 usd.py
 source rss_venv/bin/activate

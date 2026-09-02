@@ -1060,16 +1060,23 @@ async def process_batch_send(group, db: RSSDatabase):
     
     if not batch_interval:
         return
-        
+    
+    # ✅ 配置：最大重试次数（超过这个次数就放弃）
+    MAX_RETRY_COUNT = 3
+    timeout_seconds = batch_interval * MAX_RETRY_COUNT
+    
     now = datetime.now(pytz.utc).timestamp()
     last_batch_sent = await db.get_last_batch_sent_time(group_key)
     if now - last_batch_sent < batch_interval:
         return
-        
+    
     pending = await db.get_pending_messages(group_key)
     if not pending:
         await db.save_last_batch_sent_time(group_key, now)
         return
+
+    # ✅ 计算超时截止时间
+    timeout_cutoff = now - timeout_seconds
 
     # 按 feed_url 分组消息
     feed_url_to_msgs = defaultdict(list)
@@ -1078,7 +1085,8 @@ async def process_batch_send(group, db: RSSDatabase):
 
     bot = Bot(token=bot_token)
     sent_entry_ids = []
-    
+    force_sent_entry_ids = []  # ✅ 定义强制放弃的列表
+
     for feed_url, msgs in feed_url_to_msgs.items():
         feed_title = (msgs[0].get("feed_title") or group.get("name") or feed_url)
         
@@ -1090,7 +1098,7 @@ async def process_batch_send(group, db: RSSDatabase):
             def __init__(self, row):
                 self.title = row["translated_title"] or row["title"]
                 self.link = row["link"]
-                self.summary = row.get("summary", "") or ""  # ✅ 新增摘要支持
+                self.summary = row.get("summary", "") or ""
         entries = [Entry(row) for row in msgs]
         
         try:
@@ -1112,13 +1120,26 @@ async def process_batch_send(group, db: RSSDatabase):
                 
         except Exception as e:
             logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
+            
+            # ✅ 检查超时：如果消息已存在超过 timeout_seconds，强制放弃
+            for row in msgs:
+                if row["entry_timestamp"] < timeout_cutoff:
+                    force_sent_entry_ids.append(row["entry_id"])
+                    logger.warning(
+                        f"⚠️ 消息 {row['entry_id']} 已存在 {timeout_seconds/3600:.1f} 小时 "
+                        f"({MAX_RETRY_COUNT} 轮批量发送失败)，强制标记为已发送"
+                    )
     
-    # 标记已发送的消息
+    # 标记成功发送的
     if sent_entry_ids:
         await db.mark_pending_as_sent(group_key, sent_entry_ids)
     
+    # ✅ 标记强制放弃的
+    if force_sent_entry_ids:
+        await db.mark_pending_as_sent(group_key, force_sent_entry_ids)
+    
     await db.save_last_batch_sent_time(group_key, now)
-
+    
 # ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
     """处理单个RSS组"""
