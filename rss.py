@@ -594,7 +594,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
         raise
 
 @retry(
-    stop=stop_after_attempt(2),
+    stop=stop_after_attempt(1),
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
@@ -785,7 +785,18 @@ async def auto_translate_text(text):
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
         return escape(cleaned_text)
     
-    # ========== 1️⃣ 尝试主密钥 ==========
+    # ========== 1️⃣ 优先尝试 Gemini AI ==========
+    try:
+        result = await translate_with_gemini(cleaned_text)
+        if result:
+            logger.info("✅ Gemini 翻译成功")
+            return result
+        else:
+            logger.warning("Gemini 翻译返回空结果")
+    except Exception as e:
+        logger.warning(f"Gemini 翻译失败: {e}")
+    
+    # ========== 2️⃣ 尝试腾讯云主密钥 ==========
     try:
         return await translate_with_credentials(
             TENCENTCLOUD_SECRET_ID,
@@ -799,7 +810,7 @@ async def auto_translate_text(text):
     except Exception as e:
         logger.warning(f"主密钥翻译异常: {e}")
     
-    # ========== 2️⃣ 尝试备用密钥 ==========
+    # ========== 3️⃣ 尝试腾讯云备用密钥 ==========
     if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
         try:
             return await translate_with_credentials(
@@ -813,17 +824,6 @@ async def auto_translate_text(text):
             logger.warning(f"备用密钥翻译失败: {e}")
         except Exception as e:
             logger.warning(f"备用密钥翻译异常: {e}")
-    
-    # ========== 3️⃣ 尝试 Gemini AI ==========
-    try:
-        result = await translate_with_gemini(cleaned_text)
-        if result:
-            logger.info("✅ Gemini 翻译成功")
-            return result
-        else:
-            logger.warning("Gemini 翻译返回空结果")
-    except Exception as e:
-        logger.warning(f"Gemini 翻译失败: {e}")
     
     # ========== 4️⃣ 全部失败，返回原文 ==========
     logger.warning(f"所有翻译方式均失败，返回原文")
