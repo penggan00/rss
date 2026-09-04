@@ -678,11 +678,12 @@ async def translate_with_gemini(text):
             logger.warning("⚠️ GEMINI_API_KEY 未配置")
             return None
         
-        # 配置 Gemini
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # ✅ 从环境变量读取模型名称
+        model_name = os.getenv("GPT_ENGINE", "gemini-3.5-flash-lite")
         
-        # 翻译提示词
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        
         prompt = f"请将以下内容翻译成中文，只返回翻译结果，不要添加任何其他说明：\n\n{text}"
         
         response = await asyncio.get_event_loop().run_in_executor(
