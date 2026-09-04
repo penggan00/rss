@@ -12,7 +12,7 @@ import time
 import signal
 import aiosqlite
 import sys
-import google.generativeai as genai
+#import google.generativeai as genai
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -670,35 +670,6 @@ def is_mostly_symbols(text):
     # 如果字母比例低于30%，认为是符号/数字文本
     return alpha_count / total_chars < 0.3 if total_chars > 0 else True
 
-async def translate_with_gemini(text):
-    """使用 Gemini AI 翻译"""
-    try:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("⚠️ GEMINI_API_KEY 未配置")
-            return None
-        
-        # ✅ 从环境变量读取模型名称
-        model_name = os.getenv("GPT_ENGINE", "gemini-3.5-flash-lite")
-        
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        
-        prompt = f"请将以下内容翻译成中文，只返回翻译结果，不要添加任何其他说明：\n\n{text}"
-        
-        response = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: model.generate_content(prompt)
-        )
-        
-        translated = response.text.strip()
-        if translated:
-            return translated
-        return None
-    except Exception as e:
-        logger.error(f"Gemini 翻译失败: {e}")
-        return None
-    
 def _sync_translate(secret_id, secret_key, text):
     try:
         cred = credential.Credential(secret_id, secret_key)
@@ -783,51 +754,48 @@ async def auto_translate_text(text):
     
     # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
+      #  logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
         return escape(cleaned_text)
     
-    # ========== 1️⃣ 优先尝试 Gemini AI ==========
     try:
-        result = await translate_with_gemini(cleaned_text)
-        if result:
-            logger.info("✅ Gemini 翻译成功")
-            return result
-        else:
-            logger.warning("Gemini 翻译返回空结果")
-    except Exception as e:
-        logger.warning(f"Gemini 翻译失败: {e}")
-    
-    # ========== 2️⃣ 尝试腾讯云主密钥 ==========
-    try:
-        return await translate_with_credentials(
-            TENCENTCLOUD_SECRET_ID,
-            TENCENTCLOUD_SECRET_KEY,
-            cleaned_text
-        )
-    except TencentCloudSDKException as e:
-        if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-            return escape(cleaned_text)
-        logger.warning(f"主密钥翻译失败: {e}")
-    except Exception as e:
-        logger.warning(f"主密钥翻译异常: {e}")
-    
-    # ========== 3️⃣ 尝试腾讯云备用密钥 ==========
-    if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
+        # 首先尝试主密钥
         try:
             return await translate_with_credentials(
-                TENCENT_SECRET_ID,
-                TENCENT_SECRET_KEY,
+                TENCENTCLOUD_SECRET_ID, 
+                TENCENTCLOUD_SECRET_KEY,
                 cleaned_text
             )
         except TencentCloudSDKException as e:
             if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
+             #   logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
                 return escape(cleaned_text)
-            logger.warning(f"备用密钥翻译失败: {e}")
-        except Exception as e:
-            logger.warning(f"备用密钥翻译异常: {e}")
-    
-    # ========== 4️⃣ 全部失败，返回原文 ==========
-    logger.warning(f"所有翻译方式均失败，返回原文")
-    return escape(cleaned_text)
+            else:
+          #      logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
+                raise
+                
+    except Exception as first_error:
+        # 只有在非语言识别错误的情况下才尝试备用密钥
+        if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
+        #    logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
+            try:
+                return await translate_with_credentials(
+                    TENCENT_SECRET_ID,
+                    TENCENT_SECRET_KEY,
+                    cleaned_text
+                )
+            except TencentCloudSDKException as e:
+                if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
+                 #   logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
+                    return escape(cleaned_text)
+                else:
+                #    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
+                    raise
+            except Exception as e:
+         #       logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
+                raise
+        else:
+      #      logger.error("主翻译密钥失败，且未配置备用密钥")
+            return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
     try:
