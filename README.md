@@ -54,13 +54,13 @@ sudo apt install python3-venv
 python3 -m venv rss_venv
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 rss.py
+python3 /root/rss/gpt.py
 ```
 python3 usd.py
 source rss_venv/bin/activate
 python3 rss.py
 python3 mail.py
-python3 html.py
+python3 rss.py
 
 ```
 #安装依赖

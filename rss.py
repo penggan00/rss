@@ -12,6 +12,7 @@ import time
 import signal
 import aiosqlite
 import sys
+import google.generativeai as genai
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -377,10 +378,9 @@ class RSSDatabase:
                 await self.conn.commit()
 
     async def cleanup_history(self, days, feed_group):
-        """清理历史数据，包括 rss_status 和 pending_messages"""
+        """清理历史数据：每个 feed_url 保留最近 100 条"""
         now = time.time()
-        cutoff_ts = now - days * 86400
-
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 # 检查上次清理时间，24小时内不重复清理
@@ -392,13 +392,20 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
-                # 1. 清理 rss_status（原有逻辑）
-                await conn.execute(
-                    "DELETE FROM rss_status WHERE feed_group=$1 AND entry_timestamp<$2",
-                    feed_group, cutoff_ts
-                )
+                # ✅ 1. 清理 rss_status：每个 feed_url 保留最近 100 条
+                await conn.execute("""
+                    DELETE FROM rss_status
+                    WHERE (feed_group, feed_url, entry_timestamp) NOT IN (
+                        SELECT feed_group, feed_url, entry_timestamp
+                        FROM rss_status AS s2
+                        WHERE s2.feed_group = rss_status.feed_group
+                        AND s2.feed_url = rss_status.feed_url
+                        ORDER BY s2.entry_timestamp DESC
+                        LIMIT 100
+                    );
+                """)
 
-                # 2. ✅ 新增：清理 pending_messages（已发送）
+                # 2. 清理 pending_messages（已发送，保留7天）
                 await conn.execute(
                     """
                     DELETE FROM pending_messages 
@@ -406,18 +413,19 @@ class RSSDatabase:
                     AND sent = 1 
                     AND entry_timestamp < $2
                     """,
-                    feed_group, cutoff_ts
+                    feed_group, now - 7 * 86400
                 )
 
-                # 3. ✅ 新增：清理 pending_messages（未发送但超时）
+                # 3. pending_messages（未发送超过1天，强制标记为已发送）
                 await conn.execute(
                     """
-                    DELETE FROM pending_messages 
+                    UPDATE pending_messages 
+                    SET sent = 1 
                     WHERE feed_group = $1 
                     AND sent = 0 
                     AND entry_timestamp < $2
                     """,
-                    feed_group, cutoff_ts
+                    feed_group, now - 3 * 86400
                 )
 
                 # 更新清理时间戳
@@ -439,13 +447,20 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
-                # 1. 清理 rss_status
-                await c.execute(
-                    "DELETE FROM rss_status WHERE feed_group=? AND entry_timestamp < ?",
-                    (feed_group, cutoff_ts)
-                )
+                # ✅ 1. 清理 rss_status：每个 feed_url 保留最近 100 条
+                await c.execute("""
+                    DELETE FROM rss_status
+                    WHERE rowid NOT IN (
+                        SELECT rowid
+                        FROM rss_status AS s2
+                        WHERE s2.feed_group = rss_status.feed_group
+                        AND s2.feed_url = rss_status.feed_url
+                        ORDER BY s2.entry_timestamp DESC
+                        LIMIT 100
+                    );
+                """)
 
-                # 2. ✅ 新增：清理 pending_messages（已发送）
+                # 2. 清理 pending_messages（已发送，保留7天）
                 await c.execute(
                     """
                     DELETE FROM pending_messages 
@@ -453,18 +468,19 @@ class RSSDatabase:
                     AND sent = 1 
                     AND entry_timestamp < ?
                     """,
-                    (feed_group, cutoff_ts)
+                    (feed_group, now - 7 * 86400)
                 )
 
-                # 3. ✅ 新增：清理 pending_messages（未发送但超时）
+                # 3. pending_messages（未发送超过1天，强制标记为已发送）
                 await c.execute(
                     """
-                    DELETE FROM pending_messages 
+                    UPDATE pending_messages 
+                    SET sent = 1 
                     WHERE feed_group = ? 
                     AND sent = 0 
                     AND entry_timestamp < ?
                     """,
-                    (feed_group, cutoff_ts)
+                    (feed_group, now - 3 * 86400)
                 )
 
                 # 更新清理时间戳
@@ -542,7 +558,7 @@ def get_entry_timestamp(entry):
     return dt
 
 @retry(
-    stop=stop_after_attempt(1),
+    stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
@@ -578,7 +594,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
         raise
 
 @retry(
-    stop=stop_after_attempt(1),
+    stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
@@ -654,6 +670,34 @@ def is_mostly_symbols(text):
     # 如果字母比例低于30%，认为是符号/数字文本
     return alpha_count / total_chars < 0.3 if total_chars > 0 else True
 
+async def translate_with_gemini(text):
+    """使用 Gemini AI 翻译"""
+    try:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning("⚠️ GEMINI_API_KEY 未配置")
+            return None
+        
+        # 配置 Gemini
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # 翻译提示词
+        prompt = f"请将以下内容翻译成中文，只返回翻译结果，不要添加任何其他说明：\n\n{text}"
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: model.generate_content(prompt)
+        )
+        
+        translated = response.text.strip()
+        if translated:
+            return translated
+        return None
+    except Exception as e:
+        logger.error(f"Gemini 翻译失败: {e}")
+        return None
+    
 def _sync_translate(secret_id, secret_key, text):
     try:
         cred = credential.Credential(secret_id, secret_key)
@@ -738,48 +782,51 @@ async def auto_translate_text(text):
     
     # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
-      #  logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
         return escape(cleaned_text)
     
+    # ========== 1️⃣ 尝试主密钥 ==========
     try:
-        # 首先尝试主密钥
+        return await translate_with_credentials(
+            TENCENTCLOUD_SECRET_ID,
+            TENCENTCLOUD_SECRET_KEY,
+            cleaned_text
+        )
+    except TencentCloudSDKException as e:
+        if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
+            return escape(cleaned_text)
+        logger.warning(f"主密钥翻译失败: {e}")
+    except Exception as e:
+        logger.warning(f"主密钥翻译异常: {e}")
+    
+    # ========== 2️⃣ 尝试备用密钥 ==========
+    if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
         try:
             return await translate_with_credentials(
-                TENCENTCLOUD_SECRET_ID, 
-                TENCENTCLOUD_SECRET_KEY,
+                TENCENT_SECRET_ID,
+                TENCENT_SECRET_KEY,
                 cleaned_text
             )
         except TencentCloudSDKException as e:
             if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-             #   logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
                 return escape(cleaned_text)
-            else:
-          #      logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
-                raise
-                
-    except Exception as first_error:
-        # 只有在非语言识别错误的情况下才尝试备用密钥
-        if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-        #    logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
-            try:
-                return await translate_with_credentials(
-                    TENCENT_SECRET_ID,
-                    TENCENT_SECRET_KEY,
-                    cleaned_text
-                )
-            except TencentCloudSDKException as e:
-                if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                 #   logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
-                    return escape(cleaned_text)
-                else:
-                #    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
-                    raise
-            except Exception as e:
-         #       logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
-                raise
+            logger.warning(f"备用密钥翻译失败: {e}")
+        except Exception as e:
+            logger.warning(f"备用密钥翻译异常: {e}")
+    
+    # ========== 3️⃣ 尝试 Gemini AI ==========
+    try:
+        result = await translate_with_gemini(cleaned_text)
+        if result:
+            logger.info("✅ Gemini 翻译成功")
+            return result
         else:
-      #      logger.error("主翻译密钥失败，且未配置备用密钥")
-            return escape(cleaned_text)
+            logger.warning("Gemini 翻译返回空结果")
+    except Exception as e:
+        logger.warning(f"Gemini 翻译失败: {e}")
+    
+    # ========== 4️⃣ 全部失败，返回原文 ==========
+    logger.warning(f"所有翻译方式均失败，返回原文")
+    return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
     try:
