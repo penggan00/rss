@@ -12,7 +12,6 @@ import time
 import signal
 import aiosqlite
 import sys
-#import google.generativeai as genai
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -64,7 +63,7 @@ TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
 semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
-
+LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL")
 # RSS_GROUPS = []  # 将在main函数中从配置文件加载
 
 # ========== 数据库配置 ==========
@@ -744,7 +743,37 @@ async def should_send_entry(entry, processor):
         return not has_keyword
     else:
         return True
+# ========== LibreTranslate 翻译 ==========
+async def translate_with_libretranslate(text):
+    """使用 LibreTranslate 翻译（首选）"""
+    if not text or len(text.strip()) < 3:
+        return text
     
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                LIBRETRANSLATE_URL,
+                json={"q": text, "source": "auto", "target": "zh"},
+                timeout=10
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    translated = result.get("translatedText")
+                    if translated and translated != text:
+                        logger.info("✅ LibreTranslate 翻译成功")
+                        return translated
+                    else:
+                        logger.warning("⚠️ LibreTranslate 返回空或相同文本")
+                else:
+                    logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
+    except asyncio.TimeoutError:
+        logger.warning("⚠️ LibreTranslate 请求超时")
+    except aiohttp.ClientError as e:
+        logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
+    except Exception as e:
+        logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+    
+    return None  # 返回 None 表示失败，让调用方尝试备用
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -754,48 +783,61 @@ async def auto_translate_text(text):
     
     # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
-      #  logger.debug(f"跳过翻译 - 文本过短或主要为符号: {cleaned_text}")
         return escape(cleaned_text)
     
+    # ✅ 第一优先级：LibreTranslate
+    translated = await translate_with_libretranslate(cleaned_text)
+    if translated is not None:
+        return escape(translated)
+    
+    # ✅ 第二优先级：腾讯云翻译
     try:
-        # 首先尝试主密钥
+        # 尝试主密钥
         try:
-            return await translate_with_credentials(
+            result = await translate_with_credentials(
                 TENCENTCLOUD_SECRET_ID, 
                 TENCENTCLOUD_SECRET_KEY,
                 cleaned_text
             )
+            if result:
+                logger.info("✅ 腾讯云翻译成功（主密钥）")
+                return escape(result)
         except TencentCloudSDKException as e:
             if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-             #   logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
+                logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
                 return escape(cleaned_text)
             else:
-          #      logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
+                logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
                 raise
-                
-    except Exception as first_error:
-        # 只有在非语言识别错误的情况下才尝试备用密钥
+        
+        # 尝试备用密钥（如果有）
         if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-        #    logger.warning("主翻译密钥失败（非语言识别错误），尝试备用密钥...")
             try:
-                return await translate_with_credentials(
+                result = await translate_with_credentials(
                     TENCENT_SECRET_ID,
                     TENCENT_SECRET_KEY,
                     cleaned_text
                 )
+                if result:
+                    logger.info("✅ 腾讯云翻译成功（备用密钥）")
+                    return escape(result)
             except TencentCloudSDKException as e:
                 if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                 #   logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
+                    logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
                     return escape(cleaned_text)
                 else:
-                #    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
+                    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
                     raise
             except Exception as e:
-         #       logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
+                logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
                 raise
         else:
-      #      logger.error("主翻译密钥失败，且未配置备用密钥")
+            logger.warning("主翻译密钥失败，且未配置备用密钥")
             return escape(cleaned_text)
+            
+    except Exception as e:
+        logger.error(f"所有翻译都失败: {e}")
+        return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
     try:
