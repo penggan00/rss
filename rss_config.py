@@ -10,7 +10,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻",
         "urls": [
-      #      'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
+            'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
          #   'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
          #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
@@ -400,13 +400,13 @@ RSS_GROUPS = [ # RSS 组配置列表
     },
     # ================== 保活 ==================
     {
-        "name": "保活",
+        "name": "qq",
         "urls": [
          #   'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
           #  'https://rsshub.app/telegram/channel/dianying4K', 
             'https://penggan0-iopenlist.hf.space',  #openlist
-         #   'https://penggan0-rsstt.hf.space', #rsstt保活
+
 
         ],
         "group_key": "ZONGHE_RSSTT_FEEDS",
