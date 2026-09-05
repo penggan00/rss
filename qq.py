@@ -1,6 +1,5 @@
 # source rss_venv/bin/activate
-# pip install psutil python-dotenv tencentcloud-sdk-python python-telegram-bot aiosqlite 
-# pip install tencentcloud-sdk-python --break-system-packages
+# pip install psutil python-dotenv python-telegram-bot aiosqlite aiohttp
 import os
 import re
 import asyncio
@@ -13,10 +12,6 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import wraps
 from dotenv import load_dotenv
-from tencentcloud.common import credential
-from tencentcloud.common.profile.client_profile import ClientProfile
-from tencentcloud.common.profile.http_profile import HttpProfile
-from tencentcloud.tmt.v20180321 import tmt_client, models
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 import aiosqlite
@@ -35,7 +30,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logging.getLogger('telegram').setLevel(logging.WARNING)
-logging.getLogger('tencentcloud').setLevel(logging.WARNING)
 logging.getLogger('aiosqlite').setLevel(logging.WARNING)
 
 # 加载环境变量
@@ -48,13 +42,7 @@ class Config:
     def __init__(self):
         self.TELEGRAM_TOKEN = self._get_env('TELEGRAM_API_KEY')
         self.AUTHORIZED_CHAT_IDS = self._parse_chat_ids('TELEGRAM_CHAT_ID')
-        self.TENCENT_SECRET_ID = self._get_env('TENCENT_SECRET_ID')
-        self.TENCENT_SECRET_KEY = self._get_env('TENCENT_SECRET_KEY')
-        self.TENCENT_REGION = self._get_env('TENCENT_REGION')
-        self.TENCENT_PROJECT_ID = int(self._get_env('TENCENT_PROJECT_ID'))
-        self.TERM_REPO_IDS = os.getenv('TENCENT_TERM_REPO_IDS', '')
-        self.SENT_REPO_IDS = os.getenv('TENCENT_SENT_REPO_IDS', '')
-        self.LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
+        self.LIBRETRANSLATE_URL = self._get_env('LIBRETRANSLATE_URL')
 
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
@@ -81,67 +69,6 @@ except Exception as e:
     raise
 
 # ============================================================
-# 成本控制跟踪器
-# ============================================================
-class TranslationCostTracker:
-    """翻译成本跟踪器（基于腾讯云计费标准）"""
-    
-    # 腾讯云文本翻译计费标准
-    MONTHLY_FREE_CHARS = 5_000_000  # 每月免费500万字符
-    PRICE_TIER_1 = 58  # 0-100百万字符：58元/百万字符
-    PRICE_TIER_2 = 50  # 100百万字符及以上：50元/百万字符
-    
-    def __init__(self):
-        self.total_chars = 0
-        self.total_requests = 0
-        self.cache_hits = 0
-        self._lock = asyncio.Lock()
-        
-    async def record_api_call(self, chars_used: int):
-        async with self._lock:
-            self.total_chars += chars_used
-            self.total_requests += 1
-            
-    async def record_cache_hit(self):
-        async with self._lock:
-            self.cache_hits += 1
-    
-    def _calculate_cost(self, chars: int) -> tuple:
-        """计算费用（人民币），返回(费用, 已用字符, 说明)"""
-        if chars <= self.MONTHLY_FREE_CHARS:
-            return 0, chars, "免费额度内"
-        
-        billable_chars = chars - self.MONTHLY_FREE_CHARS
-        billable_millions = billable_chars / 1_000_000
-        
-        if billable_millions < 100:
-            cost = billable_millions * self.PRICE_TIER_1
-            tier = f"阶梯1 (¥{self.PRICE_TIER_1}/百万字符)"
-        else:
-            cost = billable_millions * self.PRICE_TIER_2
-            tier = f"阶梯2 (¥{self.PRICE_TIER_2}/百万字符)"
-            
-        return round(cost, 2), chars, tier
-            
-    def get_stats(self) -> dict:
-        cost, used, tier_info = self._calculate_cost(self.total_chars)
-        remaining_free = max(0, self.MONTHLY_FREE_CHARS - self.total_chars)
-        
-        return {
-            'total_chars': self.total_chars,
-            'total_requests': self.total_requests,
-            'cache_hits': self.cache_hits,
-            'monthly_free': self.MONTHLY_FREE_CHARS,
-            'remaining_free': remaining_free,
-            'free_used_percent': f"{used/self.MONTHLY_FREE_CHARS*100:.2f}%",
-            'cost': cost,
-            'cost_display': f"¥{cost:.2f}" if cost > 0 else "免费",
-            'tier_info': tier_info if cost > 0 else "免费额度",
-        }
-
-cost_tracker = TranslationCostTracker()
-
-# ============================================================
 # 数据库连接池管理
 # ============================================================
 class AsyncTranslationCache:
@@ -151,7 +78,7 @@ class AsyncTranslationCache:
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
-        self._update_lock = asyncio.Lock()  # 独立的更新锁，避免与 get 冲突
+        self._update_lock = asyncio.Lock()
         self._init_done = False
         
     async def init_db(self):
@@ -215,7 +142,6 @@ class AsyncTranslationCache:
                 )
                 row = await cursor.fetchone()
                 if row:
-                    # 异步更新访问计数
                     asyncio.create_task(self._update_access_count(
                         source_text, source_lang, target_lang
                     ))
@@ -226,7 +152,7 @@ class AsyncTranslationCache:
             return None
             
     async def _update_access_count(self, source_text: str, source_lang: str, target_lang: str):
-        """更新访问计数（使用独立锁，避免与get冲突）"""
+        """更新访问计数"""
         try:
             async with self._update_lock:
                 await self._conn.execute(
@@ -330,75 +256,23 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
         return ('en', 'zh')
 
 # ============================================================
-# 翻译器（修复了事件循环问题）
+# 翻译器（仅 LibreTranslate）
 # ============================================================
-# ============================================================
-# 翻译器（支持 LibreTranslate + 腾讯云双重翻译）
-# ============================================================
-class TencentTranslator:
+class LibreTranslator:
     def __init__(self):
-        # 腾讯云配置
-        cred = credential.Credential(
-            config.TENCENT_SECRET_ID,
-            config.TENCENT_SECRET_KEY
-        )
-        
-        http_profile = HttpProfile()
-        http_profile.reqMethod = "POST"
-        http_profile.reqTimeout = 30
-        http_profile.reqKeepAlive = True
-        http_profile.endpoint = "tmt.tencentcloudapi.com"
-        
-        client_profile = ClientProfile()
-        client_profile.httpProfile = http_profile
-        client_profile.signMethod = "TC3-HMAC-SHA256"
-        
-        self.client = tmt_client.TmtClient(
-            cred, 
-            config.TENCENT_REGION, 
-            client_profile
-        )
-        
-        # LibreTranslate 配置
         self.libretranslate_url = config.LIBRETRANSLATE_URL
         
-        self._warmup_done = False
-        
-    async def warmup(self):
-        """预热连接池"""
-        if not self._warmup_done:
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._do_warmup)
-                self._warmup_done = True
-                logger.info("Translator connection pool warmed up")
-            except Exception as e:
-                logger.warning(f"Connection pool warmup failed: {e}")
-                
-    def _do_warmup(self):
-        """执行预热请求"""
-        try:
-            req = models.TextTranslateRequest()
-            req.SourceText = "test"
-            req.Source = "en"
-            req.Target = "zh"
-            req.ProjectId = config.TENCENT_PROJECT_ID
-            self.client.TextTranslate(req)
-        except Exception:
-            pass
-
-    async def translate_with_libretranslate(self, text: str, source_lang: str, target_lang: str):
-        """使用 LibreTranslate 翻译（首选）"""
+    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+        """使用 LibreTranslate 翻译"""
         if not text or not text.strip():
-            return None
+            return text
         
         try:
-            import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.libretranslate_url,
                     json={"q": text, "source": source_lang, "target": target_lang},
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=15)
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
@@ -408,190 +282,22 @@ class TencentTranslator:
                             return translated
                         else:
                             logger.warning("⚠️ LibreTranslate 返回空或相同文本")
+                            return text
                     else:
                         logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
+                        return text
         except asyncio.TimeoutError:
             logger.warning("⚠️ LibreTranslate 请求超时")
+            return text
         except aiohttp.ClientError as e:
             logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
+            return text
         except Exception as e:
             logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
-        
-        return None
-
-    async def translate_with_tencent(self, text: str, source_lang: str, target_lang: str, max_retries: int = 3) -> str:
-        """使用腾讯云翻译（备用）"""
-        loop = asyncio.get_running_loop()
-        last_error = None
-        
-        # 只对网络/服务器错误重试
-        retryable_codes = {
-            'InternalError',
-            'InternalError.BackendTimeout',
-            'InternalError.ErrorGetRoute',
-            'InternalError.RequestFailed',
-            'LimitExceeded.LimitedAccessFrequency',
-        }
-        
-        for attempt in range(1, max_retries + 1):
-            try:
-                # 在线程池中执行同步API调用
-                result = await loop.run_in_executor(
-                    None, 
-                    self._call_api_sync,
-                    text, 
-                    source_lang, 
-                    target_lang
-                )
-                
-                # 在主事件循环中记录成本
-                await cost_tracker.record_api_call(len(text))
-                
-                return result
-                
-            except Exception as e:
-                last_error = e
-                error_code = getattr(e, 'code', '')
-                
-                # 非重试错误直接抛出
-                if error_code and error_code not in retryable_codes:
-                    logger.error(f"Non-retryable error: {error_code} - {e}")
-                    raise
-                
-                # 重试次数用完
-                if attempt >= max_retries:
-                    logger.error(f"Translation failed after {max_retries} attempts: {e}")
-                    break
-                    
-                # 指数退避重试
-                wait_time = min(2 ** attempt, 5)
-                logger.warning(f"Retry {attempt}/{max_retries} after {wait_time}s: {e}")
-                await asyncio.sleep(wait_time)
-                
-        raise last_error if last_error else Exception("Translation error")
-    
-    def _call_api_sync(self, text: str, source_lang: str, target_lang: str) -> str:
-        """同步API调用（在线程池中执行）"""
-        req = models.TextTranslateRequest()
-        req.SourceText = text
-        req.Source = source_lang
-        req.Target = target_lang
-        req.ProjectId = config.TENCENT_PROJECT_ID
-        
-        # 添加术语库和例句库
-        if config.TERM_REPO_IDS:
-            req.TermRepoIDList = [id.strip() for id in config.TERM_REPO_IDS.split(',') if id.strip()]
-        if config.SENT_REPO_IDS:
-            req.SentRepoIDList = [id.strip() for id in config.SENT_REPO_IDS.split(',') if id.strip()]
-        
-        start_time = time.time()
-        resp = self.client.TextTranslate(req)
-        elapsed = time.time() - start_time
-        
-        logger.debug(f"API call took {elapsed:.2f}s, chars used: {resp.UsedAmount}")
-        
-        return resp.TargetText
-
-    async def translate_with_fallback(self, text: str, source_lang: str, target_lang: str) -> str:
-        """
-        带降级的翻译方法
-        优先级：LibreTranslate -> 腾讯云 -> 返回原文
-        """
-        if not text or not text.strip():
             return text
-        
-        # 第一优先级：LibreTranslate
-        logger.info(f"🔄 尝试 LibreTranslate 翻译 ({source_lang}->{target_lang})...")
-        translated = await self.translate_with_libretranslate(text, source_lang, target_lang)
-        if translated is not None:
-            return translated
-        
-        # 第二优先级：腾讯云
-        logger.info(f"🔄 尝试腾讯云翻译（备用）({source_lang}->{target_lang})...")
-        try:
-            translated = await self.translate_with_tencent(text, source_lang, target_lang)
-            if translated and translated != text:
-                logger.info("✅ 腾讯云翻译成功")
-                return translated
-        except Exception as e:
-            logger.error(f"❌ 腾讯云翻译失败: {e}")
-        
-        # 所有翻译都失败，返回原文
-        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
-        return text
-
-    # ========== 兼容旧代码的 translate 方法 ==========
-    async def translate(self, text: str, source_lang: str, target_lang: str, max_retries: int = 3) -> str:
-        """
-        兼容旧代码的翻译方法
-        实际调用 translate_with_fallback
-        """
-        return await self.translate_with_fallback(text, source_lang, target_lang)
 
 # 初始化翻译器
-translator = TencentTranslator()
-
-# ============================================================
-# 异步任务队列
-# ============================================================
-class TranslationQueue:
-    """翻译任务队列"""
-    
-    def __init__(self, batch_timeout: float = 0.5):
-        self.queue = asyncio.Queue()
-        self.batch_timeout = batch_timeout
-        self._worker_task = None
-        self._running = False
-        
-    async def start(self):
-        """启动后台工作协程"""
-        self._running = True
-        self._worker_task = asyncio.create_task(self._worker())
-        logger.info("Translation queue worker started")
-        
-    async def stop(self):
-        """停止工作协程"""
-        self._running = False
-        if self._worker_task:
-            self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Translation queue worker stopped")
-        
-    async def enqueue(self, update: Update, text: str, source_lang: str, target_lang: str):
-        """将翻译任务加入队列"""
-        future = asyncio.Future()
-        await self.queue.put((update, text, source_lang, target_lang, future))
-        return future
-        
-    async def _worker(self):
-        """后台工作协程"""
-        while self._running:
-            try:
-                # 获取任务
-                try:
-                    item = await asyncio.wait_for(self.queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                    
-                update, text, source_lang, target_lang, future = item
-                
-                # 处理翻译
-                try:
-                    translated = await translator.translate(text, source_lang, target_lang)
-                    if not future.done():
-                        future.set_result((update, translated))
-                except Exception as e:
-                    if not future.done():
-                        future.set_exception(e)
-                        
-            except Exception as e:
-                logger.error(f"Queue worker error: {e}")
-                await asyncio.sleep(1)
-
-translation_queue = TranslationQueue()
+translator = LibreTranslator()
 
 # ============================================================
 # 权限装饰器
@@ -622,23 +328,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         cached = await cache.get(text, source_lang, target_lang)
         if cached:
-            await cost_tracker.record_cache_hit()
             await send_long_message(update, cached)
             logger.info(f"Cache hit for: '{text[:50]}...'")
             return
     except Exception as e:
         logger.error(f"Cache get error: {e}")
     
-    # 第二步：使用带降级的翻译
+    # 第二步：翻译
     try:
-        # 使用 translate_with_fallback（LibreTranslate 优先，腾讯云备用）
-        translated = await translator.translate_with_fallback(text, source_lang, target_lang)
+        translated = await translator.translate(text, source_lang, target_lang)
         
         # 如果翻译结果和原文不同，缓存结果
         if translated != text:
             await cache.set(text, source_lang, target_lang, translated)
-        else:
-            logger.info("翻译失败，返回原文")
         
         # 发送结果
         await send_long_message(update, translated)
@@ -653,7 +355,6 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
     while idx < length:
         end_idx = min(idx + chunk_size, length)
         if end_idx < length:
-            # 在空白字符处断句
             while end_idx > idx and text[end_idx] not in (' ', '\n', '。', '，', '.', ','):
                 end_idx -= 1
             if end_idx == idx:
@@ -700,7 +401,7 @@ async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ============================================================
 @require_auth
 async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """显示系统状态和翻译统计"""
+    """显示系统状态"""
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -715,8 +416,7 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         uptime = datetime.now() - boot_time
         net_io = psutil.net_io_counters()
         
-        cost_stats = cost_tracker.get_stats()
-        # cache_stats = await cache.get_stats()  # 注释掉缓存统计
+        cache_stats = await cache.get_stats()
 
         message = (
             "🖥️ *系统状态*\n\n"
@@ -726,10 +426,10 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"*运行时间:* {str(uptime).split('.')[0]}\n"
             f"*网络发送:* {net_io.bytes_sent / (1024 ** 2):.1f}MB\n"
             f"*网络接收:* {net_io.bytes_recv / (1024 ** 2):.1f}MB\n\n"
-            f"📊 *翻译统计 (腾讯云文本翻译)*\n"
-            f"*API调用:* {cost_stats['total_requests']}次\n"
-            f"*缓存命中:* {cost_stats['cache_hits']}次\n"
-            f"*当前费用:* {cost_stats['cost_display']}\n\n"
+            f"📊 *缓存统计*\n"
+            f"*缓存条目:* {cache_stats['total_entries']}条\n"
+            f"*复用条目:* {cache_stats['reused_entries']}条\n"
+            f"*复用率:* {cache_stats['reuse_rate']}\n\n"
             f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         
@@ -753,12 +453,6 @@ async def startup(application: Application):
         logger.error(f"Database initialization failed: {e}")
         raise
     
-    try:
-        await translator.warmup()
-        logger.info("Translator warmed up")
-    except Exception as e:
-        logger.warning(f"Translator warmup failed: {e}")
-    
     logger.info("Bot started")
 
 async def shutdown(application: Application):
@@ -777,8 +471,6 @@ async def shutdown(application: Application):
     except Exception as e:
         logger.error(f"Database close failed: {e}")
     
-    stats = cost_tracker.get_stats()
-    logger.info(f"Final stats: {stats}")
     logger.info("Bot shutdown complete")
 
 # ============================================================
