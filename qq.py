@@ -1,5 +1,6 @@
 # source rss_venv/bin/activate
-# pip install psutil python-dotenv tencentcloud-sdk-python python-telegram-bot aiosqlite
+# pip install psutil python-dotenv tencentcloud-sdk-python python-telegram-bot aiosqlite 
+# pip install tencentcloud-sdk-python --break-system-packages
 import os
 import re
 import asyncio
@@ -7,6 +8,7 @@ import psutil
 import time
 import subprocess
 import shlex
+import aiohttp
 from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import wraps
@@ -52,6 +54,7 @@ class Config:
         self.TENCENT_PROJECT_ID = int(self._get_env('TENCENT_PROJECT_ID'))
         self.TERM_REPO_IDS = os.getenv('TENCENT_TERM_REPO_IDS', '')
         self.SENT_REPO_IDS = os.getenv('TENCENT_SENT_REPO_IDS', '')
+        self.LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
 
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
@@ -329,8 +332,12 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
 # ============================================================
 # 翻译器（修复了事件循环问题）
 # ============================================================
+# ============================================================
+# 翻译器（支持 LibreTranslate + 腾讯云双重翻译）
+# ============================================================
 class TencentTranslator:
     def __init__(self):
+        # 腾讯云配置
         cred = credential.Credential(
             config.TENCENT_SECRET_ID,
             config.TENCENT_SECRET_KEY
@@ -351,6 +358,9 @@ class TencentTranslator:
             config.TENCENT_REGION, 
             client_profile
         )
+        
+        # LibreTranslate 配置
+        self.libretranslate_url = config.LIBRETRANSLATE_URL
         
         self._warmup_done = False
         
@@ -377,8 +387,40 @@ class TencentTranslator:
         except Exception:
             pass
 
-    async def translate(self, text: str, source_lang: str, target_lang: str, max_retries: int = 3) -> str:
-        """带智能重试的翻译方法"""
+    async def translate_with_libretranslate(self, text: str, source_lang: str, target_lang: str):
+        """使用 LibreTranslate 翻译（首选）"""
+        if not text or not text.strip():
+            return None
+        
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.libretranslate_url,
+                    json={"q": text, "source": source_lang, "target": target_lang},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        translated = result.get("translatedText")
+                        if translated and translated != text:
+                            logger.info("✅ LibreTranslate 翻译成功")
+                            return translated
+                        else:
+                            logger.warning("⚠️ LibreTranslate 返回空或相同文本")
+                    else:
+                        logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ LibreTranslate 请求超时")
+        except aiohttp.ClientError as e:
+            logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+        
+        return None
+
+    async def translate_with_tencent(self, text: str, source_lang: str, target_lang: str, max_retries: int = 3) -> str:
+        """使用腾讯云翻译（备用）"""
         loop = asyncio.get_running_loop()
         last_error = None
         
@@ -449,6 +491,42 @@ class TencentTranslator:
         logger.debug(f"API call took {elapsed:.2f}s, chars used: {resp.UsedAmount}")
         
         return resp.TargetText
+
+    async def translate_with_fallback(self, text: str, source_lang: str, target_lang: str) -> str:
+        """
+        带降级的翻译方法
+        优先级：LibreTranslate -> 腾讯云 -> 返回原文
+        """
+        if not text or not text.strip():
+            return text
+        
+        # 第一优先级：LibreTranslate
+        logger.info(f"🔄 尝试 LibreTranslate 翻译 ({source_lang}->{target_lang})...")
+        translated = await self.translate_with_libretranslate(text, source_lang, target_lang)
+        if translated is not None:
+            return translated
+        
+        # 第二优先级：腾讯云
+        logger.info(f"🔄 尝试腾讯云翻译（备用）({source_lang}->{target_lang})...")
+        try:
+            translated = await self.translate_with_tencent(text, source_lang, target_lang)
+            if translated and translated != text:
+                logger.info("✅ 腾讯云翻译成功")
+                return translated
+        except Exception as e:
+            logger.error(f"❌ 腾讯云翻译失败: {e}")
+        
+        # 所有翻译都失败，返回原文
+        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
+        return text
+
+    # ========== 兼容旧代码的 translate 方法 ==========
+    async def translate(self, text: str, source_lang: str, target_lang: str, max_retries: int = 3) -> str:
+        """
+        兼容旧代码的翻译方法
+        实际调用 translate_with_fallback
+        """
+        return await self.translate_with_fallback(text, source_lang, target_lang)
 
 # 初始化翻译器
 translator = TencentTranslator()
@@ -551,12 +629,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Cache get error: {e}")
     
-    # 第二步：翻译
+    # 第二步：使用带降级的翻译
     try:
-        translated = await translator.translate(text, source_lang, target_lang)
+        # 使用 translate_with_fallback（LibreTranslate 优先，腾讯云备用）
+        translated = await translator.translate_with_fallback(text, source_lang, target_lang)
         
-        # 缓存结果
-        await cache.set(text, source_lang, target_lang, translated)
+        # 如果翻译结果和原文不同，缓存结果
+        if translated != text:
+            await cache.set(text, source_lang, target_lang, translated)
+        else:
+            logger.info("翻译失败，返回原文")
         
         # 发送结果
         await send_long_message(update, translated)

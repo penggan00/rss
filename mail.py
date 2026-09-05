@@ -52,7 +52,8 @@ ENABLE_TRANSLATION = os.getenv('ENABLE_TRANSLATION', 'false').lower() == 'true'
 TENCENTCLOUD_SECRET_ID = os.getenv('TENCENTCLOUD_SECRET_ID')
 TENCENTCLOUD_SECRET_KEY = os.getenv('TENCENTCLOUD_SECRET_KEY')
 TENCENT_REGION = os.getenv('TENCENT_REGION', 'ap-beijing')
-
+# LibreTranslate 配置
+LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
 class AdvancedHTMLPreprocessor:
     """使用BeautifulSoup的高级HTML预处理器"""
     
@@ -2324,8 +2325,39 @@ class EmailToTelegramBot:
         # 如果中文字符超过10%的比例，则无需翻译
         return (chinese_chars / total_chars) > 0.1
     
+    def translate_with_libretranslate(self, text):
+        """使用 LibreTranslate 翻译（首选）"""
+        if not text or not text.strip():
+            return None
+        
+        try:
+            import requests
+            response = requests.post(
+                LIBRETRANSLATE_URL,
+                json={"q": text, "source": "auto", "target": "zh"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                result = response.json()
+                translated = result.get("translatedText")
+                if translated and translated != text:
+                    logging.info("✅ LibreTranslate 翻译成功")
+                    return translated
+                else:
+                    logging.warning("⚠️ LibreTranslate 返回空或相同文本")
+            else:
+                logging.warning(f"⚠️ LibreTranslate 返回状态码: {response.status_code}")
+        except requests.exceptions.Timeout:
+            logging.warning("⚠️ LibreTranslate 请求超时")
+        except requests.exceptions.ConnectionError:
+            logging.warning("⚠️ LibreTranslate 连接失败")
+        except Exception as e:
+            logging.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+        
+        return None  # 返回 None 表示失败
+    
     def translate_content_sync_safe(self, text):
-        """安全翻译，支持长文本分段且保护URL"""
+        """安全翻译，优先 LibreTranslate，失败后降级腾讯云"""
         if not text or not ENABLE_TRANSLATION:
             return text
         
@@ -2338,18 +2370,93 @@ class EmailToTelegramBot:
                 # URL部分直接保留
                 final_segments.append(segment)
             else:
-                # 纯文本部分需要检查长度并可能分段
+                # 纯文本部分
                 if len(segment.encode('utf-8')) <= 1900:
-                    # 短文本直接翻译
-                    translated = self.translate_segment_safe(segment)
-                    final_segments.append(translated)
+                    translated = self.translate_with_fallback(segment)
+                    final_segments.append(translated if translated else segment)
                 else:
-                    # 长文本需要进一步分段翻译
-                    segmented_translation = self.translate_long_text_safe(segment)
-                    final_segments.append(segmented_translation)
+                    # 长文本分段翻译
+                    segmented_translation = self.translate_long_text_with_fallback(segment)
+                    final_segments.append(segmented_translation if segmented_translation else segment)
         
         return ''.join(final_segments)
-
+    def translate_with_fallback(self, text):
+        """
+        带降级的翻译方法
+        优先级：LibreTranslate -> 腾讯云 -> 返回原文
+        """
+        if not text or not text.strip():
+            return text
+        
+        # 第一优先级：LibreTranslate
+        translated = self.translate_with_libretranslate(text)
+        if translated is not None:
+            return translated
+        
+        # 第二优先级：腾讯云
+        try:
+            logging.info("🔄 尝试腾讯云翻译（备用）...")
+            translated = self.translate_segment_safe(text)
+            if translated and translated != text:
+                logging.info("✅ 腾讯云翻译成功")
+                return translated
+            else:
+                logging.warning("⚠️ 腾讯云翻译返回相同文本或为空")
+        except Exception as e:
+            logging.error(f"❌ 腾讯云翻译失败: {e}")
+        
+        # 所有翻译都失败，返回原文
+        logging.info("ℹ️ 所有翻译服务均失败，返回原文")
+        return text
+    
+    def translate_long_text_with_fallback(self, long_text):
+        """分段翻译长文本，支持降级"""
+        MAX_BYTES = 1900
+        segments = []
+        current_segment = ""
+        
+        # 按段落分割
+        paragraphs = [p for p in long_text.split('\n\n') if p.strip()]
+        
+        for para in paragraphs:
+            para_bytes = para.encode('utf-8')
+            new_segment = current_segment + ("\n\n" + para if current_segment else para)
+            
+            if len(new_segment.encode('utf-8')) > MAX_BYTES:
+                if current_segment:
+                    translated = self.translate_with_fallback(current_segment)
+                    segments.append(translated if translated else current_segment)
+                
+                if len(para_bytes) > MAX_BYTES:
+                    # 按句子分割
+                    sentences = re.split(r'[。.!?？]\s*', para)
+                    temp_segment = ""
+                    for sentence in sentences:
+                        if not sentence.strip():
+                            continue
+                        sentence_with_punct = sentence + "。"
+                        if len((temp_segment + sentence_with_punct).encode('utf-8')) > MAX_BYTES:
+                            if temp_segment:
+                                translated = self.translate_with_fallback(temp_segment)
+                                segments.append(translated if translated else temp_segment)
+                            temp_segment = sentence_with_punct
+                        else:
+                            temp_segment += sentence_with_punct
+                    if temp_segment:
+                        current_segment = temp_segment
+                    else:
+                        current_segment = ""
+                else:
+                    current_segment = para
+            else:
+                current_segment = new_segment
+        
+        if current_segment:
+            translated = self.translate_with_fallback(current_segment)
+            segments.append(translated if translated else current_segment)
+        
+        return "\n\n".join(segments)
+    
     def translate_long_text_safe(self, long_text):
         """安全地翻译长文本（分段处理）"""
         # 这里可以复用 translate_content_sync() 中的分段逻辑
