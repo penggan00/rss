@@ -24,9 +24,9 @@ RSS_GROUPS = [ # RSS 组配置列表
       #      'https://www.theverge.com/rss/index.xml',   # The Verge:
         ],
         "group_key": "RSS_FEEDS",
-        "interval": 3590,      # 60分钟 
+        "interval": 1795,      # 60分钟 
       #  "batch_send_interval": 14390,   # 4小时批量推送
-        "send_separately": False,  # 新增：设置为True时，每条消息单独发送
+        "send_separately": True,  # 新增：设置为True时，每条消息单独发送
         "history_days": 30,     # 新增，保留30天
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
@@ -42,7 +42,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "国际新闻中文",
         "urls": [
-             'https://www.chinanews.com.cn/rss/scroll-news.xml', #中新网
+       #      'https://www.chinanews.com.cn/rss/scroll-news.xml', #中新网
          #   'https://www.ftchinese.com/rss/news',   # ft中文网
        #     'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
          #   'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
@@ -67,6 +67,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
          #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
             'https://36kr.com/feed-newsflash',  # 36氪快讯
+            'https://www.chinanews.com.cn/rss/scroll-news.xml', #中新网
         #    'https://36kr.com/feed',  # 36氪综合
             
         ],
