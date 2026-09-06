@@ -33,7 +33,7 @@ RSS_GROUPS = [ # RSS 组配置列表
             "translate": True,       #翻译开
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": False,         # False 禁止预览  True 允许预览
+            "preview": True,         # False 禁止预览  True 允许预览
             "show_count": False         # ✅新增
         }
     },
@@ -389,6 +389,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "interval": 3590,      # 1小时
         "batch_send_interval": 14350,   # 批量推送
         "history_days": 90,     # 新增，保留30天
+        "shared_dedup": True,  # ✅ 新增：整组共享去重（去重池按 group_key）
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
             "translate": False,                        #翻译开关

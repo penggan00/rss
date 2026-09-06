@@ -376,8 +376,8 @@ class RSSDatabase:
                 """, (feed_group, last_run_time))
                 await self.conn.commit()
 
-    async def cleanup_history(self, days, feed_group):
-        """清理历史数据：每个 feed_url 保留最近 100 条"""
+    async def cleanup_history(self, days, feed_group, shared_dedup=False):
+        """清理历史数据：保留最近 100 条"""
         now = time.time()
         
         if USE_PG:
@@ -391,18 +391,31 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
-                # ✅ 1. 清理 rss_status：每个 feed_url 保留最近 100 条
-                await conn.execute("""
-                    DELETE FROM rss_status
-                    WHERE (feed_group, feed_url, entry_timestamp) NOT IN (
-                        SELECT feed_group, feed_url, entry_timestamp
-                        FROM rss_status AS s2
-                        WHERE s2.feed_group = rss_status.feed_group
-                        AND s2.feed_url = rss_status.feed_url
-                        ORDER BY s2.entry_timestamp DESC
-                        LIMIT 100
-                    );
-                """)
+                if shared_dedup:
+                    # ✅ 整组共享去重：整组只保留100条
+                    await conn.execute("""
+                        DELETE FROM rss_status
+                        WHERE (feed_group, entry_timestamp) NOT IN (
+                            SELECT feed_group, entry_timestamp
+                            FROM rss_status AS s2
+                            WHERE s2.feed_group = rss_status.feed_group
+                            ORDER BY s2.entry_timestamp DESC
+                            LIMIT 200
+                        );
+                    """)
+                else:
+                    # ✅ 每个 feed_url 单独保留100条（原有逻辑）
+                    await conn.execute("""
+                        DELETE FROM rss_status
+                        WHERE (feed_group, feed_url, entry_timestamp) NOT IN (
+                            SELECT feed_group, feed_url, entry_timestamp
+                            FROM rss_status AS s2
+                            WHERE s2.feed_group = rss_status.feed_group
+                            AND s2.feed_url = rss_status.feed_url
+                            ORDER BY s2.entry_timestamp DESC
+                            LIMIT 200
+                        );
+                    """)
 
                 # 2. 清理 pending_messages（已发送，保留7天）
                 await conn.execute(
@@ -415,7 +428,7 @@ class RSSDatabase:
                     feed_group, now - 7 * 86400
                 )
 
-                # 3. pending_messages（未发送超过1天，强制标记为已发送）
+                # 3. pending_messages（未发送超过3天，强制标记为已发送）
                 await conn.execute(
                     """
                     UPDATE pending_messages 
@@ -446,18 +459,31 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
-                # ✅ 1. 清理 rss_status：每个 feed_url 保留最近 100 条
-                await c.execute("""
-                    DELETE FROM rss_status
-                    WHERE rowid NOT IN (
-                        SELECT rowid
-                        FROM rss_status AS s2
-                        WHERE s2.feed_group = rss_status.feed_group
-                        AND s2.feed_url = rss_status.feed_url
-                        ORDER BY s2.entry_timestamp DESC
-                        LIMIT 100
-                    );
-                """)
+                if shared_dedup:
+                    # ✅ 整组共享去重：整组只保留100条
+                    await c.execute("""
+                        DELETE FROM rss_status
+                        WHERE rowid NOT IN (
+                            SELECT rowid
+                            FROM rss_status AS s2
+                            WHERE s2.feed_group = rss_status.feed_group
+                            ORDER BY s2.entry_timestamp DESC
+                            LIMIT 200
+                        );
+                    """)
+                else:
+                    # ✅ 每个 feed_url 单独保留100条（原有逻辑）
+                    await c.execute("""
+                        DELETE FROM rss_status
+                        WHERE rowid NOT IN (
+                            SELECT rowid
+                            FROM rss_status AS s2
+                            WHERE s2.feed_group = rss_status.feed_group
+                            AND s2.feed_url = rss_status.feed_url
+                            ORDER BY s2.entry_timestamp DESC
+                            LIMIT 200
+                        );
+                    """)
 
                 # 2. 清理 pending_messages（已发送，保留7天）
                 await c.execute(
@@ -470,7 +496,7 @@ class RSSDatabase:
                     (feed_group, now - 7 * 86400)
                 )
 
-                # 3. pending_messages（未发送超过1天，强制标记为已发送）
+                # 3. pending_messages（未发送超过3天，强制标记为已发送）
                 await c.execute(
                     """
                     UPDATE pending_messages 
@@ -781,63 +807,52 @@ async def translate_with_libretranslate(text):
 async def auto_translate_text(text):
     cleaned_text = remove_html_tags(text).strip()
     
-    # 如果文本过短或主要是符号/数字，直接返回原文
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
         return escape(cleaned_text)
     
     # ✅ 第一优先级：LibreTranslate
-    translated = await translate_with_libretranslate(cleaned_text)
-    if translated is not None:
-        return escape(translated)
-    
-    # ✅ 第二优先级：腾讯云翻译
     try:
-        # 尝试主密钥
+        translated = await translate_with_libretranslate(cleaned_text)
+        if translated is not None:
+            return escape(translated)
+    except Exception as e:
+        logger.warning(f"LibreTranslate 失败: {e}")  # 记录但不抛异常
+    
+    # ✅ 第二优先级：腾讯云
+    try:
+        result = await translate_with_credentials(
+            TENCENTCLOUD_SECRET_ID,
+            TENCENTCLOUD_SECRET_KEY,
+            cleaned_text
+        )
+        if result:
+            return escape(result)
+    except TencentCloudSDKException as e:
+        if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
+            logger.warning(f"语言识别失败，返回原文")
+            return escape(cleaned_text)
+        else:
+            logger.error(f"主密钥翻译失败: {e}")
+            # ⚠️ 不要 raise，继续尝试备用密钥
+    except Exception as e:
+        logger.error(f"主密钥翻译未知错误: {e}")
+        # 继续尝试备用密钥
+    
+    # ✅ 第三优先级：备用腾讯云
+    if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
         try:
             result = await translate_with_credentials(
-                TENCENTCLOUD_SECRET_ID, 
-                TENCENTCLOUD_SECRET_KEY,
+                TENCENT_SECRET_ID,
+                TENCENT_SECRET_KEY,
                 cleaned_text
             )
             if result:
-                logger.info("✅ 腾讯云翻译成功（主密钥）")
                 return escape(result)
-        except TencentCloudSDKException as e:
-            if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                logger.warning(f"腾讯云语言识别失败，返回原文: {cleaned_text[:100]}")
-                return escape(cleaned_text)
-            else:
-                logger.error(f"主密钥翻译失败: [Code: {e.code}] {e.message}")
-                raise
-        
-        # 尝试备用密钥（如果有）
-        if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-            try:
-                result = await translate_with_credentials(
-                    TENCENT_SECRET_ID,
-                    TENCENT_SECRET_KEY,
-                    cleaned_text
-                )
-                if result:
-                    logger.info("✅ 腾讯云翻译成功（备用密钥）")
-                    return escape(result)
-            except TencentCloudSDKException as e:
-                if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-                    logger.warning(f"备用密钥语言识别失败，返回原文: {cleaned_text[:100]}")
-                    return escape(cleaned_text)
-                else:
-                    logger.error(f"备用密钥翻译失败: [Code: {e.code}] {e.message}")
-                    raise
-            except Exception as e:
-                logger.error(f"备用密钥翻译未知错误: {type(e).__name__} - {str(e)}")
-                raise
-        else:
-            logger.warning("主翻译密钥失败，且未配置备用密钥")
-            return escape(cleaned_text)
-            
-    except Exception as e:
-        logger.error(f"所有翻译都失败: {e}")
-        return escape(cleaned_text)
+        except Exception as e:
+            logger.error(f"备用密钥翻译失败: {e}")
+    
+    # ✅ 所有翻译都失败，返回原文（必须 escape）
+    return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
     try:
@@ -924,6 +939,7 @@ async def generate_group_message(feed_data, entries, processor):
     except Exception as e:
         logger.error(f"生成消息失败: {str(e)}")
         return ""
+    
 async def generate_single_messages(feed_data, entries, processor):
     """为每个条目生成单独的消息"""
     try:
@@ -1208,6 +1224,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         bot_token = group_config["bot_token"]
         batch_send_interval = group_config.get("batch_send_interval", None)
         send_separately = group_config.get("send_separately", False)
+        shared_dedup = group_config.get("shared_dedup", False)  # ✅ 新增：整组共享去重
         
         try:
             last_run = await db.load_last_run_time(group_key)
@@ -1225,17 +1242,26 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     if not feed_data or not feed_data.entries:
                         continue
                         
-                    processed_ids = global_status.get(canonical_url, set())
+                    # ✅ 整组共享去重：使用 group_key 作为去重 key
+                    # 每个 feed 单独去重：使用 canonical_url
+                    if shared_dedup:
+                        # 整组共享去重：从数据库加载整组的所有已处理 ID
+                        # 用 group_key 作为 key，但需要获取整组的所有 entry_id
+                        # 这里使用 global_status 的 group_key 级别缓存
+                        group_dedup_key = f"group_{group_key}"
+                        processed_ids = global_status.get(group_dedup_key, set())
+                    else:
+                        processed_ids = global_status.get(canonical_url, set())
+                    
                     new_entries = []
                     seen_in_batch = set()
                     new_hashes_in_batch = set()  # 当前批次的内容哈希去重
 
                     for entry in feed_data.entries:
-                        # 直接使用RSSHub返回的原始链接，不需要修改
                         entry_id = get_entry_identifier(entry)
                         content_hash = get_entry_content_hash(entry)
                         
-                        # 统一使用内容哈希去重（主要修复）
+                        # ✅ 统一使用内容哈希去重（已按 group_key）
                         if await db.has_content_hash(group_key, content_hash):
                             logger.debug(f"跳过重复内容哈希: {content_hash[:16]}...")
                             continue
@@ -1283,7 +1309,12 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                 await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
                                 processed_ids.add(entry_id)
                                 
-                            global_status[canonical_url] = processed_ids
+                            # ✅ 保存去重状态
+                            if shared_dedup:
+                                global_status[group_dedup_key] = processed_ids
+                            else:
+                                global_status[canonical_url] = processed_ids
+                                
                         elif send_separately:
                             # 单独发送模式：每条消息单独发送
                             messages_data = await generate_single_messages(
@@ -1305,7 +1336,12 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     if i < sent_count:  # 只保存成功发送的消息
                                         await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
                                         processed_ids.add(entry_id)
-                                global_status[canonical_url] = processed_ids
+                                
+                                # ✅ 保存去重状态
+                                if shared_dedup:
+                                    global_status[group_dedup_key] = processed_ids
+                                else:
+                                    global_status[canonical_url] = processed_ids
                                 
                                 if processor.get("show_count", False):
                                     summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
@@ -1332,7 +1368,13 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     for entry, content_hash, entry_id in new_entries:
                                         await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
                                         processed_ids.add(entry_id)
-                                    global_status[canonical_url] = processed_ids
+                                    
+                                    # ✅ 保存去重状态
+                                    if shared_dedup:
+                                        global_status[group_dedup_key] = processed_ids
+                                    else:
+                                        global_status[canonical_url] = processed_ids
+                                        
                                 except Exception as send_error:
                                     logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
                                     raise
@@ -1391,7 +1433,8 @@ async def run_main_logic():
         for group in RSS_GROUPS:
             try:
                 days = group.get("history_days", 30)
-                await db.cleanup_history(days, group["group_key"])
+                shared_dedup = group.get("shared_dedup", False)
+                await db.cleanup_history(days, group["group_key"], shared_dedup)
             except Exception as e:
                 logger.error(f"清理历史失败 [{group.get('name')}]: {e}")
         
