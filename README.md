@@ -58,7 +58,9 @@ source rss_venv/bin/activate
 python3 /root/rss/gpt.py
 ```
 python3 usd.py
-~/rss/source rss_venv/bin/activate
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
+cd rss
+source rss_venv/bin/activate
 python3 ~/rss/rss.py
 python3 mail.py
 python3 ss.py

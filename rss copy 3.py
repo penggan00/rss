@@ -334,33 +334,19 @@ class RSSDatabase:
     async def load_status(self):
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                rows = await conn.fetch("SELECT feed_group, feed_url, entry_url FROM rss_status")
+                rows = await conn.fetch("SELECT feed_url, entry_url FROM rss_status")
                 status = {}
-                
                 for row in rows:
-                    feed_group, feed_url, entry_url = row['feed_group'], row['feed_url'], row['entry_url']
-                    
-                    # 1. 原有的按 feed_url 去重
+                    feed_url, entry_url = row['feed_url'], row['entry_url']
                     status.setdefault(feed_url, set()).add(entry_url)
-                    
-                    # 2. ✅ 新增：整组共享去重（用 group_{feed_group} 作为 key）
-                    group_key = f"group_{feed_group}"
-                    status.setdefault(group_key, set()).add(entry_url)
-                
                 return status
-        else:  # SQLite
+        else:
             async with self.conn.cursor() as c:
-                await c.execute("SELECT feed_group, feed_url, entry_url FROM rss_status")
+                await c.execute("SELECT feed_url, entry_url FROM rss_status")
                 rows = await c.fetchall()
                 status = {}
-                
-                for feed_group, feed_url, entry_url in rows:
-                    # 1. 原有的按 feed_url 去重
+                for feed_url, entry_url in rows:
                     status.setdefault(feed_url, set()).add(entry_url)
-                    # 2. ✅ 新增：整组共享去重
-                    group_key = f"group_{feed_group}"
-                    status.setdefault(group_key, set()).add(entry_url)
-                
                 return status
 
     async def load_last_run_time(self, feed_group):
