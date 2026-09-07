@@ -406,7 +406,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
          #   'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
-          #  'https://rsshub.app/telegram/channel/dianying4K', 
+            'https://penggan0-pg.hf.space/',  #个人
             'https://penggan0-iopenlist.hf.space',  #openlist
 
 

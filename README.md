@@ -58,8 +58,8 @@ source rss_venv/bin/activate
 python3 /root/rss/gpt.py
 ```
 python3 usd.py
-source rss_venv/bin/activate
-python3 rss.py
+~/rss/source rss_venv/bin/activate
+python3 ~/rss/rss.py
 python3 mail.py
 python3 ss.py
 

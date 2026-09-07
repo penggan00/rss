@@ -800,7 +800,6 @@ async def translate_with_libretranslate(text):
         logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
     
     return None  # 返回 None 表示失败，让调用方尝试备用
-
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -808,17 +807,16 @@ async def translate_with_libretranslate(text):
 async def auto_translate_text(text):
     cleaned_text = remove_html_tags(text).strip()
     
-    # 如果文本过短或主要是符号/数字，直接返回原文（不 escape）
     if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
-        return cleaned_text
+        return escape(cleaned_text)
     
     # ✅ 第一优先级：LibreTranslate
     try:
         translated = await translate_with_libretranslate(cleaned_text)
         if translated is not None:
-            return translated  # 返回纯文本
+            return escape(translated)
     except Exception as e:
-        logger.warning(f"LibreTranslate 失败: {e}")
+        logger.warning(f"LibreTranslate 失败: {e}")  # 记录但不抛异常
     
     # ✅ 第二优先级：腾讯云
     try:
@@ -828,15 +826,17 @@ async def auto_translate_text(text):
             cleaned_text
         )
         if result:
-            return result
+            return escape(result)
     except TencentCloudSDKException as e:
         if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
             logger.warning(f"语言识别失败，返回原文")
-            return cleaned_text
+            return escape(cleaned_text)
         else:
             logger.error(f"主密钥翻译失败: {e}")
+            # ⚠️ 不要 raise，继续尝试备用密钥
     except Exception as e:
         logger.error(f"主密钥翻译未知错误: {e}")
+        # 继续尝试备用密钥
     
     # ✅ 第三优先级：备用腾讯云
     if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
@@ -847,12 +847,12 @@ async def auto_translate_text(text):
                 cleaned_text
             )
             if result:
-                return result
+                return escape(result)
         except Exception as e:
             logger.error(f"备用密钥翻译失败: {e}")
     
-    # ✅ 所有翻译都失败，返回原文（不 escape）
-    return cleaned_text
+    # ✅ 所有翻译都失败，返回原文（必须 escape）
+    return escape(cleaned_text)
 
 async def generate_group_message(feed_data, entries, processor):
     try:
