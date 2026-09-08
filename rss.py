@@ -390,8 +390,8 @@ class RSSDatabase:
                 """, (feed_group, last_run_time))
                 await self.conn.commit()
 
-    async def cleanup_history(self, days, feed_group, shared_dedup=False):
-        """清理历史数据：保留最近 200 条"""
+    async def cleanup_history(self, feed_group, shared_dedup=False, keep_count=100):
+        """清理历史数据：保留最近 keep_count 条"""
         now = time.time()
         
         if USE_PG:
@@ -405,21 +405,20 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
+                # 1. 清理 rss_status（保留 keep_count 条）
                 if shared_dedup:
-                    # ✅ 整组共享去重：整组只保留200条
-                    await conn.execute("""
+                    await conn.execute(f"""
                         DELETE FROM rss_status
                         WHERE (feed_group, entry_timestamp) NOT IN (
                             SELECT feed_group, entry_timestamp
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
                             ORDER BY s2.entry_timestamp DESC
-                            LIMIT 200
+                            LIMIT {keep_count}
                         );
                     """)
                 else:
-                    # ✅ 每个 feed_url 单独保留200条（原有逻辑）
-                    await conn.execute("""
+                    await conn.execute(f"""
                         DELETE FROM rss_status
                         WHERE (feed_group, feed_url, entry_timestamp) NOT IN (
                             SELECT feed_group, feed_url, entry_timestamp
@@ -427,22 +426,21 @@ class RSSDatabase:
                             WHERE s2.feed_group = rss_status.feed_group
                             AND s2.feed_url = rss_status.feed_url
                             ORDER BY s2.entry_timestamp DESC
-                            LIMIT 200
+                            LIMIT {keep_count}
                         );
                     """)
 
-                # 2. 清理 pending_messages（已发送，保留7天）
+                # 2. ✅ 已发送的立即删除（不保留）
                 await conn.execute(
                     """
                     DELETE FROM pending_messages 
                     WHERE feed_group = $1 
-                    AND sent = 1 
-                    AND entry_timestamp < $2
+                    AND sent = 1
                     """,
-                    feed_group, now - 7 * 86400
+                    feed_group
                 )
 
-                # 3. pending_messages（未发送超过3天，强制标记为已发送）
+                # 3. 未发送超过3天，强制标记为已发送
                 await conn.execute(
                     """
                     UPDATE pending_messages 
@@ -473,21 +471,20 @@ class RSSDatabase:
                 if now - last_cleanup < 86400:
                     return
 
+                # 1. 清理 rss_status（保留 keep_count 条）
                 if shared_dedup:
-                    # ✅ 整组共享去重：整组只保留200条
-                    await c.execute("""
+                    await c.execute(f"""
                         DELETE FROM rss_status
                         WHERE rowid NOT IN (
                             SELECT rowid
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
                             ORDER BY s2.entry_timestamp DESC
-                            LIMIT 200
+                            LIMIT {keep_count}
                         );
                     """)
                 else:
-                    # ✅ 每个 feed_url 单独保留200条（原有逻辑）
-                    await c.execute("""
+                    await c.execute(f"""
                         DELETE FROM rss_status
                         WHERE rowid NOT IN (
                             SELECT rowid
@@ -495,22 +492,21 @@ class RSSDatabase:
                             WHERE s2.feed_group = rss_status.feed_group
                             AND s2.feed_url = rss_status.feed_url
                             ORDER BY s2.entry_timestamp DESC
-                            LIMIT 200
+                            LIMIT {keep_count}
                         );
                     """)
 
-                # 2. 清理 pending_messages（已发送，保留7天）
+                # 2. ✅ 已发送的立即删除（不保留）
                 await c.execute(
                     """
                     DELETE FROM pending_messages 
                     WHERE feed_group = ? 
-                    AND sent = 1 
-                    AND entry_timestamp < ?
+                    AND sent = 1
                     """,
-                    (feed_group, now - 7 * 86400)
+                    (feed_group,)
                 )
 
-                # 3. pending_messages（未发送超过3天，强制标记为已发送）
+                # 3. 未发送超过3天，强制标记为已发送
                 await c.execute(
                     """
                     UPDATE pending_messages 
@@ -1448,7 +1444,8 @@ async def run_main_logic():
             try:
                 days = group.get("history_days", 30)
                 shared_dedup = group.get("shared_dedup", False)
-                await db.cleanup_history(days, group["group_key"], shared_dedup)
+                keep_count = group.get("keep_count", 100)
+                await db.cleanup_history(group["group_key"], shared_dedup, keep_count)
             except Exception as e:
                 logger.error(f"清理历史失败 [{group.get('name')}]: {e}")
         
