@@ -1,5 +1,5 @@
 #source rss_venv/bin/activate
-#pip install aiohttp pytz aiosqlite python-dotenv feedparser python-telegram-bot tenacity md2tgmd tencentcloud-sdk-python langdetect
+#pip install aiohttp pytz aiosqlite python-dotenv feedparser python-telegram-bot tenacity md2tgmd langdetect
 import asyncio
 import aiohttp
 import logging
