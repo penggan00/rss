@@ -43,6 +43,8 @@ class Config:
         self.TELEGRAM_TOKEN = self._get_env('TELEGRAM_API_KEY')
         self.AUTHORIZED_CHAT_IDS = self._parse_chat_ids('TELEGRAM_CHAT_ID')
         self.LIBRETRANSLATE_URL = self._get_env('LIBRETRANSLATE_URL')
+        self.DEEPL_API_KEY = self._get_env_optional('DEEPL_API_KEY')
+        self.DEEPL_API_URL = self._get_env_optional('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')
 
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
@@ -50,6 +52,11 @@ class Config:
             logger.error(f"Missing required environment variable: {var_name}")
             raise ValueError(f"Missing required environment variable: {var_name}")
         return value
+
+    def _get_env_optional(self, var_name: str, default: str = None) -> str:
+        """获取可选环境变量，不存在时返回默认值"""
+        value = os.getenv(var_name)
+        return value if value else default
 
     def _parse_chat_ids(self, var_name: str) -> List[int]:
         ids_str = self._get_env(var_name)
@@ -256,17 +263,16 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
         return ('en', 'zh')
 
 # ============================================================
-# 翻译器（仅 LibreTranslate）
+# 翻译器（LibreTranslate + DeepL 降级）
 # ============================================================
 class LibreTranslator:
     def __init__(self):
         self.libretranslate_url = config.LIBRETRANSLATE_URL
+        self.deepl_api_key = config.DEEPL_API_KEY
+        self.deepl_api_url = config.DEEPL_API_URL
         
-    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    async def translate_with_libretranslate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
         """使用 LibreTranslate 翻译"""
-        if not text or not text.strip():
-            return text
-        
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -282,19 +288,104 @@ class LibreTranslator:
                             return translated
                         else:
                             logger.warning("⚠️ LibreTranslate 返回空或相同文本")
-                            return text
+                            return None
                     else:
                         logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
-                        return text
+                        return None
         except asyncio.TimeoutError:
             logger.warning("⚠️ LibreTranslate 请求超时")
-            return text
+            return None
         except aiohttp.ClientError as e:
             logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
-            return text
+            return None
         except Exception as e:
             logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+            return None
+
+    async def translate_with_deepl(self, text: str, target_lang: str) -> Optional[str]:
+        """使用 DeepL 翻译（备用）"""
+        if not self.deepl_api_key:
+            logger.warning("⚠️ DeepL API Key 未配置")
+            return None
+        
+        # DeepL 语言代码映射
+        lang_map = {
+            'zh': 'ZH',
+            'en': 'EN',
+            'ja': 'JA',
+            'ko': 'KO',
+            'ru': 'RU',
+            'fr': 'FR',
+            'de': 'DE',
+            'es': 'ES',
+            'it': 'IT',
+            'pt': 'PT',
+            'nl': 'NL',
+            'pl': 'PL',
+        }
+        
+        # 目标语言转大写
+        target = lang_map.get(target_lang, target_lang.upper())
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.deepl_api_url,
+                    json={
+                        "text": [text],
+                        "target_lang": target
+                    },
+                    headers={
+                        "Authorization": f"DeepL-Auth-Key {self.deepl_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        translated = result.get("translations", [{}])[0].get("text")
+                        if translated and translated != text:
+                            logger.info("✅ DeepL 翻译成功")
+                            return translated
+                        else:
+                            logger.warning("⚠️ DeepL 返回空或相同文本")
+                            return None
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"⚠️ DeepL 返回状态码: {response.status}, 响应: {error_text}")
+                        return None
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ DeepL 请求超时")
+            return None
+        except aiohttp.ClientError as e:
+            logger.warning(f"⚠️ DeepL 网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ DeepL 翻译失败: {e}")
+            return None
+
+    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+        """
+        翻译主方法
+        优先级：LibreTranslate -> DeepL -> 原文
+        """
+        if not text or not text.strip():
             return text
+        
+        # 第一优先级：LibreTranslate
+        result = await self.translate_with_libretranslate(text, source_lang, target_lang)
+        if result is not None:
+            return result
+        
+        # 第二优先级：DeepL
+        logger.info("🔄 尝试 DeepL 翻译（备用）...")
+        result = await self.translate_with_deepl(text, target_lang)
+        if result is not None:
+            return result
+        
+        # 都失败，返回原文
+        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
+        return text
 
 # 初始化翻译器
 translator = LibreTranslator()
@@ -442,7 +533,7 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ============================================================
 # 应用生命周期管理
 # ============================================================
-async def startup(application: Application):
+async def startup(application):
     """应用启动初始化"""
     logger.info("Initializing bot services...")
     
@@ -455,7 +546,7 @@ async def startup(application: Application):
     
     logger.info("Bot started")
 
-async def shutdown(application: Application):
+async def shutdown(application):
     """应用关闭清理"""
     logger.info("Shutting down bot...")
     

@@ -21,11 +21,6 @@ from telegram.error import BadRequest
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from md2tgmd import escape
-from tencentcloud.common import credential
-from tencentcloud.common.profile.client_profile import ClientProfile
-from tencentcloud.common.profile.http_profile import HttpProfile
-from tencentcloud.tmt.v20180321 import tmt_client, models
-from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from collections import defaultdict
 from langdetect import detect, LangDetectException
 from rss_config import RSS_GROUPS
@@ -54,12 +49,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
-TENCENTCLOUD_SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
-TENCENTCLOUD_SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
-TENCENT_REGION = os.getenv("TENCENT_REGION", "na-siliconvalley")
-TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID")
-TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY")
 semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
@@ -667,24 +658,6 @@ async def fetch_feed(session, feed_url):
     
     return None, feed_url  # ✅ 失败时也返回原始feed_url
 
-async def translate_with_credentials(secret_id, secret_key, text):
-    loop = asyncio.get_running_loop()
-    text_bytes = text.encode('utf-8')
-    if len(text_bytes) > 2000:
-        safe_bytes = text_bytes[:2000]
-        while safe_bytes[-1] & 0xC0 == 0x80:
-            safe_bytes = safe_bytes[:-1]
-        text = safe_bytes.decode('utf-8', errors='ignore')
-     #   logger.warning(f"文本截断至 {len(text)} 字符 ({len(safe_bytes)} 字节)")
-    try:
-        return await loop.run_in_executor(
-            None, 
-            lambda: _sync_translate(secret_id, secret_key, text)
-        )
-    except Exception as e:
-    #    logger.error(f"翻译执行失败: {type(e).__name__} - {str(e)}")
-        raise
-
 def is_need_translate(text):
     try:
         lang = detect(text)
@@ -705,29 +678,6 @@ def is_mostly_symbols(text):
     # 如果字母比例低于30%，认为是符号/数字文本
     return alpha_count / total_chars < 0.3 if total_chars > 0 else True
 
-def _sync_translate(secret_id, secret_key, text):
-    try:
-        cred = credential.Credential(secret_id, secret_key)
-        clientProfile = ClientProfile(httpProfile=HttpProfile(endpoint="tmt.tencentcloudapi.com"))
-        client = tmt_client.TmtClient(cred, TENCENT_REGION, clientProfile)
-        req = models.TextTranslateRequest()
-        req.SourceText = remove_html_tags(text)
-        req.Source = "auto"
-        req.Target = "zh"
-        req.ProjectId = 0
-        return client.TextTranslate(req).TargetText
-    except TencentCloudSDKException as e:
-        error_details = {
-            "code": getattr(e, "code", ""),
-            "message": getattr(e, "message", str(e)),
-            "request_id": getattr(e, "request_id", ""),
-            "region": TENCENT_REGION
-        }
-    #    logger.error(f"腾讯云API错误详情: {error_details}")
-        raise
-    except Exception as e:
-      #  logger.error(f"翻译过程中发生未知错误: {str(e)}")
-        raise
 
 async def should_send_entry(entry, processor):
     filter_config = processor.get("filter", {})
@@ -779,6 +729,7 @@ async def should_send_entry(entry, processor):
         return not has_keyword
     else:
         return True
+    
 # ========== LibreTranslate 翻译 ==========
 async def translate_with_libretranslate(text):
     """使用 LibreTranslate 翻译（首选）"""
@@ -811,6 +762,81 @@ async def translate_with_libretranslate(text):
     
     return None  # 返回 None 表示失败，让调用方尝试备用
 
+# ========== DeepL 翻译 ==========
+async def translate_with_deepl(text):
+    """使用 DeepL 翻译（备用）"""
+    if not text or len(text.strip()) < 3:
+        return None
+    
+    DEEPL_API_KEY = os.getenv("DEEPL_API_KEY")
+    if not DEEPL_API_KEY:
+        logger.warning("⚠️ DeepL API Key 未配置")
+        return None
+    
+    # DeepL 语言代码映射
+    lang_map = {
+        'zh': 'ZH',
+        'en': 'EN',
+        'ja': 'JA',
+        'ko': 'KO',
+        'ru': 'RU',
+        'fr': 'FR',
+        'de': 'DE',
+        'es': 'ES',
+        'it': 'IT',
+        'pt': 'PT',
+        'nl': 'NL',
+        'pl': 'PL',
+    }
+    
+    # 检测源语言（用于提高准确率）
+    try:
+        detected_lang = detect(text)
+        source_lang = lang_map.get(detected_lang, None)
+    except:
+        source_lang = None
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "text": [text],
+                "target_lang": "ZH"
+            }
+            if source_lang:
+                payload["source_lang"] = source_lang
+            
+            async with session.post(
+                os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2/translate"),
+                json=payload,
+                headers={
+                    "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                timeout=10
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    translated = result.get("translations", [{}])[0].get("text")
+                    if translated and translated != text:
+                        logger.info("✅ DeepL 翻译成功")
+                        return translated
+                    else:
+                        logger.warning("⚠️ DeepL 返回空或相同文本")
+                        return None
+                else:
+                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status}")
+                    return None
+    except asyncio.TimeoutError:
+        logger.warning("⚠️ DeepL 请求超时")
+        return None
+    except aiohttp.ClientError as e:
+        logger.warning(f"⚠️ DeepL 网络错误: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"⚠️ DeepL 翻译失败: {e}")
+        return None
+
+# ========== 翻译主函数（LibreTranslate → DeepL → 原文） ==========
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -826,42 +852,20 @@ async def auto_translate_text(text):
     try:
         translated = await translate_with_libretranslate(cleaned_text)
         if translated is not None:
-            return translated  # 返回纯文本
+            return translated
     except Exception as e:
         logger.warning(f"LibreTranslate 失败: {e}")
     
-    # ✅ 第二优先级：腾讯云
+    # ✅ 第二优先级：DeepL
     try:
-        result = await translate_with_credentials(
-            TENCENTCLOUD_SECRET_ID,
-            TENCENTCLOUD_SECRET_KEY,
-            cleaned_text
-        )
-        if result:
-            return result
-    except TencentCloudSDKException as e:
-        if getattr(e, "code", "") == "FailedOperation.LanguageRecognitionErr":
-            logger.warning(f"语言识别失败，返回原文")
-            return cleaned_text
-        else:
-            logger.error(f"主密钥翻译失败: {e}")
+        translated = await translate_with_deepl(cleaned_text)
+        if translated is not None:
+            return translated
     except Exception as e:
-        logger.error(f"主密钥翻译未知错误: {e}")
+        logger.warning(f"DeepL 失败: {e}")
     
-    # ✅ 第三优先级：备用腾讯云
-    if TENCENT_SECRET_ID and TENCENT_SECRET_KEY:
-        try:
-            result = await translate_with_credentials(
-                TENCENT_SECRET_ID,
-                TENCENT_SECRET_KEY,
-                cleaned_text
-            )
-            if result:
-                return result
-        except Exception as e:
-            logger.error(f"备用密钥翻译失败: {e}")
-    
-    # ✅ 所有翻译都失败，返回原文（不 escape）
+    # ✅ 所有翻译都失败，返回原文
+    logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
 
 async def generate_group_message(feed_data, entries, processor):
