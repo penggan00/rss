@@ -1,5 +1,5 @@
 #source rss_venv/bin/activate
-#pip install html2text requests pdfplumber beautifulsoup4 md2tgmd python-dotenv tencentcloud-sdk-python python-telegram-bot
+#pip install html2text requests pdfplumber beautifulsoup4 md2tgmd python-dotenv python-telegram-bot
 import html2text
 import re
 import imaplib
@@ -14,10 +14,6 @@ from bs4 import BeautifulSoup
 from md2tgmd import escape
 from dotenv import load_dotenv
 import asyncio
-from tencentcloud.common import credential
-from tencentcloud.common.profile.http_profile import HttpProfile
-from tencentcloud.common.profile.client_profile import ClientProfile
-from tencentcloud.tmt.v20180321 import tmt_client, models
 from pathlib import Path
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -49,11 +45,11 @@ telegram_ext_logger.setLevel(logging.WARNING)
 
 # 翻译配置
 ENABLE_TRANSLATION = os.getenv('ENABLE_TRANSLATION', 'false').lower() == 'true'
-TENCENTCLOUD_SECRET_ID = os.getenv('TENCENTCLOUD_SECRET_ID')
-TENCENTCLOUD_SECRET_KEY = os.getenv('TENCENTCLOUD_SECRET_KEY')
-TENCENT_REGION = os.getenv('TENCENT_REGION', 'ap-beijing')
-# LibreTranslate 配置
 LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
+DEEPL_API_KEY = os.getenv('DEEPL_API_KEY')  # 新增 DeepL API Key
+DEEPL_API_URL = os.getenv('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')  # 免费版 API
+
+
 class AdvancedHTMLPreprocessor:
     """使用BeautifulSoup的高级HTML预处理器"""
     
@@ -2354,10 +2350,57 @@ class EmailToTelegramBot:
         except Exception as e:
             logging.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
         
-        return None  # 返回 None 表示失败
+        return None
+
+    def translate_with_deepl(self, text):
+        """使用 DeepL 翻译（备用）"""
+        if not text or not text.strip():
+            return None
+        
+        if not DEEPL_API_KEY:
+            logging.warning("⚠️ DeepL API Key 未配置")
+            return None
+        
+        try:
+            import requests
+            payload = {
+                "text": [text],
+                "target_lang": "ZH",
+                "source_lang": "EN"  # 自动检测也可，但指定可提高准确率
+            }
+            headers = {
+                "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                DEEPL_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                translated = result.get("translations", [{}])[0].get("text")
+                if translated and translated != text:
+                    logging.info("✅ DeepL 翻译成功")
+                    return translated
+                else:
+                    logging.warning("⚠️ DeepL 返回空或相同文本")
+            else:
+                logging.warning(f"⚠️ DeepL 返回状态码: {response.status_code}, 响应: {response.text}")
+        except requests.exceptions.Timeout:
+            logging.warning("⚠️ DeepL 请求超时")
+        except requests.exceptions.ConnectionError:
+            logging.warning("⚠️ DeepL 连接失败")
+        except Exception as e:
+            logging.warning(f"⚠️ DeepL 翻译失败: {e}")
+        
+        return None
     
     def translate_content_sync_safe(self, text):
-        """安全翻译，优先 LibreTranslate，失败后降级腾讯云"""
+        """安全翻译，优先 LibreTranslate，失败后降级 DeepL"""
         if not text or not ENABLE_TRANSLATION:
             return text
         
@@ -2380,10 +2423,11 @@ class EmailToTelegramBot:
                     final_segments.append(segmented_translation if segmented_translation else segment)
         
         return ''.join(final_segments)
+    
     def translate_with_fallback(self, text):
         """
         带降级的翻译方法
-        优先级：LibreTranslate -> 腾讯云 -> 返回原文
+        优先级：LibreTranslate -> DeepL -> 返回原文
         """
         if not text or not text.strip():
             return text
@@ -2393,17 +2437,11 @@ class EmailToTelegramBot:
         if translated is not None:
             return translated
         
-        # 第二优先级：腾讯云
-        try:
-            logging.info("🔄 尝试腾讯云翻译（备用）...")
-            translated = self.translate_segment_safe(text)
-            if translated and translated != text:
-                logging.info("✅ 腾讯云翻译成功")
-                return translated
-            else:
-                logging.warning("⚠️ 腾讯云翻译返回相同文本或为空")
-        except Exception as e:
-            logging.error(f"❌ 腾讯云翻译失败: {e}")
+        # 第二优先级：DeepL
+        logging.info("🔄 尝试 DeepL 翻译（备用）...")
+        translated = self.translate_with_deepl(text)
+        if translated is not None:
+            return translated
         
         # 所有翻译都失败，返回原文
         logging.info("ℹ️ 所有翻译服务均失败，返回原文")
@@ -2459,8 +2497,6 @@ class EmailToTelegramBot:
     
     def translate_long_text_safe(self, long_text):
         """安全地翻译长文本（分段处理）"""
-        # 这里可以复用 translate_content_sync() 中的分段逻辑
-        # 但要确保只处理纯文本，不包含URL
         MAX_BYTES = 1900
         segments = []
         current_segment = ""
@@ -2474,9 +2510,9 @@ class EmailToTelegramBot:
             
             if len(new_segment.encode('utf-8')) > MAX_BYTES:
                 if current_segment:
-                    # 翻译已积累的内容
-                    translated = self.translate_segment_safe(current_segment)
-                    segments.append(translated)
+                    # 翻译已积累的内容 - 使用 with_fallback
+                    translated = self.translate_with_fallback(current_segment)
+                    segments.append(translated if translated else current_segment)
                 
                 # 处理超长段落
                 if len(para_bytes) > MAX_BYTES:
@@ -2489,8 +2525,8 @@ class EmailToTelegramBot:
                         sentence_with_punct = sentence + "。"
                         if len((temp_segment + sentence_with_punct).encode('utf-8')) > MAX_BYTES:
                             if temp_segment:
-                                translated = self.translate_segment_safe(temp_segment)
-                                segments.append(translated)
+                                translated = self.translate_with_fallback(temp_segment)
+                                segments.append(translated if translated else temp_segment)
                             temp_segment = sentence_with_punct
                         else:
                             temp_segment += sentence_with_punct
@@ -2505,8 +2541,8 @@ class EmailToTelegramBot:
         
         # 处理最后一段
         if current_segment:
-            translated = self.translate_segment_safe(current_segment)
-            segments.append(translated)
+            translated = self.translate_with_fallback(current_segment)
+            segments.append(translated if translated else current_segment)
         
         return "\n\n".join(segments)
 
@@ -2558,28 +2594,12 @@ class EmailToTelegramBot:
         return False
 
     def translate_segment_safe(self, text):
-        """安全地翻译文本片段"""
+        """安全地翻译文本片段（使用 LibreTranslate -> DeepL 降级链）"""
         if not text.strip():
             return text
         
-        try:
-            cred = credential.Credential(TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY)
-            http_profile = HttpProfile(endpoint="tmt.tencentcloudapi.com")
-            client_profile = ClientProfile(httpProfile=http_profile)
-            client = tmt_client.TmtClient(cred, TENCENT_REGION, client_profile)
-            
-            req = models.TextTranslateRequest()
-            req.SourceText = text
-            req.Source = "auto"
-            req.Target = "zh"
-            req.ProjectId = 0
-            
-            resp = client.TextTranslate(req)
-            return resp.TargetText
-            
-        except Exception as e:
-            logging.error(f"翻译片段失败: {e}")
-            return text  
+        # 直接使用带降级的翻译方法
+        return self.translate_with_fallback(text)
 
 async def main_async():
     """异步主函数"""
