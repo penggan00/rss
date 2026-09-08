@@ -1,9 +1,8 @@
 #source rss_venv/bin/activate
-#pip install python-dotenv python-telegram-bot Pillow google-generativeai md2tgmd aiohttp
+#pip install python-dotenv python-telegram-bot Pillow google-genai md2tgmd aiohttp
 # sudo systemctl restart gpt.service
 
 
-#/root/rss/rss_venv/bin/python -m pip install "python-telegram-bot[job-queue]" 这个是什么意思。
 #/root/rss/rss_venv/bin/python /root/rss/gpt.py
 import asyncio
 import os
@@ -18,7 +17,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from PIL import Image
-import google.generativeai as genai
+from google import genai  # 新版导入方式
+from google.genai import types  # 用于类型提示
 from md2tgmd import escape
 import aiohttp
 from aiohttp import ClientTimeout
@@ -54,20 +54,23 @@ try:
 except ValueError:
     exit(1)
 
-# 初始化Gemini
+# 初始化新版Gemini客户端
 try:
-    genai.configure(api_key=GOOGLE_GEMINI_KEY)
+    client = genai.Client(api_key=GOOGLE_GEMINI_KEY)
 except Exception as e:
+    print(f"Gemini客户端初始化失败: {e}")
     exit(1)
 
-# 会话管理
+# 会话管理 - 修改为手动管理历史
 class UserSession:
-    def __init__(self, chat_session: genai.ChatSession = None, model_name: str = DEFAULT_MODEL, deepseek_history: List = None):
-        self.chat_session = chat_session
-        self.last_activity = time.time()
+    def __init__(self, model_name: str = DEFAULT_MODEL, deepseek_history: List = None):
         self.model_name = model_name
+        self.last_activity = time.time()
         self.message_count = 0
         self.total_tokens = 0
+        # Gemini手动管理的对话历史
+        self.gemini_history: List[Dict[str, str]] = []
+        # DeepSeek对话历史
         self.deepseek_history = deepseek_history or []
 
 # 会话字典
@@ -110,38 +113,23 @@ def get_user_session(user_id: int, model_name: str = None) -> UserSession:
     if user_id not in user_sessions:
         if not model_name:
             model_name = DEFAULT_MODEL
-        
-        if model_name.startswith("gemini"):
-            model = genai.GenerativeModel(model_name)
-            chat = model.start_chat(history=[])
-            user_sessions[user_id] = UserSession(chat, model_name)
-        else:
-            # DeepSeek模型
-            user_sessions[user_id] = UserSession(model_name=model_name, deepseek_history=[])
+        user_sessions[user_id] = UserSession(model_name)
     else:
-        # 如果切换了模型，应该创建新的会话
+        # 如果切换了模型，创建新会话
         current_session = user_sessions[user_id]
         if model_name and model_name != current_session.model_name:
-            if model_name.startswith("gemini"):
-                model = genai.GenerativeModel(model_name)
-                chat = model.start_chat(history=[])
-                user_sessions[user_id] = UserSession(chat, model_name)
-            else:
-                # DeepSeek模型
-                user_sessions[user_id] = UserSession(model_name=model_name, deepseek_history=[])
+            user_sessions[user_id] = UserSession(model_name)
         else:
             user_sessions[user_id].last_activity = now
         
         # 智能上下文清理策略（仅对Gemini模型）
         session = user_sessions[user_id]
-        if session.chat_session and hasattr(session.chat_session, 'history'):
-            history_length = len(session.chat_session.history)
-            if history_length > 20:
-                keep_count = min(16, history_length)
-                session.chat_session.history = session.chat_session.history[-keep_count:]
+        if session.model_name.startswith("gemini"):
+            history_length = len(session.gemini_history)
+            if history_length > 20:  # 保留最近20条消息（10轮对话）
+                session.gemini_history = session.gemini_history[-20:]
             elif history_length > 15:
-                keep_count = min(12, history_length)
-                session.chat_session.history = session.chat_session.history[-keep_count:]
+                session.gemini_history = session.gemini_history[-15:]
         
     return user_sessions[user_id]
 
@@ -158,6 +146,112 @@ def prepare_markdown_segment(text: str) -> str:
     """使用md2tgmd.escape统一转义文本段"""
     return escape(text)
 
+# ==================== Gemini API 调用（新版） ====================
+async def call_gemini_api(user_message: str, user_session: UserSession, image_data: bytes = None) -> str:
+    """调用新版Gemini API"""
+    try:
+        # 构建消息内容列表
+        contents = []
+        
+        # 添加系统提示（如果需要）
+        system_prompt = "请用中文回复所有内容。"
+        
+        # 构建对话历史
+        messages = []
+        
+        # 添加历史消息（只保留最近10轮）
+        history = user_session.gemini_history[-20:] if user_session.gemini_history else []
+        
+        # 构建当前消息
+        current_message = user_message
+        
+        # 如果有图片，构建多模态内容
+        if image_data:
+            # 构建图片和文本混合消息
+            from PIL import Image
+            import io
+            
+            image = Image.open(io.BytesIO(image_data))
+            
+            # 对于多模态，使用 types.Content 构建
+            content_parts = []
+            
+            # 添加文本部分
+            content_parts.append(types.Part(text=f"{system_prompt}\n{current_message}" if not history else current_message))
+            
+            # 添加图片部分
+            # 将图片转为base64或直接使用PIL Image
+            content_parts.append(types.Part(inline_data=types.Blob(
+                mime_type="image/jpeg",
+                data=image_data
+            )))
+            
+            # 构建完整内容
+            content = types.Content(
+                role="user",
+                parts=content_parts
+            )
+            
+            # 构建完整消息历史（包括当前消息）
+            full_history = []
+            
+            # 添加历史
+            for h in history:
+                full_history.append(types.Content(
+                    role=h["role"],
+                    parts=[types.Part(text=h["content"])]
+                ))
+            
+            # 添加当前消息
+            full_history.append(content)
+            
+            # 调用API
+            response = client.models.generate_content(
+                model=user_session.model_name,
+                contents=full_history
+            )
+            
+            full_response = response.text
+            
+        else:
+            # 纯文本对话
+            # 构建消息历史
+            full_history = []
+            
+            # 添加历史消息
+            for h in history:
+                full_history.append(types.Content(
+                    role=h["role"],
+                    parts=[types.Part(text=h["content"])]
+                ))
+            
+            # 添加当前用户消息
+            full_history.append(types.Content(
+                role="user",
+                parts=[types.Part(text=f"{system_prompt}\n{current_message}" if not history else current_message)]
+            ))
+            
+            # 调用API
+            response = client.models.generate_content(
+                model=user_session.model_name,
+                contents=full_history
+            )
+            
+            full_response = response.text
+        
+        # 更新对话历史
+        user_session.gemini_history.append({"role": "user", "content": current_message})
+        user_session.gemini_history.append({"role": "model", "content": full_response})
+        
+        # 限制历史长度
+        if len(user_session.gemini_history) > 40:  # 20轮对话
+            user_session.gemini_history = user_session.gemini_history[-40:]
+        
+        return full_response
+        
+    except Exception as e:
+        raise Exception(f"Gemini API 调用失败: {str(e)}")
+
 # ==================== DeepSeek API 调用 ====================
 async def call_deepseek_api(user_message: str, user_session: UserSession) -> str:
     """调用DeepSeek API"""
@@ -171,8 +265,8 @@ async def call_deepseek_api(user_message: str, user_session: UserSession) -> str
     history = user_session.deepseek_history[-12:]  # 保留最近6轮
     messages.extend(history)
     
-    # 构建系统提示词，优化 Telegram Markdown V2 格式输出
-    system_prompt = """standard Markdown format"""
+    # 构建系统提示词
+    system_prompt = "请用中文回复所有内容，使用标准Markdown格式。"
     
     # 如果是新对话，添加系统提示
     if not history:
@@ -336,11 +430,9 @@ async def ai_handler(bot, chat_id: int, message_id: int, user_message: str, mode
 
         # 根据模型类型调用不同的API
         if model_type.startswith("gemini"):
-            enhanced_message = f"用中文回复：{user_message}"
-            
+            # 使用新版Gemini API
             try:
-                response = user_session.chat_session.send_message(enhanced_message)
-                full_response = response.text
+                full_response = await call_gemini_api(user_message, user_session)
             except Exception as e:
                 await bot.edit_message_text(
                     f"{ERROR_INFO}\n错误详情: {str(e)}",
@@ -350,8 +442,8 @@ async def ai_handler(bot, chat_id: int, message_id: int, user_message: str, mode
                 return
                 
         else:
-            enhanced_message = f"用中文回复：{user_message}"
-            full_response = await call_deepseek_api(enhanced_message, user_session)
+            # DeepSeek模型
+            full_response = await call_deepseek_api(user_message, user_session)
         
         # 处理完整响应
         if full_response:
@@ -443,23 +535,29 @@ async def gemini_edit_handler(bot, chat_id: int, message_id: int, user_message: 
     try:
         processing_msg = await bot.send_message(chat_id, DOWNLOAD_PIC_NOTIFY, reply_to_message_id=message_id)
         
-        image = Image.open(io.BytesIO(photo_file))
+        # 获取用户会话
         user_session = get_user_session(user_id, "gemini-3.5-flash-lite")
         
-        enhanced_message = f"用中文回复：{user_message}" if user_message else "用中文描述这张图片"
-        contents = [enhanced_message, image]
-        
-        response = user_session.chat_session.send_message(contents)
-        
-        response_text = ""
-        for part in response.parts:
-            if hasattr(part, 'text') and part.text:
-                response_text += part.text
-        
-        await bot.delete_message(chat_id, processing_msg.message_id)
-        
-        if response_text:
-            await send_segmented_message(bot, chat_id, message_id, response_text)
+        # 使用新版Gemini API处理图片
+        try:
+            # 构建带图片的消息
+            from PIL import Image
+            import io
+            
+            # 调用带图片的Gemini API
+            full_response = await call_gemini_api(user_message, user_session, photo_file)
+            
+            await bot.delete_message(chat_id, processing_msg.message_id)
+            
+            if full_response:
+                await send_segmented_message(bot, chat_id, message_id, full_response)
+                
+        except Exception as e:
+            await bot.edit_message_text(
+                f"{ERROR_INFO}\nError: {str(e)}",
+                chat_id=chat_id,
+                message_id=processing_msg.message_id
+            )
         
     except Exception as e:
         await bot.send_message(chat_id, f"{ERROR_INFO}\nError: {str(e)}", reply_to_message_id=message_id)
