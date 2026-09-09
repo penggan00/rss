@@ -58,43 +58,37 @@ class MarketConfig:
 # ================== 新增 Oil Price API 服务 ==================
 class OilPriceService:
     @staticmethod
-    def get_oil_price(code: str = "BRENT_CRUDE_USD"):
-        """获取原油价格"""
-        url = f"https://api.oilpriceapi.com/v1/prices/latest?by_code={code}"
-        headers = {"Authorization": f"Token {OILPRICE_API_KEY}"}
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except Exception as e:
-            print(f"获取原油价格失败: {e}")
-            return None
-    
-    @staticmethod
     def format_oil_price(code: str, name: str) -> str:
         """格式化原油价格为消息"""
         try:
-            data = OilPriceService.get_oil_price(code)
-            if not data or data.get("error"):
+            url = f"https://api.oilpriceapi.com/v1/prices/latest?by_code={code}"
+            headers = {"Authorization": f"Token {OILPRICE_API_KEY}"}
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
                 return ""
             
-            attributes = data.get("data", {}).get("attributes", {})
-            price = attributes.get("price", 0)
-            currency = attributes.get("currency", "USD")
+            data = response.json()
             
-            # 获取涨跌幅（如果有）
-            change = attributes.get("change_percent", None)
+            # 正确的解析路径
+            price = data.get('data', {}).get('price', 0)
+            change = data.get('data', {}).get('changes', {}).get('24h', {}).get('percent', 0)
+            previous_price = data.get('data', {}).get('changes', {}).get('24h', {}).get('previous_price', 0)
             
-            if change is not None:
-                emoji = "🔴" if change > 0 else "🔵"
-                sign = "+" if change > 0 else ""
-                change_str = f"(*{sign}{abs(change):.2f}%*, "
-                # 计算涨跌金额（简化，API可能不直接提供）
-                return f"{emoji} {escape_markdown(name)}: *{escape_markdown(f'{price:.2f}')}* {change_str}{sign}{escape_markdown(f'{abs(change*price/100):.2f}')})\n"
-            else:
-                return f"🟡 {escape_markdown(name)}: *{escape_markdown(f'{price:.2f}')}* {currency}\n"
+            if price == 0:
+                return f"⚠️ {escape_markdown(name)}: 数据暂不可用\n"
+            
+            emoji = "🔴" if change > 0 else "🔵"
+            sign = "+" if change > 0 else ""
+            
+            # 计算涨跌金额（当前价 - 昨日价）
+            change_amount = price - previous_price if previous_price else price * (change / 100)
+            
+            return (
+                f"{emoji} {escape_markdown(name)}: *{escape_markdown(f'{price:.2f}')}* "
+                f"(*{sign}{escape_markdown(f'{abs(change):.2f}')}%*, "
+                f"{sign}{escape_markdown(f'{abs(change_amount):.2f}')})\n"
+            )
                 
         except Exception as e:
             print(f"格式化原油数据失败: {e}")
@@ -456,7 +450,54 @@ def get_usd_cny_formatted():
         
         return f"{emoji} USD/CNY: *{price_str}* ({percent_str}, {point_str})\n"
     return ""
+def get_dxy_sina():
+    """从新浪财经获取美元指数"""
+    try:
+        url = "https://hq.sinajs.cn/list=DINIW"
+        headers = {
+            "Referer": "https://finance.sina.com.cn",
+            "User-Agent": "Mozilla/5.0"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if '=' in response.text:
+            content = response.text.split('=')[1].strip().strip('"').strip(';')
+            parts = content.split(',')
+            
+            if len(parts) >= 10:
+                return {
+                    'name': parts[9],
+                    'price': float(parts[1]),
+                    'prev_close': float(parts[7]),
+                    'high': float(parts[5]),
+                    'low': float(parts[6]),
+                    'time': parts[0],
+                    'date': parts[10].strip('"')
+                }
+    except Exception as e:
+        print(f"获取美元指数失败: {e}")
+    return None
 
+def format_dxy():
+    """格式化美元指数为消息"""
+    data = get_dxy_sina()
+    if not data:
+        return "⚠️ 美元指数: 数据暂不可用\n"
+    
+    price = data['price']
+    prev_close = data['prev_close']
+    change = price - prev_close
+    change_percent = (change / prev_close) * 100 if prev_close else 0
+    
+    emoji = "🔴" if change > 0 else "🔵" if change < 0 else "🟡"
+    sign = "+" if change > 0 else "" if change == 0 else "-"
+    
+    return (
+        f"{emoji} 美元指数: *{price:.2f}* "
+        f"(*{sign}{abs(change_percent):.2f}%*, "
+        f"{sign}{abs(change):.2f})\n"
+    )
 def get_usa_index(index_code, index_name):
     try:
         time.sleep(1)  
@@ -681,15 +722,16 @@ def main():
     if gold_data:
         message_parts.append(gold_data)
     
-    # ================== 替换 yfinance 为 Oil Price API ==================
+    # ================== 原油 + 美元指数 + USD/CNY ==================
     # 获取原油数据（使用 Oil Price API）
     brent_data = OilPriceService.format_oil_price("BRENT_CRUDE_USD", "布伦特原油")
     if brent_data:
         message_parts.append(brent_data)
     
-    wti_data = OilPriceService.format_oil_price("WTI_CRUDE_USD", "WTI原油")
-    if wti_data:
-        message_parts.append(wti_data)
+    # 获取美元指数（新浪财经）
+    dxy_data = format_dxy()
+    if dxy_data:
+        message_parts.append(dxy_data)
     
     # 获取 USD/CNY 汇率
     message_parts.append(get_usd_cny_formatted())
