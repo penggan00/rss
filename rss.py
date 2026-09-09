@@ -325,11 +325,11 @@ class RSSDatabase:
     async def load_status(self):
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                rows = await conn.fetch("SELECT feed_group, feed_url, entry_url, entry_content_hash FROM rss_status")
+                rows = await conn.fetch("SELECT feed_group, feed_url, entry_url FROM rss_status")
                 status = {}
                 
                 for row in rows:
-                    feed_group, feed_url, entry_url, content_hash = row['feed_group'], row['feed_url'], row['entry_url'], row['entry_content_hash']
+                    feed_group, feed_url, entry_url = row['feed_group'], row['feed_url'], row['entry_url']
                     
                     # 1. 按 feed_url 去重（entry_url）
                     status.setdefault(feed_url, set()).add(entry_url)
@@ -337,22 +337,17 @@ class RSSDatabase:
                     # 2. 整组共享去重（entry_url）
                     group_key = f"group_{feed_group}"
                     status.setdefault(group_key, set()).add(entry_url)
-                    
-                    # 3. ✅ content_hash 去重（用于快速判断）
-                    hash_key = f"hash_{feed_group}"
-                    status.setdefault(hash_key, set()).add(content_hash)
                 
                 return status
         else:  # SQLite
             async with self.conn.cursor() as c:
-                await c.execute("SELECT feed_group, feed_url, entry_url, entry_content_hash FROM rss_status")
+                await c.execute("SELECT feed_group, feed_url, entry_url FROM rss_status")
                 rows = await c.fetchall()
                 status = {}
                 
-                for feed_group, feed_url, entry_url, content_hash in rows:
+                for feed_group, feed_url, entry_url in rows:
                     status.setdefault(feed_url, set()).add(entry_url)
                     status.setdefault(f"group_{feed_group}", set()).add(entry_url)
-                    status.setdefault(f"hash_{feed_group}", set()).add(content_hash)
                 
                 return status
 
@@ -1279,10 +1274,6 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                         
                         # ✅ 先查内存缓存
                         hash_key = f"hash_{group_key}"
-                        if hash_key in global_status and content_hash in global_status[hash_key]:
-                            logger.debug(f"跳过重复内容哈希（内存缓存）: {content_hash[:16]}...")
-                            continue
-                        
                         # ✅ 再查数据库（兜底）
                         if await db.has_content_hash(group_key, content_hash):
                             logger.debug(f"跳过重复内容哈希（数据库）: {content_hash[:16]}...")
