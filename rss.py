@@ -1247,14 +1247,14 @@ async def process_batch_send(group, db: RSSDatabase):
 # ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
     """处理单个RSS组"""
-    try:  # ✅ 添加异常捕获
+    try:
         group_name = group_config["name"]
         group_key = group_config["group_key"]
         processor = group_config["processor"]
         bot_token = group_config["bot_token"]
         batch_send_interval = group_config.get("batch_send_interval", None)
         send_separately = group_config.get("send_separately", False)
-        shared_dedup = group_config.get("shared_dedup", False)  # ✅ 新增：整组共享去重
+        shared_dedup = group_config.get("shared_dedup", False)
         
         try:
             last_run = await db.load_last_run_time(group_key)
@@ -1271,30 +1271,18 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     feed_data, canonical_url = await fetch_feed(session, feed_url)
                     if not feed_data or not feed_data.entries:
                         continue
-                        
-                    # ✅ 整组共享去重：使用 group_key 作为去重 key
-                    # 每个 feed 单独去重：使用 canonical_url
-                    if shared_dedup:
-                        # 整组共享去重：从数据库加载整组的所有已处理 ID
-                        # 用 group_key 作为 key，但需要获取整组的所有 entry_id
-                        # 这里使用 global_status 的 group_key 级别缓存
-                        group_dedup_key = f"group_{group_key}"
-                        processed_ids = global_status.get(group_dedup_key, set())
-                    else:
-                        processed_ids = global_status.get(canonical_url, set())
                     
+                    # ✅ 初始化每批次变量
                     new_entries = []
-                    seen_in_batch = set()
-                    new_hashes_in_batch = set()  # 当前批次的内容哈希去重
-
+                    new_hashes_in_batch = set()
+                    
                     for entry in feed_data.entries:
                         entry_id = get_entry_identifier(entry)
                         content_hash = get_entry_content_hash(entry)
                         
-                        # ✅ 查数据库
+                        # ✅ 数据库去重（唯一依据）
                         is_dup = await db.has_content_hash(group_key, content_hash)
                         
-                        # ✅ 详细日志
                         logger.warning(
                             f"🔍 [去重检查] group={group_key} | "
                             f"entry_id={entry_id[:12]} | "
@@ -1306,26 +1294,16 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                         if is_dup:
                             logger.warning(f"✅ 命中重复，跳过: {content_hash[:12]}")
                             continue
-
-                        # 检查 entry_id 去重
-                        if entry_id in processed_ids or entry_id in seen_in_batch:
-                            logger.warning(f"✅ 命中 entry_id 重复，跳过: {entry_id[:12]}")
-                            continue
-                            
-                        # 在当前批次中也用内容哈希去重
-                        if content_hash in new_hashes_in_batch:
-                            logger.debug(f"跳过批次内重复内容哈希: {content_hash[:16]}...")
-                            continue  
-                            
+                        
                         # ✅ 过滤检查
                         if not await should_send_entry(entry, processor):
-                            logger.debug(f"跳过不符合过滤条件的条目: {getattr(entry, 'title', '无标题')[:50]}")
+                            logger.debug(f"跳过不符合过滤条件的条目")
                             continue
-
-                        seen_in_batch.add(entry_id)
+                        
                         new_hashes_in_batch.add(content_hash)
                         new_entries.append((entry, content_hash, entry_id))
-                                            
+                    
+                    # ✅ 处理新条目
                     if new_entries:
                         if batch_send_interval and not send_separately:
                             # 批量发送模式：存入待发送队列
@@ -1337,104 +1315,64 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     translated_subject = raw_subject
                                     
                                 await db.add_pending_message(
-                                    group_key, 
-                                    canonical_url, 
-                                    entry_id, 
-                                    content_hash,
-                                    getattr(entry, "title", ""), 
-                                    translated_subject, 
-                                    getattr(entry, "link", ""), 
-                                    getattr(entry, "summary", ""),
+                                    group_key, canonical_url, entry_id, content_hash,
+                                    getattr(entry, "title", ""), translated_subject,
+                                    getattr(entry, "link", ""), getattr(entry, "summary", ""),
                                     get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
-                                    feed_data.feed.get('title', "") 
+                                    feed_data.feed.get('title', "")
                                 )
                                 await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                logger.warning(f"💾 [已保存] group={group_key} | hash={content_hash[:12]} | entry_id={entry_id[:12]}")
-                                processed_ids.add(entry_id)
-                                
-                            # ✅ 保存去重状态
-                            if shared_dedup:
-                                global_status[group_dedup_key] = processed_ids
-                            else:
-                                global_status[canonical_url] = processed_ids
+                                logger.warning(f"💾 [已保存] group={group_key} | hash={content_hash[:12]}")
                                 
                         elif send_separately:
-                            # 单独发送模式：每条消息单独发送
+                            # 单独发送模式
                             messages_data = await generate_single_messages(
-                                feed_data, 
-                                [e for e,_,_ in new_entries], 
-                                processor
+                                feed_data, [e for e,_,_ in new_entries], processor
                             )
                             
                             if messages_data:
                                 sent_count = await send_single_messages_separately(
-                                    bot,
-                                    TELEGRAM_CHAT_ID[0],
-                                    messages_data,
-                                    processor
+                                    bot, TELEGRAM_CHAT_ID[0], messages_data, processor
                                 )
                                 
-                                # 保存已发送的消息状态
                                 for i, (entry, content_hash, entry_id) in enumerate(new_entries):
-                                    if i < sent_count:  # 只保存成功发送的消息
+                                    if i < sent_count:
                                         await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                        processed_ids.add(entry_id)
-                                
-                                # ✅ 保存去重状态
-                                if shared_dedup:
-                                    global_status[group_dedup_key] = processed_ids
-                                else:
-                                    global_status[canonical_url] = processed_ids
                                 
                                 if processor.get("show_count", False):
                                     summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
                                     try:
-                                        await send_single_message(
-                                            bot,
-                                            TELEGRAM_CHAT_ID[0],
-                                            summary_msg,
-                                            disable_web_page_preview=True
-                                        )
+                                        await send_single_message(bot, TELEGRAM_CHAT_ID[0], summary_msg, disable_web_page_preview=True)
                                     except:
                                         pass
                         else:
-                            # 立即批量发送模式（原来的逻辑）
+                            # 立即批量发送模式
                             feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
                             if feed_message:
                                 try:
                                     await send_single_message(
-                                        bot,
-                                        TELEGRAM_CHAT_ID[0],
-                                        feed_message,
+                                        bot, TELEGRAM_CHAT_ID[0], feed_message,
                                         disable_web_page_preview=not processor.get("preview", True)
                                     )
                                     for entry, content_hash, entry_id in new_entries:
                                         await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                        processed_ids.add(entry_id)
-                                    
-                                    # ✅ 保存去重状态
-                                    if shared_dedup:
-                                        global_status[group_dedup_key] = processed_ids
-                                    else:
-                                        global_status[canonical_url] = processed_ids
-                                        
                                 except Exception as send_error:
                                     logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
                                     raise
                                     
                 except Exception as e:
                     logger.error(f"❌ 处理失败 [{feed_url}]: {e}")
-                    continue  # ✅ 单个feed失败不影响其他feed
+                    continue
                     
             await db.save_last_run_time(group_key, now)
             
         except Exception as e:
             logger.critical(f"‼️ 处理组失败 [{group_key}]: {e}")
-            raise  # ✅ 重新抛出，让调用方知道失败
+            raise
             
-    except Exception as e:  # ✅ 最外层异常捕获
+    except Exception as e:
         logger.error(f"❌ 组处理失败 [{group_config.get('name', '未知')}]: {e}", exc_info=True)
-        raise  # ✅ 重新抛出，让上层知道失败
+        raise
 
 async def main():
     clean_old_log() 
