@@ -2,7 +2,6 @@
 #pip install python-dotenv python-telegram-bot Pillow google-genai md2tgmd aiohttp
 # sudo systemctl restart gpt.service
 
-
 #/root/rss/rss_venv/bin/python /root/rss/gpt.py
 import asyncio
 import os
@@ -33,6 +32,11 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ALLOWED_USER_IDS_STR = os.getenv("TELEGRAM_CHAT_ID")
 DEFAULT_MODEL = os.getenv("GPT_ENGINE")
 
+# 上下文保留轮数（1轮 = 用户1条 + AI1条）
+MAX_HISTORY_TURNS = 10   # 保留最近10轮对话
+MAX_HISTORY_MESSAGES = MAX_HISTORY_TURNS * 2  # 20条
+MAX_SINGLE_MESSAGE_BYTES = 4000  # 单条消息最大字节数（UTF-8）
+
 # 超时配置
 POLLING_TIMEOUT = int(os.getenv("POLLING_TIMEOUT", "45"))
 
@@ -61,7 +65,6 @@ except Exception as e:
     print(f"Gemini客户端初始化失败: {e}")
     exit(1)
 
-# 会话管理 - 修改为手动管理历史
 class UserSession:
     def __init__(self, model_name: str = DEFAULT_MODEL, deepseek_history: List = None):
         self.model_name = model_name
@@ -93,6 +96,26 @@ def validate_config():
     
     return True
 
+def trim_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """统一的历史清理：保留最近N轮，且单条消息不超过上限"""
+    if not history:
+        return history
+    
+    # 1. 按轮数截断（保留最近 MAX_HISTORY_MESSAGES 条）
+    trimmed = history[-MAX_HISTORY_MESSAGES:]
+    
+    # 2. 单条消息过长时截断（按字节数，更精确）
+    cleaned = []
+    for msg in trimmed:
+        content = msg.get("content", "")
+        if len(content.encode('utf-8')) > MAX_SINGLE_MESSAGE_BYTES:  # ← 改这里
+            # 按字节截断，确保不会切断多字节字符
+            encoded = content.encode('utf-8')[:MAX_SINGLE_MESSAGE_BYTES]  # ← 改这里
+            content = encoded.decode('utf-8', errors='ignore') + "...[已截断]"
+        cleaned.append({"role": msg["role"], "content": content})
+    
+    return cleaned
+
 # 辅助函数
 def get_current_model_info(user_id: int) -> str:
     """获取当前模型信息"""
@@ -122,15 +145,6 @@ def get_user_session(user_id: int, model_name: str = None) -> UserSession:
         else:
             user_sessions[user_id].last_activity = now
         
-        # 智能上下文清理策略（仅对Gemini模型）
-        session = user_sessions[user_id]
-        if session.model_name.startswith("gemini"):
-            history_length = len(session.gemini_history)
-            if history_length > 20:  # 保留最近20条消息（10轮对话）
-                session.gemini_history = session.gemini_history[-20:]
-            elif history_length > 15:
-                session.gemini_history = session.gemini_history[-15:]
-        
     return user_sessions[user_id]
 
 def clear_user_context(user_id: int):
@@ -148,107 +162,62 @@ def prepare_markdown_segment(text: str) -> str:
 
 # ==================== Gemini API 调用（新版） ====================
 async def call_gemini_api(user_message: str, user_session: UserSession, image_data: bytes = None) -> str:
-    """调用新版Gemini API"""
+    """调用新版Gemini API（上下文管理+超时保护）"""
     try:
-        # 构建消息内容列表
-        contents = []
-        
-        # 添加系统提示（如果需要）
         system_prompt = "请用中文回复所有内容。"
         
-        # 构建对话历史
-        messages = []
+        # ✅ 用统一函数清理历史（这是唯一的清理入口）
+        history = trim_history(user_session.gemini_history)
         
-        # 添加历史消息（只保留最近10轮）
-        history = user_session.gemini_history[-20:] if user_session.gemini_history else []
-        
-        # 构建当前消息
-        current_message = user_message
-        
-        # 如果有图片，构建多模态内容
+        # ✅ 构建当前消息内容（逻辑不变，只调整变量名）
         if image_data:
-            # 构建图片和文本混合消息
-            from PIL import Image
-            import io
-            
-            image = Image.open(io.BytesIO(image_data))
-            
-            # 对于多模态，使用 types.Content 构建
             content_parts = []
-            
-            # 添加文本部分
-            content_parts.append(types.Part(text=f"{system_prompt}\n{current_message}" if not history else current_message))
-            
-            # 添加图片部分
-            # 将图片转为base64或直接使用PIL Image
+            content_parts.append(types.Part(
+                text=f"{system_prompt}\n{user_message}" if not history else user_message
+            ))
             content_parts.append(types.Part(inline_data=types.Blob(
                 mime_type="image/jpeg",
                 data=image_data
             )))
-            
-            # 构建完整内容
-            content = types.Content(
-                role="user",
-                parts=content_parts
-            )
-            
-            # 构建完整消息历史（包括当前消息）
-            full_history = []
-            
-            # 添加历史
-            for h in history:
-                full_history.append(types.Content(
-                    role=h["role"],
-                    parts=[types.Part(text=h["content"])]
-                ))
-            
-            # 添加当前消息
-            full_history.append(content)
-            
-            # 调用API
-            response = client.models.generate_content(
-                model=user_session.model_name,
-                contents=full_history
-            )
-            
-            full_response = response.text
-            
+            current_content = types.Content(role="user", parts=content_parts)
         else:
-            # 纯文本对话
-            # 构建消息历史
-            full_history = []
-            
-            # 添加历史消息
-            for h in history:
-                full_history.append(types.Content(
-                    role=h["role"],
-                    parts=[types.Part(text=h["content"])]
-                ))
-            
-            # 添加当前用户消息
-            full_history.append(types.Content(
+            current_content = types.Content(
                 role="user",
-                parts=[types.Part(text=f"{system_prompt}\n{current_message}" if not history else current_message)]
+                parts=[types.Part(
+                    text=f"{system_prompt}\n{user_message}" if not history else user_message
+                )]
+            )
+        
+        # ✅ 构建完整历史
+        full_history = []
+        for h in history:
+            full_history.append(types.Content(
+                role=h["role"],
+                parts=[types.Part(text=h["content"])]
             ))
-            
-            # 调用API
-            response = client.models.generate_content(
+        full_history.append(current_content)
+        
+        # ✅ 关键：加超时保护，防止无限等待
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
                 model=user_session.model_name,
                 contents=full_history
-            )
-            
-            full_response = response.text
+            ),
+            timeout=60
+        )
         
-        # 更新对话历史
-        user_session.gemini_history.append({"role": "user", "content": current_message})
+        full_response = response.text
+        
+        # ✅ 更新历史（追加后立即清理，避免膨胀）
+        user_session.gemini_history.append({"role": "user", "content": user_message})
         user_session.gemini_history.append({"role": "model", "content": full_response})
-        
-        # 限制历史长度
-        if len(user_session.gemini_history) > 40:  # 20轮对话
-            user_session.gemini_history = user_session.gemini_history[-40:]
+        user_session.gemini_history = trim_history(user_session.gemini_history)
         
         return full_response
         
+    except asyncio.TimeoutError:
+        raise Exception("Gemini API 请求超时（60秒），请稍后重试")
     except Exception as e:
         raise Exception(f"Gemini API 调用失败: {str(e)}")
 
