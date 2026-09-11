@@ -287,22 +287,31 @@ class RSSDatabase:
         """改进的状态保存，确保去重一致性"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                # 使用 ON CONFLICT 确保唯一性
-                await conn.execute("""
-                    INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_content_hash, entry_timestamp) 
-                    VALUES($1, $2, $3, $4, $5) 
-                    ON CONFLICT (feed_group, feed_url, entry_url) 
-                    DO UPDATE SET 
-                        entry_content_hash = EXCLUDED.entry_content_hash,
-                        entry_timestamp = EXCLUDED.entry_timestamp
-                """, feed_group, feed_url, entry_url, entry_content_hash, timestamp)
+                try:
+                    await conn.execute("""
+                        INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_content_hash, entry_timestamp) 
+                        VALUES($1, $2, $3, $4, $5) 
+                        ON CONFLICT (feed_group, feed_url, entry_url) 
+                        DO UPDATE SET 
+                            entry_content_hash = EXCLUDED.entry_content_hash,
+                            entry_timestamp = EXCLUDED.entry_timestamp
+                    """, feed_group, feed_url, entry_url, entry_content_hash, timestamp)
+                    logger.warning(f"💾 [DB写入成功] group={feed_group} | hash={entry_content_hash[:12]}")
+                except Exception as e:
+                    logger.error(f"❌ [DB写入失败] group={feed_group} | hash={entry_content_hash[:12]} | error={e}")
+                    raise
         else:
             async with self.conn.cursor() as c:
-                await c.execute(
-                    "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?)",
-                    (feed_group, feed_url, entry_url, entry_content_hash, timestamp)
-                )
-                await self.conn.commit()
+                try:
+                    await c.execute(
+                        "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?)",
+                        (feed_group, feed_url, entry_url, entry_content_hash, timestamp)
+                    )
+                    await self.conn.commit()
+                    logger.warning(f"💾 [DB写入成功] group={feed_group} | hash={entry_content_hash[:12]}")
+                except Exception as e:
+                    logger.error(f"❌ [DB写入失败] group={feed_group} | hash={entry_content_hash[:12]} | error={e}")
+                    raise
 
     async def has_content_hash(self, feed_group, content_hash):
         """改进的内容哈希检查，确保编码一致性"""
@@ -562,7 +571,17 @@ def get_entry_content_hash(entry):
     
     # 创建统一的哈希字符串
     raw_text = title + b'|||' + summary + b'|||' + pub_date
-    return hashlib.sha256(raw_text).hexdigest()
+    content_hash = hashlib.sha256(raw_text).hexdigest()
+    
+    # ✅ 调试日志
+    logger.warning(
+        f"🔍 [哈希] hash={content_hash[:16]} | "
+        f"title={title[:50]} | "
+        f"summary_len={len(summary)} | "
+        f"pub_date={pub_date[:30]}"
+    )
+    
+    return content_hash
 
 def signal_handler(signum, frame):
     """改进的信号处理"""
@@ -1272,16 +1291,25 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                         entry_id = get_entry_identifier(entry)
                         content_hash = get_entry_content_hash(entry)
                         
-                        # ✅ 先查内存缓存
-                        hash_key = f"hash_{group_key}"
-                        # ✅ 再查数据库（兜底）
-                        if await db.has_content_hash(group_key, content_hash):
-                            logger.debug(f"跳过重复内容哈希（数据库）: {content_hash[:16]}...")
-                            continue
+                        # ✅ 查数据库
+                        is_dup = await db.has_content_hash(group_key, content_hash)
                         
+                        # ✅ 详细日志
+                        logger.warning(
+                            f"🔍 [去重检查] group={group_key} | "
+                            f"entry_id={entry_id[:12]} | "
+                            f"hash={content_hash[:12]} | "
+                            f"是否重复={is_dup} | "
+                            f"title={getattr(entry, 'title', '')[:40]}"
+                        )
+                        
+                        if is_dup:
+                            logger.warning(f"✅ 命中重复，跳过: {content_hash[:12]}")
+                            continue
+
                         # 检查 entry_id 去重
                         if entry_id in processed_ids or entry_id in seen_in_batch:
-                            logger.debug(f"跳过重复条目ID: {entry_id[:16]}...")
+                            logger.warning(f"✅ 命中 entry_id 重复，跳过: {entry_id[:12]}")
                             continue
                             
                         # 在当前批次中也用内容哈希去重
@@ -1321,6 +1349,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     feed_data.feed.get('title', "") 
                                 )
                                 await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                logger.warning(f"💾 [已保存] group={group_key} | hash={content_hash[:12]} | entry_id={entry_id[:12]}")
                                 processed_ids.add(entry_id)
                                 
                             # ✅ 保存去重状态
