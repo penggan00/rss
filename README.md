@@ -30,6 +30,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/rss/main/githu
 crontab -e
 24 2 * * * bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
 
+
+10 06 * * * /bin/bash /root/rss/usd.sh > /dev/null 2>&1
+10 16,23 * * 1-5 /bin/bash /root/rss/usd.sh > /dev/null 2>&1
+
 (crontab -l 2>/dev/null; echo "5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/10 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -
@@ -55,7 +59,7 @@ python3 -m venv rss_venv
 pip install google-generativeai
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 /root/rss/usd.py
+python3 /root/rss/mail.py
 ```
 python3 usd.py
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
