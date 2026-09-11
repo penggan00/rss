@@ -263,9 +263,14 @@ def send_to_telegram(message):
         "disable_web_page_preview": True
     }
     try:
-        requests.post(url, json=payload, timeout=10)
-    except:
-        pass
+        with open("/tmp/usd_send.log", "a") as f:
+            f.write(f"{datetime.now().strftime('%F %T')} pid={os.getpid()} sending len={len(message)}\n")
+        r = requests.post(url, json=payload, timeout=10)
+        with open("/tmp/usd_send.log", "a") as f:
+            f.write(f"{datetime.now().strftime('%F %T')} pid={os.getpid()} status={r.status_code}\n")
+    except Exception as e:
+        with open("/tmp/usd_send.log", "a") as f:
+            f.write(f"{datetime.now().strftime('%F %T')} pid={os.getpid()} error={e}\n")
 
 def get_reminders():
     now = datetime.now(hongkong)
@@ -597,11 +602,11 @@ def get_etf_stock(gid, name):
             
             emoji = "🔴" if change > 0 else "🔵"
             sign = "+" if change > 0 else ""
-        return (
-            f"{emoji} {escape_markdown(name)}: *{escape_markdown(f'{price:.3f}')}* "
-            f"(*{sign}{escape_markdown(f'{percent:.2f}')}%*, "
-            f"{sign}{escape_markdown(f'{change:.3f}')})\n"
-        )
+            return (
+                f"{emoji} {escape_markdown(name)}: *{escape_markdown(f'{price:.3f}')}* "
+                f"(*{sign}{escape_markdown(f'{percent:.2f}')}%*, "
+                f"{sign}{escape_markdown(f'{change:.3f}')})\n"
+            )
     except:
         pass
     return ""
