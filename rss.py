@@ -1514,7 +1514,7 @@ async def run_main_logic():
     except asyncio.TimeoutError:
         logger.error("❌ 数据库连接超时")
         raise
-    except fcntl.error as e:
+    except OSError as e:
         logger.error(f"❌ 获取文件锁失败: {e}")
         raise
     except Exception as e:
