@@ -298,73 +298,73 @@ class RSSDatabase:
                 """, (feed_group, ts))
                 await self.conn.commit()
 
-async def batch_save_status(self, records):
-    """批量写入，失败时降级为单个写入"""
-    if not records:
-        return
-    
-    if USE_PG:
-        async with self.pg_pool.acquire() as conn:
-            try:
-                await conn.executemany("""
-                    INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
-                    VALUES ($1, $2, $3, $4, $5, $6) 
-                    ON CONFLICT (feed_group, feed_url, entry_url) 
-                    DO UPDATE SET 
-                        entry_link_hash = EXCLUDED.entry_link_hash,
-                        entry_title_hash = EXCLUDED.entry_title_hash,
-                        entry_timestamp = EXCLUDED.entry_timestamp
-                """, records)
-            #    logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
-            except Exception as e:
-                logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
-                # ✅ 降级：逐条写入
-                success_count = 0
-                fail_count = 0
-                for record in records:
-                    try:
-                        await conn.execute("""
-                            INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
-                            VALUES ($1, $2, $3, $4, $5, $6) 
-                            ON CONFLICT (feed_group, feed_url, entry_url) 
-                            DO UPDATE SET 
-                                entry_link_hash = EXCLUDED.entry_link_hash,
-                                entry_title_hash = EXCLUDED.entry_title_hash,
-                                entry_timestamp = EXCLUDED.entry_timestamp
-                        """, *record)
-                        success_count += 1
-                    except Exception as single_error:
-                        fail_count += 1
-                        logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
-                
-                logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
-    else:
-        async with self.conn.cursor() as c:
-            try:
-                await c.executemany(
-                    "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
-                    records
-                )
-                await self.conn.commit()
-              #  logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
-            except Exception as e:
-                logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
-                # ✅ 降级：逐条写入
-                success_count = 0
-                fail_count = 0
-                for record in records:
-                    try:
-                        await c.execute(
-                            "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
-                            record
-                        )
-                        success_count += 1
-                    except Exception as single_error:
-                        fail_count += 1
-                        logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
-                
-                await self.conn.commit()
-                logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
+    async def batch_save_status(self, records):
+        """批量写入，失败时降级为单个写入"""
+        if not records:
+            return
+        
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                try:
+                    await conn.executemany("""
+                        INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
+                        VALUES ($1, $2, $3, $4, $5, $6) 
+                        ON CONFLICT (feed_group, feed_url, entry_url) 
+                        DO UPDATE SET 
+                            entry_link_hash = EXCLUDED.entry_link_hash,
+                            entry_title_hash = EXCLUDED.entry_title_hash,
+                            entry_timestamp = EXCLUDED.entry_timestamp
+                    """, records)
+                #    logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
+                except Exception as e:
+                    logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
+                    # ✅ 降级：逐条写入
+                    success_count = 0
+                    fail_count = 0
+                    for record in records:
+                        try:
+                            await conn.execute("""
+                                INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
+                                VALUES ($1, $2, $3, $4, $5, $6) 
+                                ON CONFLICT (feed_group, feed_url, entry_url) 
+                                DO UPDATE SET 
+                                    entry_link_hash = EXCLUDED.entry_link_hash,
+                                    entry_title_hash = EXCLUDED.entry_title_hash,
+                                    entry_timestamp = EXCLUDED.entry_timestamp
+                            """, *record)
+                            success_count += 1
+                        except Exception as single_error:
+                            fail_count += 1
+                            logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
+                    
+                    logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
+        else:
+            async with self.conn.cursor() as c:
+                try:
+                    await c.executemany(
+                        "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
+                        records
+                    )
+                    await self.conn.commit()
+                #  logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
+                except Exception as e:
+                    logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
+                    # ✅ 降级：逐条写入
+                    success_count = 0
+                    fail_count = 0
+                    for record in records:
+                        try:
+                            await c.execute(
+                                "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
+                                record
+                            )
+                            success_count += 1
+                        except Exception as single_error:
+                            fail_count += 1
+                            logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
+                    
+                    await self.conn.commit()
+                    logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
 
     async def batch_has_hashes(self, feed_group, link_hashes, title_hashes=None):
         """批量查询：查 link_hash，如果 title_hashes 非空也查 title_hash"""
@@ -650,12 +650,6 @@ def get_entry_hashes(entry, title_dedup=False):
     if title_dedup:
         title = getattr(entry, 'title', '') or ''
         title_hash = hashlib.sha256(title.strip().encode('utf-8')).hexdigest()
-    
-    logger.warning(
-        f"🔍 [哈希] link={link_hash[:16]} | "
-        f"title={title_hash[:16] if title_hash else 'N/A'} | "
-        f"title_dedup={title_dedup}"
-    )
     
     return link_hash, title_hash
 
@@ -1296,7 +1290,7 @@ async def process_batch_send(group, db: RSSDatabase):
                 # ✅ 关键改动：发送成功后，批量写入 rss_status
                 records = [
                     (group_key, row["feed_url"], row["entry_id"], 
-                     row["link_hash"], row["title_hash"], time.time())
+                    row["link_hash"], row["title_hash"], time.time())
                     for row in msgs
                 ]
                 await db.batch_save_status(records)
@@ -1321,7 +1315,7 @@ async def process_batch_send(group, db: RSSDatabase):
         await db.mark_pending_as_sent(group_key, force_sent_entry_ids)
     
     await db.save_last_batch_sent_time(group_key, now)
-    
+        
 # ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
     """处理单个RSS组"""
