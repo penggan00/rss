@@ -459,9 +459,8 @@ class EmailToTelegramBot:
         elif email_data['plain_content']:
             content = email_data['plain_content']
             # 纯文本也做 URL 边界处理，避免 URL 与中文粘连
-            content = self.separate_url_from_chinese(content)
-            # 顺手把 3 个以上连续空行压成 2 个
-            content = re.sub(r'(\n\s*){3,}', '\n\n', content)
+        elif email_data['plain_content']:
+            content = email_data['plain_content']
         else:
             content = "【此邮件无正文内容】"
         
@@ -500,6 +499,11 @@ class EmailToTelegramBot:
             except Exception as e:
                 logging.error(f"安全翻译失败: {e}")
                 # 翻译失败时保留原文
+        
+        # ★★★ 翻译之后统一做 URL 边界处理（关键：必须在翻译之后）★★★
+        # 翻译服务可能把 URL 和中文又粘一起，或者吃掉 URL 后的空格
+        content = self.separate_url_from_chinese(content)
+        content = re.sub(r'(\n\s*){3,}', '\n\n', content)
         
         # 构建符合要求的Markdown消息格式
         markdown_message = ""
