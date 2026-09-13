@@ -2651,10 +2651,10 @@ class EmailToTelegramBot:
             return text, []
         
         store = []
-        
+            
         def stash(match):
             store.append(match.group(0))
-            return f'⟦STASH{len(store)-1}⟧'
+            return f'__STASH_{len(store)-1}__'
         
         # 顺序很重要
         # 1. Markdown 链接 [文本](URL)
@@ -2667,16 +2667,18 @@ class EmailToTelegramBot:
         text = re.sub(r'^(\s*)([#*\-+>]\s+)', lambda m: m.group(1) + stash(m), text, flags=re.MULTILINE)
         # ★★★ 5. 特殊符号（·、→、• 等）★★★
         text = re.sub(r'[·→•⟦⟧]', stash, text)
-        
+        # 保护行首的 Markdown 标记（#、*、-、+、>）
+        text = re.sub(r'^(\s*)([#*\-+>])', lambda m: m.group(1) + stash(m), text, flags=re.MULTILINE)
+        # 保护特殊符号
+        text = re.sub(r'[·→•]', stash, text)
         return text, store
 
 
     def restore_urls_and_links(self, text, store):
-        """把占位符还原成原始 URL / Markdown 链接"""
         if not text:
             return text
         for i, item in enumerate(store):
-            text = text.replace(f'⟦STASH{i}⟧', item)
+            text = text.replace(f'__STASH_{i}__', item)
         return text
 
 async def main_async():
