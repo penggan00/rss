@@ -454,11 +454,7 @@ class EmailToTelegramBot:
             from_email = from_email.replace('\\', ' ')  # 去除反斜杠
             
         if email_data['html_content']:
-            # 在转换前先预处理HTML（包括移除空链接）
             content = self.convert_html_to_markdown(email_data['html_content'])
-        elif email_data['plain_content']:
-            content = email_data['plain_content']
-            # 纯文本也做 URL 边界处理，避免 URL 与中文粘连
         elif email_data['plain_content']:
             content = email_data['plain_content']
         else:
@@ -501,7 +497,6 @@ class EmailToTelegramBot:
                 # 翻译失败时保留原文
         
         # ★★★ 翻译之后统一做 URL 边界处理（关键：必须在翻译之后）★★★
-        # 翻译服务可能把 URL 和中文又粘一起，或者吃掉 URL 后的空格
         content = self.separate_url_from_chinese(content)
         content = re.sub(r'(\n\s*){3,}', '\n\n', content)
         
