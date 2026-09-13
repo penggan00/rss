@@ -775,37 +775,56 @@ class EmailToTelegramBot:
         result = '\n'.join(processed_lines)
         
         return result
-    
+        
     def postprocess_markdown(self, markdown):
         """后处理Markdown内容 - 优化空行和特殊字符处理"""
         if not markdown:
             return ""
 
-        # 清理特殊字符和标准化空白
+        # 1. 清理特殊字符和标准化空白
         markdown = self.normalize_whitespace(markdown)
-        # 新增：删除整行都是不可见字符的行
+        # 2. 删除整行都是不可见字符的行
         markdown = self.remove_invisible_lines(markdown)
-
-        # 新增：专门清理空文本的Markdown链接
+        # 3. 清理空文本的 Markdown 链接
         markdown = self.remove_empty_markdown_links(markdown)
-        
-        # 新增：移除超长URL
+        # 4. 修复链接文本和 URL 中的换行（关键：在 URL 长度判断前）
+        markdown = self.fix_multiline_links(markdown)
+        # 5. 裸 URL 后紧跟中文时插空格（关键：让 URL 边界清晰）
+        markdown = self.separate_url_from_chinese(markdown)
+        # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
         markdown = self.remove_long_urls(markdown)
-        
-        # 新增：将邮箱地址转换为等宽字体
+        # 7. 邮箱转等宽
         markdown = self.format_email_addresses(markdown)
-        
-        # 新增：清理序号间的空行（保持独立功能）
-        #  markdown = self.remove_blank_lines_between_sequences(markdown)
-
-        # 新增：去除空的 [] 和 () 组合
+        # 8. 去除空的括号组合
         markdown = self.remove_empty_brackets(markdown)
 
-        # ★★★ 新增：修复链接文本中的换行 ★★★
-        markdown = self.fix_multiline_links(markdown)
-
         return markdown
-
+    
+    def separate_url_from_chinese(self, text):
+        """纯文本 URL 后紧跟中文时插入空格（不动 Markdown 链接）"""
+        if not text:
+            return text
+        
+        # 先把 Markdown 链接 []() 抠出来保护
+        link_store = []
+        def stash_link(match):
+            link_store.append(match.group(0))
+            return f'\x00LINK{len(link_store)-1}\x00'
+        
+        text = re.sub(r'\[[^\]]*\]\([^)]*\)', stash_link, text, flags=re.DOTALL)
+        
+        # 在裸 URL 后紧跟中文/全角标点时插空格
+        def add_space(match):
+            return f'{match.group(1)} {match.group(2)}'
+        
+        pattern = r'(https?://[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+)([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])'
+        text = re.sub(pattern, add_space, text)
+        
+        # 放回 Markdown 链接
+        for i, link in enumerate(link_store):
+            text = text.replace(f'\x00LINK{i}\x00', link)
+        
+        return text
     def fix_multiline_links(self, text):
         """修复 Markdown 链接文本和 URL 中的换行"""
         if not text:
