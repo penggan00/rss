@@ -139,6 +139,8 @@ class RSSDatabase:
                         feed_url TEXT,
                         entry_id TEXT,
                         content_hash TEXT,
+                        link_hash TEXT,
+                        title_hash TEXT,
                         title TEXT,
                         translated_title TEXT,
                         link TEXT,
@@ -191,6 +193,8 @@ class RSSDatabase:
                         feed_url TEXT,
                         entry_id TEXT,
                         content_hash TEXT,
+                        link_hash TEXT,
+                        title_hash TEXT,
                         title TEXT,
                         translated_title TEXT,
                         link TEXT,
@@ -209,21 +213,21 @@ class RSSDatabase:
                 """)
                 await self.conn.commit()
 
-    async def add_pending_message(self, feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp, feed_title):
+    async def add_pending_message(self, feed_group, feed_url, entry_id, content_hash, link_hash, title_hash, title, translated_title, link, summary, timestamp, feed_title):
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 await conn.execute("""
-                INSERT INTO pending_messages (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, entry_timestamp, sent, feed_title)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10)
+                INSERT INTO pending_messages (feed_group, feed_url, entry_id, content_hash, link_hash, title_hash, title, translated_title, link, summary, entry_timestamp, sent, feed_title)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12)
                 ON CONFLICT DO NOTHING
-                """, feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp, feed_title)
+                """, feed_group, feed_url, entry_id, content_hash, link_hash, title_hash, title, translated_title, link, summary, timestamp, feed_title)
         else:
             async with self.conn.cursor() as c:
                 await c.execute("""
                     INSERT OR IGNORE INTO pending_messages
-                    (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, entry_timestamp, sent, feed_title)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """, (feed_group, feed_url, entry_id, content_hash, title, translated_title, link, summary, timestamp, feed_title))
+                    (feed_group, feed_url, entry_id, content_hash, link_hash, title_hash, title, translated_title, link, summary, entry_timestamp, sent, feed_title)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """, (feed_group, feed_url, entry_id, content_hash, link_hash, title_hash, title, translated_title, link, summary, timestamp, feed_title))
                 await self.conn.commit()
 
     async def get_pending_messages(self, feed_group):
@@ -1203,7 +1207,6 @@ async def process_batch_send(group, db: RSSDatabase):
     if not batch_interval:
         return
     
-    # ✅ 配置：最大重试次数（超过这个次数就放弃）
     MAX_RETRY_COUNT = 3
     timeout_seconds = batch_interval * MAX_RETRY_COUNT
     
@@ -1217,7 +1220,6 @@ async def process_batch_send(group, db: RSSDatabase):
         await db.save_last_batch_sent_time(group_key, now)
         return
 
-    # ✅ 计算超时截止时间
     timeout_cutoff = now - timeout_seconds
 
     # 按 feed_url 分组消息
@@ -1227,12 +1229,11 @@ async def process_batch_send(group, db: RSSDatabase):
 
     bot = Bot(token=bot_token)
     sent_entry_ids = []
-    force_sent_entry_ids = []  # ✅ 定义强制放弃的列表
+    force_sent_entry_ids = []
 
     for feed_url, msgs in feed_url_to_msgs.items():
         feed_title = (msgs[0].get("feed_title") or group.get("name") or feed_url)
         
-        # 创建模拟的feed和entry对象
         class DummyFeed:
             feed = {'title': feed_title}
             
@@ -1244,26 +1245,31 @@ async def process_batch_send(group, db: RSSDatabase):
         entries = [Entry(row) for row in msgs]
         
         try:
-            # 生成消息内容
             feed_message = await generate_group_message(
                 DummyFeed, entries, {**processor, "translate": False}
             )
             
             if feed_message:
-                # 发送消息（支持分段）
                 await send_batch_messages(
                     bot,
                     TELEGRAM_CHAT_ID[0],
                     feed_message,
                     disable_web_page_preview=not processor.get("preview", True)
                 )
-                # 记录已发送的消息ID
+                # ✅ 发送成功 → 记录
                 sent_entry_ids.extend([row["entry_id"] for row in msgs])
+                
+                # ✅ 关键改动：发送成功后，批量写入 rss_status
+                records = [
+                    (group_key, row["feed_url"], row["entry_id"], 
+                     row["link_hash"], row["title_hash"], time.time())
+                    for row in msgs
+                ]
+                await db.batch_save_status(records)
                 
         except Exception as e:
             logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
             
-            # ✅ 检查超时：如果消息已存在超过 timeout_seconds，强制放弃
             for row in msgs:
                 if row["entry_timestamp"] < timeout_cutoff:
                     force_sent_entry_ids.append(row["entry_id"])
@@ -1276,7 +1282,7 @@ async def process_batch_send(group, db: RSSDatabase):
     if sent_entry_ids:
         await db.mark_pending_as_sent(group_key, sent_entry_ids)
     
-    # ✅ 标记强制放弃的
+    # 标记强制放弃的
     if force_sent_entry_ids:
         await db.mark_pending_as_sent(group_key, force_sent_entry_ids)
     
@@ -1359,19 +1365,18 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     translated_subject = raw_subject
                                     
                                 await db.add_pending_message(
-                                    group_key, canonical_url, entry_id, link_hash,
+                                    group_key, canonical_url, entry_id, 
+                                    link_hash,   # content_hash（兼容旧字段）
+                                    link_hash,   # link_hash
+                                    title_hash,  # title_hash
                                     getattr(entry, "title", ""), translated_subject,
                                     getattr(entry, "link", ""), getattr(entry, "summary", ""),
                                     get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
                                     feed_data.feed.get('title', "")
                                 )
-                            
-                            # ✅ 批量写入 rss_status
-                            records = [
-                                (group_key, canonical_url, entry_id, link_hash, title_hash, time.time())
-                                for entry, link_hash, title_hash, entry_id in new_entries
-                            ]
-                            await db.batch_save_status(records)
+                                                            
+                            # ✅ 关键改动：不在这里写 rss_status
+                            # 等 process_batch_send 发送成功后再写
                                 
                         elif send_separately:
                             # 单独发送模式
