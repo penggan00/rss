@@ -795,15 +795,15 @@ class EmailToTelegramBot:
         markdown = self.remove_empty_markdown_links(markdown)
         # 4. 修复链接文本和 URL 中的换行（关键：在 URL 长度判断前）
         markdown = self.fix_multiline_links(markdown)
-        markdown = re.sub(r'\*\*`([^`]+)`\*\*', r'`\1`', markdown)
-        # 斜体包等体字 → 只留等体字
-        markdown = re.sub(r'\*`([^`]+)`\*', r'`\1`', markdown)
         # 5. 裸 URL 后紧跟中文时插空格（关键：让 URL 边界清晰）
         markdown = self.separate_url_from_chinese(markdown)
         # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
         markdown = self.remove_long_urls(markdown)
         # 7. 邮箱转等宽
         markdown = self.format_email_addresses(markdown)
+        markdown = re.sub(r'\*\*`([^`]+)`\*\*', r'`\1`', markdown)
+        # 斜体包等体字 → 只留等体字
+        markdown = re.sub(r'\*`([^`]+)`\*', r'`\1`', markdown)
         # 8. 去除空的括号组合
         markdown = self.remove_empty_brackets(markdown)
 
