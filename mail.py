@@ -23,7 +23,7 @@ load_dotenv()
 # 获取当前脚本所在的绝对目录
 current_dir = Path(__file__).parent.absolute()
 log_file_path = current_dir / "mail.log"
-VERBOSE_LOG = os.getenv('VERBOSE_LOG', 'false').lower() == 'true'
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -33,10 +33,6 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
-def vprint(*args, **kwargs):
-    """只在 VERBOSE_LOG=true 时打印"""
-    if VERBOSE_LOG:
-        print(*args, **kwargs)
 
 logger = logging.getLogger(__name__)
 telegram_bot_logger = logging.getLogger('telegram.bot')
@@ -288,8 +284,7 @@ class EmailToTelegramBot:
         self.h.ignore_emphasis = False
         self.h.ignore_tables = False
         self.h.mark_code = True
-        self.h.use_automatic_links = False
-
+            
     def _parse_chat_ids(self, chat_ids_str):
         """解析聊天ID，只支持单个ID"""
         if not chat_ids_str:
@@ -782,38 +777,29 @@ class EmailToTelegramBot:
         result = '\n'.join(processed_lines)
         
         return result
-            
+        
     def postprocess_markdown(self, markdown):
         """后处理Markdown内容 - 优化空行和特殊字符处理"""
         if not markdown:
             return ""
-        
+
         # 1. 清理特殊字符和标准化空白
         markdown = self.normalize_whitespace(markdown)
         # 2. 删除整行都是不可见字符的行
         markdown = self.remove_invisible_lines(markdown)
         # 3. 清理空文本的 Markdown 链接
         markdown = self.remove_empty_markdown_links(markdown)
-        # 4. 修复链接文本和 URL 中的换行
+        # 4. 修复链接文本和 URL 中的换行（关键：在 URL 长度判断前）
         markdown = self.fix_multiline_links(markdown)
-        
-        # ★★★ 新增：把 <URL> 转成裸 URL（避免 Telegram 不认 <URL> 格式）★★★
-        markdown = re.sub(r'<\s*(https?://[^\s>]+)\s*>', r'\1', markdown)
-        
-        # 5. 裸 URL 后紧跟中文时插空格
+        # 5. 裸 URL 后紧跟中文时插空格（关键：让 URL 边界清晰）
         markdown = self.separate_url_from_chinese(markdown)
         # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
         markdown = self.remove_long_urls(markdown)
-        # 7. 邮箱不处理（format_email_addresses 现在直接返回原文）
-        markdown = re.sub(r'\*\*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\*\*', r'\1', markdown)
-        markdown = re.sub(r'\*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\*', r'\1', markdown)
+        # 7. 邮箱转等宽
         markdown = self.format_email_addresses(markdown)
-        # 8. 去嵌套（粗体/斜体套等体字）
-        markdown = re.sub(r'\*\*`([^`]+)`\*\*', r'`\1`', markdown)
-        markdown = re.sub(r'\*`([^`]+)`\*', r'`\1`', markdown)
-        # 9. 去除空的括号组合
+        # 8. 去除空的括号组合
         markdown = self.remove_empty_brackets(markdown)
-        
+
         return markdown
     
     def separate_url_from_chinese(self, text):
@@ -894,7 +880,25 @@ class EmailToTelegramBot:
 
     
     def format_email_addresses(self, text):
-        """邮箱不处理，原文显示"""
+        """
+        将邮箱地址用等宽字体标记，但不处理URL
+        """
+        if not text:
+            return text
+        
+        # 邮箱地址正则表达式模式
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        
+        def wrap_email_in_monospace(match):
+            email = match.group(0)
+            return f'`{email}`'
+        
+        # 使用正则表达式替换邮箱地址
+        text = re.sub(email_pattern, wrap_email_in_monospace, text)
+        
+        # 删除URL包装为等体字的功能
+        # 原来的URL处理代码已移除
+        
         return text
 
     def fix_url_format(self, url):
@@ -945,55 +949,51 @@ class EmailToTelegramBot:
             logging.warning(f"URL修复失败 {original_url}: {e}")
             return original_url
     
-    def remove_long_urls(self, text, max_url_length=300):
+    def remove_long_urls(self, text, max_url_length=300):  # 降低到300字符更安全
         """
-        增强版URL清理 - 超长 URL 删除后加空格
+        增强版URL清理 - 更彻底地移除长链接
         """
         if not text:
             return text
         
         def replace_long_markdown_link(match):
-            """Markdown 链接 [文本](URL)：超长时只保留文本 + 空格"""
             link_text = match.group(1)
             url = match.group(2)
-            if len(url) > max_url_length:
-                return f'{link_text} '
-            return match.group(0)
+            
+            url_length = len(url)
+            if url_length > max_url_length:
+            #    logging.info(f"🚫 移除超长Markdown链接: {url[:30]}... (长度: {url_length})")
+                return link_text  # 只保留链接文本
+            else:
+                return match.group(0)  # 保留完整链接
         
         def replace_long_plain_url(match):
-            """裸 URL：超长时替换成一个空格"""
             url = match.group(0)
-            if len(url) > max_url_length:
-                return ' '
-            return url
+            url_length = len(url)
+            if url_length > max_url_length:
+      #          logging.info(f"🚫 移除超长纯文本URL: {url[:30]}... (长度: {url_length})")
+                return ""  # 完全移除
+            else:
+                return url  # 保留
         
-        def replace_wrapped_url(match):
-            """<URL>、(URL)、[URL]：超长时整个替换成一个空格"""
-            url = match.group(2)
-            if len(url) > max_url_length:
-                return ' '
-            return match.group(0)
+        # 增强的URL匹配模式
+        url_patterns = [
+            # Markdown链接 [文本](URL)
+            (r'\[([^\]]+)\]\(([^)]+)\)', replace_long_markdown_link),
+            
+            # 纯文本URL（更全面的匹配）
+            (r'https?://[^\s<>"{}|\\^`\[\]()]{10,}', replace_long_plain_url),
+            
+            # 没有协议的URL（如 www.example.com/path）
+            (r'www\.[^\s<>"{}|\\^`\[\]()]{10,}', replace_long_plain_url),
+        ]
         
-        # ★★★ 1. 先处理包裹 URL（<>、()、[]），避免与 Markdown 链接冲突 ★★★
-        # <URL> 或 <URL >
-        text = re.sub(r'(<)\s*(https?://[^\s>]+)\s*(>)', replace_wrapped_url, text)
-        # (URL) 或 (URL )
-        text = re.sub(r'(\()\s*(https?://[^\s)]+)\s*(\))', replace_wrapped_url, text)
-        # [URL] 或 [URL ]
-        text = re.sub(r'(\[)\s*(https?://[^\s\]]+)\s*(\])', replace_wrapped_url, text)
-        
-        # ★★★ 2. Markdown 链接 [文本](URL) ★★★
-        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_long_markdown_link, text)
-        
-        # ★★★ 3. 裸 URL ★★★
-        text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]()]{10,}', replace_long_plain_url, text)
-        text = re.sub(r'www\.[^\s<>"{}|\\^`\[\]()]{10,}', replace_long_plain_url, text)
-        
-        # ★★★ 4. 压缩连续空格 ★★★
-        text = re.sub(r' {2,}', ' ', text)
+        # 多次处理确保没有漏网之鱼
+        for pattern, replacement_func in url_patterns:
+            text = re.sub(pattern, replacement_func, text)
         
         return text
-        
+    
     def remove_invisible_lines(self, text):
         """
         删除整行中的不可见字符，但保留行结构
@@ -1092,23 +1092,19 @@ class EmailToTelegramBot:
         
         print(f"🔤 原始文本: {text}")
         
-        # ★★★ 先把 URL、等体字、邮箱都抠出来保护 ★★★
+        # ★★★ 先把所有 URL 抠出来保护，避免被 replace_dots_safely 误伤 ★★★
         url_store = []
         def stash_url(match):
             url_store.append(match.group(0))
             return f'\x00URL{len(url_store)-1}\x00'
         
-        # 保护等体字
-        text = re.sub(r'`[^`]*`', stash_url, text)
-        # ★★★ 保护邮箱（不管外面有没有 * 或 **）★★★
-        text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', stash_url, text)
         # 保护裸 URL
         text = re.sub(r'https?://[^\s]+', stash_url, text)
         
-        # 现在 URL、等体字、邮箱都被替换成占位符
+        # 现在 URL 被替换成占位符，safe 做点号替换
         text = self.replace_dots_safely(text)
         
-        # 恢复
+        # 恢复 URL
         for i, url in enumerate(url_store):
             text = text.replace(f'\x00URL{i}\x00', url)
         
@@ -1212,8 +1208,7 @@ class EmailToTelegramBot:
         def process_monospace_content(match):
             content = match.group(1)
             print(f"\n🔍 找到等体字内容: '{content}' (长度: {len(content)})")
-            content = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', content)
-
+            
             # 第一步：智能清理反斜杠
             if self.looks_like_url(content):
                 # URL特殊处理：保护URL结构
@@ -1285,7 +1280,7 @@ class EmailToTelegramBot:
             return text
         
         # Telegram MarkdownV2需要转义的特殊字符
-        markdown_special_chars = '_*[]()~`>#+-=|{}.!'   # ← 加回 .
+        markdown_special_chars = '_*[]()~`>#+-=|{}!'
         
         result = text
         for char in markdown_special_chars:
@@ -1505,33 +1500,38 @@ class EmailToTelegramBot:
             return False
 
     def _convert_to_plaintext(self, markdown_content):
+        """将Markdown内容转换为安全的纯文本"""
         if not markdown_content:
             return ""
         
         text = markdown_content
         
-        # 1. 代码块
+        # 分步骤清理Markdown语法
+        # 1. 移除代码块
         text = re.sub(r'```.*?\n(.*?)\n```', r'\1', text, flags=re.DOTALL)
         
-        # 2. 行内代码
+        # 2. 移除行内代码
         text = re.sub(r'`(.*?)`', r'\1', text)
         
-        # 3. 粗体/斜体
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-        text = re.sub(r'\*(.*?)\*', r'\1', text)
-        text = re.sub(r'__(.*?)__', r'\1', text)
-        text = re.sub(r'_(.*?)_', r'\1', text)
+        # 3. 移除粗体和斜体标记但保留内容
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # 粗体
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # 斜体
+        text = re.sub(r'__(.*?)__', r'\1', text)      # 下划线粗体
+        text = re.sub(r'_(.*?)_', r'\1', text)        # 下划线斜体
         
-        # 4. ★★★ Markdown 链接 → 文本 (URL)，保留链接 ★★★
-        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1 (\2)', text)
+        # 4. 移除链接标记但保留文本
+     #   text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # [文本](链接) -> 文本
         
-        # 5. 清理危险字符
-        text = re.sub(r'[\\#]', ' ', text)
+        # 5. 移除可能引起问题的特殊字符（但保留基本标点）
+      #  problematic_chars = r'[\\`*_{}[\]()#+-.!|~>]'
+        problematic_chars = r'[\\#]'  # 只匹配反斜杠和井号
+        text = re.sub(problematic_chars, ' ', text)
         
-        # 6. 空白标准化
-        text = re.sub(r'\n[ \t]*\n[ \t]*\n+', '\n\n', text)
-        text = re.sub(r'^\n+', '', text)
-        text = re.sub(r'\n+$', '', text)
+        # 6. 标准化空白（保留段落结构）
+       # text = re.sub(r'[ \t]+', ' ', text)  # 合并多个空格
+        text = re.sub(r'\n[ \t]*\n[ \t]*\n+', '\n\n', text)  # 保留最多两个连续空行
+        text = re.sub(r'^\n+', '', text)  # 移除开头的空行
+        text = re.sub(r'\n+$', '', text)  # 移除结尾的空行
         
         return text.strip()
     
@@ -2496,24 +2496,29 @@ class EmailToTelegramBot:
         return None
     
     def translate_content_sync_safe(self, text):
+        """安全翻译，优先 LibreTranslate，失败后降级 DeepL"""
         if not text or not ENABLE_TRANSLATION:
             return text
         
-        # 1. 把 URL 和链接抠成占位符
-        stashed_text, store = self.stash_urls_and_links(text)
+        # 1. 先分割URL和纯文本
+        segments = self.split_text_around_urls(text)
+        final_segments = []
         
-        # 2. 翻译
-        if len(stashed_text.encode('utf-8')) <= 1900:
-            translated = self.translate_with_fallback(stashed_text)
-        else:
-            translated = self.translate_long_text_with_fallback(stashed_text)
+        for segment in segments:
+            if self.contains_url_or_code(segment):
+                # URL部分直接保留
+                final_segments.append(segment)
+            else:
+                # 纯文本部分
+                if len(segment.encode('utf-8')) <= 1900:
+                    translated = self.translate_with_fallback(segment)
+                    final_segments.append(translated if translated else segment)
+                else:
+                    # 长文本分段翻译
+                    segmented_translation = self.translate_long_text_with_fallback(segment)
+                    final_segments.append(segmented_translation if segmented_translation else segment)
         
-        if not translated:
-            return text
-        
-        # 3. 还原
-        translated = self.restore_urls_and_links(translated, store)
-        return translated
+        return ''.join(final_segments)
     
     def translate_with_fallback(self, text):
         """
@@ -2637,6 +2642,53 @@ class EmailToTelegramBot:
         
         return "\n\n".join(segments)
 
+    def split_text_around_urls(self, text):
+        """将文本分割为URL/代码部分和纯文本部分"""
+        if not text:
+            return [text]
+        
+        segments = []
+        last_end = 0
+        
+        # 匹配所有需要保护的模式
+        patterns = [
+            r'`[^`]*`',  # 等体字
+            r'\[[^\]]+\]\([^)]+\)',  # Markdown链接
+            r'https?://[^\s<>"{}|\\^`\[\]()]+',  # 纯URL
+        ]
+        
+        # 组合所有模式
+        combined_pattern = '|'.join(patterns)
+        
+        for match in re.finditer(combined_pattern, text):
+            # 添加匹配前的纯文本
+            if match.start() > last_end:
+                segments.append(text[last_end:match.start()])
+            
+            # 添加匹配的URL/代码（不翻译）
+            segments.append(match.group(0))
+            last_end = match.end()
+        
+        # 添加剩余文本
+        if last_end < len(text):
+            segments.append(text[last_end:])
+        
+        return segments
+
+    def contains_url_or_code(self, text):
+        """检查文本是否包含URL或代码"""
+        patterns = [
+            r'`[^`]*`',
+            r'\[[^\]]+\]\([^)]+\)', 
+            r'https?://[^\s<>"{}|\\^`\[\]()]+',
+            r'www\.[^\s<>"{}|\\^`\[\]()]+',
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, text):
+                return True
+        return False
+
     def translate_segment_safe(self, text):
         """安全地翻译文本片段（使用 LibreTranslate -> DeepL 降级链）"""
         if not text.strip():
@@ -2644,47 +2696,6 @@ class EmailToTelegramBot:
         
         # 直接使用带降级的翻译方法
         return self.translate_with_fallback(text)
-        
-    def stash_urls_and_links(self, text):
-        """把 URL、Markdown 链接、等体字、Markdown 符号抠出来，替换成占位符"""
-        if not text:
-            return text, []
-        
-        store = []
-        
-        def stash(match):
-            store.append(match.group(0))
-            return f'__STASH_{len(store)-1}__'
-        
-        def stash_symbol(match):
-            store.append(match.group(0))   # 只 stash "符号+空格"
-            return f'__STASH_{len(store)-1}__'
-        
-        # 顺序很重要
-        # 1. Markdown 链接 [文本](URL)
-        text = re.sub(r'\[[^\]]*\]\([^)]*\)', stash, text, flags=re.DOTALL)
-        # 2. 等体字
-        text = re.sub(r'`[^`]*`', stash, text)
-        # 3. 裸 URL
-        text = re.sub(r'https?://[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+', stash, text)
-        # 4. 行首的 Markdown 标记（#、*、-、+、>）+ 后面的空格
-        text = re.sub(
-            r'(?<=^|\s)([#*\-+>])\s+',
-            lambda m: stash_symbol(m),
-            text,
-            flags=re.MULTILINE
-        )
-        # 5. 特殊符号（·、→、•）
-        text = re.sub(r'[·→•]', stash, text)
-        
-        return text, store
-
-    def restore_urls_and_links(self, text, store):
-        if not text:
-            return text
-        for i, item in enumerate(store):
-            text = text.replace(f'__STASH_{i}__', item)
-        return text
 
 async def main_async():
     """异步主函数"""
