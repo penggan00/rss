@@ -795,6 +795,9 @@ class EmailToTelegramBot:
         markdown = self.remove_empty_markdown_links(markdown)
         # 4. 修复链接文本和 URL 中的换行（关键：在 URL 长度判断前）
         markdown = self.fix_multiline_links(markdown)
+        markdown = re.sub(r'\*\*`([^`]+)`\*\*', r'`\1`', markdown)
+        # 斜体包等体字 → 只留等体字
+        markdown = re.sub(r'\*`([^`]+)`\*', r'`\1`', markdown)
         # 5. 裸 URL 后紧跟中文时插空格（关键：让 URL 边界清晰）
         markdown = self.separate_url_from_chinese(markdown)
         # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
@@ -1287,7 +1290,7 @@ class EmailToTelegramBot:
             return text
         
         # Telegram MarkdownV2需要转义的特殊字符
-        markdown_special_chars = '_*[]()~`>#+-=|{}!'
+        markdown_special_chars = '_*[]()~`>#+-=|{}.!'   # ← 加回 .
         
         result = text
         for char in markdown_special_chars:
