@@ -804,7 +804,7 @@ async def should_send_entry(entry, processor):
     has_keyword = any(keyword in content for keyword in keywords)
     
     # 记录过滤详情（调试用）
-    logger.debug(f"[关键词过滤] 范围: {scope} | 标题: {title[:50]} | 链接: {link[:50]} | 关键词: {keywords} | 模式: {mode} | 命中: {has_keyword}")
+   # logger.debug(f"[关键词过滤] 范围: {scope} | 标题: {title[:50]} | 链接: {link[:50]} | 关键词: {keywords} | 模式: {mode} | 命中: {has_keyword}")
     
     # 根据模式决定是否发送
     if not keywords:  # 如果没有关键词，根据模式决定
