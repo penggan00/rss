@@ -2644,16 +2644,20 @@ class EmailToTelegramBot:
         
         # 直接使用带降级的翻译方法
         return self.translate_with_fallback(text)
-    
+        
     def stash_urls_and_links(self, text):
         """把 URL、Markdown 链接、等体字、Markdown 符号抠出来，替换成占位符"""
         if not text:
             return text, []
         
         store = []
-            
+        
         def stash(match):
             store.append(match.group(0))
+            return f'__STASH_{len(store)-1}__'
+        
+        def stash_symbol(match):
+            store.append(match.group(0))   # 只 stash "符号+空格"
             return f'__STASH_{len(store)-1}__'
         
         # 顺序很重要
@@ -2663,16 +2667,17 @@ class EmailToTelegramBot:
         text = re.sub(r'`[^`]*`', stash, text)
         # 3. 裸 URL
         text = re.sub(r'https?://[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+', stash, text)
-        # ★★★ 4. Markdown 符号（行首的 #、*、-、+、> 等）★★★
-        text = re.sub(r'^(\s*)([#*\-+>]\s+)', lambda m: m.group(1) + stash(m), text, flags=re.MULTILINE)
-        # ★★★ 5. 特殊符号（·、→、• 等）★★★
-        text = re.sub(r'[·→•⟦⟧]', stash, text)
-        # 保护行首的 Markdown 标记（#、*、-、+、>）
-        text = re.sub(r'^(\s*)([#*\-+>])', lambda m: m.group(1) + stash(m), text, flags=re.MULTILINE)
-        # 保护特殊符号
+        # 4. 行首的 Markdown 标记（#、*、-、+、>）+ 后面的空格
+        text = re.sub(
+            r'(?<=^|\s)([#*\-+>])\s+',
+            lambda m: stash_symbol(m),
+            text,
+            flags=re.MULTILINE
+        )
+        # 5. 特殊符号（·、→、•）
         text = re.sub(r'[·→•]', stash, text)
+        
         return text, store
-
 
     def restore_urls_and_links(self, text, store):
         if not text:
