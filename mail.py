@@ -1280,7 +1280,7 @@ class EmailToTelegramBot:
             return text
         
         # Telegram MarkdownV2需要转义的特殊字符
-        markdown_special_chars = '_*[]()~`>#+-=|{}.!'
+        markdown_special_chars = '_*[]()~`>#+-=|{}!'
         
         result = text
         for char in markdown_special_chars:
