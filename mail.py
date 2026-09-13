@@ -1066,18 +1066,14 @@ class EmailToTelegramBot:
     def normalize_essential_symbols(self, text):
         """只处理MarkdownV2必须处理的符号"""
         translation_map = str.maketrans({
-            # 必须处理的（影响Markdown语法）
-            '（': '(',  # 括号
+            '（': '(',  # 括号，必须转半角，因为 Markdown 链接用 ()
             '）': ')',
-            '【': '[',
+            '【': '[',  # 方括号，必须转半角，因为 Markdown 链接用 []
             '】': ']',
-            '＃': '#',  # 井号
-            
-            # 建议处理的
-            '：': ':',  # 冒号
-            '！': '!',  # 感叹号
+            '＃': '#',  # 井号，Markdown 标题
+            # '：': ':',  # ← 删掉
+            # '！': '!',  # ← 删掉
         })
-        
         text = text.translate(translation_map)
         
         # 额外的正则处理
@@ -1126,7 +1122,7 @@ class EmailToTelegramBot:
             return url
         
         escaped_text = re.sub(r'https?:\\?/\\?/[^\s\u4e00-\u9fff]+', fix_url_escapes, escaped_text)
-        
+
         # 第三步：在转义之后，等体字处理之前，检查前3行并替换 \_ 为 _
     
         def replace_underscore_escape_in_first_lines(text):
