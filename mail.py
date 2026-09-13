@@ -2646,7 +2646,7 @@ class EmailToTelegramBot:
         return self.translate_with_fallback(text)
     
     def stash_urls_and_links(self, text):
-        """把 URL 和 Markdown 链接抠出来，替换成占位符"""
+        """把 URL、Markdown 链接、等体字、Markdown 符号抠出来，替换成占位符"""
         if not text:
             return text, []
         
@@ -2654,13 +2654,19 @@ class EmailToTelegramBot:
         
         def stash(match):
             store.append(match.group(0))
-            # 用不可能出现在正常邮件里的特殊 Unicode 符号
             return f'⟦STASH{len(store)-1}⟧'
         
-        # 顺序很重要：先 Markdown 链接 → 再等体字 → 最后裸 URL
+        # 顺序很重要
+        # 1. Markdown 链接 [文本](URL)
         text = re.sub(r'\[[^\]]*\]\([^)]*\)', stash, text, flags=re.DOTALL)
+        # 2. 等体字
         text = re.sub(r'`[^`]*`', stash, text)
+        # 3. 裸 URL
         text = re.sub(r'https?://[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+', stash, text)
+        # ★★★ 4. Markdown 符号（行首的 #、*、-、+、> 等）★★★
+        text = re.sub(r'^(\s*)([#*\-+>]\s+)', lambda m: m.group(1) + stash(m), text, flags=re.MULTILINE)
+        # ★★★ 5. 特殊符号（·、→、• 等）★★★
+        text = re.sub(r'[·→•⟦⟧]', stash, text)
         
         return text, store
 
