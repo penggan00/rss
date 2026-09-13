@@ -806,20 +806,21 @@ class EmailToTelegramBot:
 
         return markdown
 
-    # ★★★ 新增这个函数 ★★★
     def fix_multiline_links(self, text):
-        """修复 Markdown 链接文本中的换行，避免 Telegram 解析失败"""
+        """修复 Markdown 链接文本和 URL 中的换行"""
         if not text:
             return text
         
         def fix_link(match):
             link_text = match.group(1)
             url = match.group(2)
-            # 把链接文本里的换行替换成空格
+            # 链接文本：换行 → 空格
             link_text = re.sub(r'\s+', ' ', link_text).strip()
+            # URL：删除所有换行和空白（URL 里不能有换行！）
+            url = re.sub(r'\s+', '', url)
             return f'[{link_text}]({url})'
         
-        # 匹配 [文本](URL)，文本里可能含换行
+        # 匹配 [文本](URL)，文本和 URL 都允许含换行
         text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', fix_link, text, flags=re.DOTALL)
         return text
 
