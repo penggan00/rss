@@ -1091,27 +1091,44 @@ class EmailToTelegramBot:
         return text
     
     def escape_markdown_v2(self, text):
-        """使用md2tgmd进行MarkdownV2格式转义，然后清理等体字中的反斜杠并修复等体字内的URL"""
         if not text:
             return ""
         
         print(f"🔤 原始文本: {text}")
         
-        # 第一步：安全替换点号（在翻译后处理）
-        text = self.replace_dots_safely(text)
-   #     print(f"🔤 替换点号后: {text}")
+        # ★★★ 先把所有 URL 抠出来保护，避免被 replace_dots_safely 误伤 ★★★
+        url_store = []
+        def stash_url(match):
+            url_store.append(match.group(0))
+            return f'\x00URL{len(url_store)-1}\x00'
         
-        # 新增：在转义之前清理符号
+        # 保护裸 URL
+        text = re.sub(r'https?://[^\s]+', stash_url, text)
+        
+        # 现在 URL 被替换成占位符，safe 做点号替换
+        text = self.replace_dots_safely(text)
+        
+        # 恢复 URL
+        for i, url in enumerate(url_store):
+            text = text.replace(f'\x00URL{i}\x00', url)
+        
+        # 后续处理不变
         text = re.sub(r'#+', '# ', text)
         text = re.sub(r'\u200c+', '\u200c', text)
-        
         text = self.normalize_essential_symbols(text)
-
-        # 第二步：使用md2tgmd进行转义
         escaped_text = escape(text)
+
         print(f"🔄 转义后文本: {escaped_text}")
+
+        def fix_url_escapes(match):
+            url = match.group(0)
+            url = re.sub(r'\\([.\-_=&?/%:])', r'\1', url)
+            return url
+        
+        escaped_text = re.sub(r'https?:\\?/\\?/[^\s\u4e00-\u9fff]+', fix_url_escapes, escaped_text)
         
         # 第三步：在转义之后，等体字处理之前，检查前3行并替换 \_ 为 _
+    
         def replace_underscore_escape_in_first_lines(text):
             r"""替换前4行中的 \_ 为 _"""
             lines = text.split('\n')
