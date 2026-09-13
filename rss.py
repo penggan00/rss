@@ -95,25 +95,31 @@ class RSSDatabase:
         """确保数据库表已创建"""
         await self.create_tables()
 
-    async def create_tables(self):  # 这里缩进修复
+    async def create_tables(self):
         """改进的建表语句，确保 PostgreSQL 和 SQLite 索引一致"""
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                # 主表
+                # 主表（新字段：entry_link_hash + entry_title_hash）
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS rss_status (
                         feed_group TEXT,
                         feed_url TEXT,
                         entry_url TEXT,
-                        entry_content_hash TEXT,
+                        entry_link_hash TEXT,
+                        entry_title_hash TEXT,
                         entry_timestamp DOUBLE PRECISION,
                         PRIMARY KEY (feed_group, feed_url, entry_url)
                     );
                 """)
-                # 确保内容哈希索引存在
+                # 链接哈希唯一索引
                 await conn.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash 
-                    ON rss_status(feed_group, entry_content_hash);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_link_hash 
+                    ON rss_status(feed_group, entry_link_hash);
+                """)
+                # 标题哈希唯一索引
+                await conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_title_hash 
+                    ON rss_status(feed_group, entry_title_hash);
                 """)
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS timestamps (
@@ -156,13 +162,18 @@ class RSSDatabase:
                         feed_group TEXT,
                         feed_url TEXT,
                         entry_url TEXT,
-                        entry_content_hash TEXT,
+                        entry_link_hash TEXT,
+                        entry_title_hash TEXT,
                         entry_timestamp REAL,
                         PRIMARY KEY (feed_group, feed_url, entry_url)
                     )""")
                 await c.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_content_hash 
-                    ON rss_status(feed_group, entry_content_hash);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_link_hash 
+                    ON rss_status(feed_group, entry_link_hash);
+                """)
+                await c.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_title_hash 
+                    ON rss_status(feed_group, entry_title_hash);
                 """)
                 await c.execute("""
                     CREATE TABLE IF NOT EXISTS timestamps (
@@ -283,53 +294,82 @@ class RSSDatabase:
                 """, (feed_group, ts))
                 await self.conn.commit()
 
-    async def save_status(self, feed_group, feed_url, entry_url, entry_content_hash, timestamp):
-        """改进的状态保存，确保去重一致性"""
+    async def batch_save_status(self, records):
+        """批量写入（record = (feed_group, feed_url, entry_url, link_hash, title_hash, timestamp)）"""
+        if not records:
+            return
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 try:
-                    await conn.execute("""
-                        INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_content_hash, entry_timestamp) 
-                        VALUES($1, $2, $3, $4, $5) 
+                    await conn.executemany("""
+                        INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
+                        VALUES ($1, $2, $3, $4, $5, $6) 
                         ON CONFLICT (feed_group, feed_url, entry_url) 
                         DO UPDATE SET 
-                            entry_content_hash = EXCLUDED.entry_content_hash,
+                            entry_link_hash = EXCLUDED.entry_link_hash,
+                            entry_title_hash = EXCLUDED.entry_title_hash,
                             entry_timestamp = EXCLUDED.entry_timestamp
-                    """, feed_group, feed_url, entry_url, entry_content_hash, timestamp)
-                    logger.warning(f"💾 [DB写入成功] group={feed_group} | hash={entry_content_hash[:12]}")
+                    """, records)
+                    logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
                 except Exception as e:
-                    logger.error(f"❌ [DB写入失败] group={feed_group} | hash={entry_content_hash[:12]} | error={e}")
+                    logger.error(f"❌ [批量写入失败] {len(records)} 条 | error={e}")
                     raise
         else:
             async with self.conn.cursor() as c:
                 try:
-                    await c.execute(
-                        "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?)",
-                        (feed_group, feed_url, entry_url, entry_content_hash, timestamp)
+                    await c.executemany(
+                        "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
+                        records
                     )
                     await self.conn.commit()
-                    logger.warning(f"💾 [DB写入成功] group={feed_group} | hash={entry_content_hash[:12]}")
+                    logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
                 except Exception as e:
-                    logger.error(f"❌ [DB写入失败] group={feed_group} | hash={entry_content_hash[:12]} | error={e}")
+                    logger.error(f"❌ [批量写入失败] {len(records)} 条 | error={e}")
                     raise
 
-    async def has_content_hash(self, feed_group, content_hash):
-        """改进的内容哈希检查，确保编码一致性"""
+    async def batch_has_hashes(self, feed_group, link_hashes, title_hashes=None):
+        """批量查询：查 link_hash，如果 title_hashes 非空也查 title_hash"""
+        existing_links = set()
+        existing_titles = set()
+        
+        if not link_hashes:
+            return existing_links, existing_titles
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                # 修复：PostgreSQL 参数占位符错误，应该是 $1, $2
-                row = await conn.fetchrow(
-                    "SELECT 1 FROM rss_status WHERE feed_group=$1 AND entry_content_hash=$2 LIMIT 1",
-                    feed_group, content_hash
+                # 查 link_hash
+                rows = await conn.fetch(
+                    "SELECT entry_link_hash FROM rss_status WHERE feed_group=$1 AND entry_link_hash = ANY($2)",
+                    feed_group, list(link_hashes)
                 )
-                return row is not None
+                existing_links = {row['entry_link_hash'] for row in rows}
+                
+                # 查 title_hash（如果有）
+                if title_hashes:
+                    rows = await conn.fetch(
+                        "SELECT entry_title_hash FROM rss_status WHERE feed_group=$1 AND entry_title_hash = ANY($2)",
+                        feed_group, list(title_hashes)
+                    )
+                    existing_titles = {row['entry_title_hash'] for row in rows if row['entry_title_hash']}
         else:
             async with self.conn.cursor() as c:
+                placeholders = ','.join('?' * len(link_hashes))
                 await c.execute(
-                    "SELECT 1 FROM rss_status WHERE feed_group=? AND entry_content_hash=? LIMIT 1",
-                    (feed_group, content_hash)
+                    f"SELECT entry_link_hash FROM rss_status WHERE feed_group=? AND entry_link_hash IN ({placeholders})",
+                    [feed_group] + list(link_hashes)
                 )
-                return await c.fetchone() is not None
+                existing_links = {row[0] for row in await c.fetchall()}
+                
+                if title_hashes:
+                    placeholders = ','.join('?' * len(title_hashes))
+                    await c.execute(
+                        f"SELECT entry_title_hash FROM rss_status WHERE feed_group=? AND entry_title_hash IN ({placeholders})",
+                        [feed_group] + list(title_hashes)
+                    )
+                    existing_titles = {row[0] for row in await c.fetchall() if row[0]}
+        
+        return existing_links, existing_titles
 
     async def load_status(self):
         if USE_PG:
@@ -404,30 +444,32 @@ class RSSDatabase:
 
                 # 1. 清理 rss_status（保留 keep_count 条）
                 if shared_dedup:
+                    # 整组共享：用 entry_url 唯一判断
                     await conn.execute(f"""
                         DELETE FROM rss_status
-                        WHERE (feed_group, entry_timestamp) NOT IN (
-                            SELECT feed_group, entry_timestamp
+                        WHERE (feed_group, entry_url) NOT IN (
+                            SELECT feed_group, entry_url
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
-                            ORDER BY s2.entry_timestamp DESC
+                            ORDER BY s2.entry_timestamp DESC, s2.entry_url DESC
                             LIMIT {keep_count}
                         );
                     """)
                 else:
+                    # 每个源独立：用 entry_url 唯一判断
                     await conn.execute(f"""
                         DELETE FROM rss_status
-                        WHERE (feed_group, feed_url, entry_timestamp) NOT IN (
-                            SELECT feed_group, feed_url, entry_timestamp
+                        WHERE (feed_group, feed_url, entry_url) NOT IN (
+                            SELECT feed_group, feed_url, entry_url
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
                             AND s2.feed_url = rss_status.feed_url
-                            ORDER BY s2.entry_timestamp DESC
+                            ORDER BY s2.entry_timestamp DESC, s2.entry_url DESC
                             LIMIT {keep_count}
                         );
                     """)
 
-                # 2. ✅ 已发送的立即删除（不保留）
+                # 2. 已发送的立即删除（不保留）
                 await conn.execute(
                     """
                     DELETE FROM pending_messages 
@@ -476,7 +518,7 @@ class RSSDatabase:
                             SELECT rowid
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
-                            ORDER BY s2.entry_timestamp DESC
+                            ORDER BY s2.entry_timestamp DESC, s2.rowid DESC
                             LIMIT {keep_count}
                         );
                     """)
@@ -488,12 +530,12 @@ class RSSDatabase:
                             FROM rss_status AS s2
                             WHERE s2.feed_group = rss_status.feed_group
                             AND s2.feed_url = rss_status.feed_url
-                            ORDER BY s2.entry_timestamp DESC
+                            ORDER BY s2.entry_timestamp DESC, s2.rowid DESC
                             LIMIT {keep_count}
                         );
                     """)
 
-                # 2. ✅ 已发送的立即删除（不保留）
+                # 2. 已发送的立即删除（不保留）
                 await c.execute(
                     """
                     DELETE FROM pending_messages 
@@ -551,37 +593,33 @@ def get_entry_identifier(entry):
     pub_date = get_entry_timestamp(entry).isoformat() if get_entry_timestamp(entry) else ''
     return hashlib.sha256(f"{title}|||{pub_date}".encode()).hexdigest()
 
-def get_entry_content_hash(entry):
-    """改进的内容哈希计算，确保编码一致性"""
-    title = getattr(entry, 'title', '') or ''
-    summary = getattr(entry, 'summary', '') or ''
+def get_entry_hashes(entry, title_dedup=False):
+    """返回 (link_hash, title_hash)
+    - title_dedup=False: title_hash 返回 None
+    - title_dedup=True: 两个都返回
+    """
+    # 链接哈希（始终计算）
+    link = getattr(entry, 'link', '') or ''
+    try:
+        parsed = urlparse(link)
+        clean_link = parsed._replace(query=None, fragment=None).geturl().lower()
+    except Exception:
+        clean_link = link.lower()
+    link_hash = hashlib.sha256(clean_link.encode('utf-8')).hexdigest()
     
-    # 统一处理编码和空格
-    title = title.strip().encode('utf-8')
-    summary = summary.strip().encode('utf-8')
+    # 标题哈希（可选）
+    title_hash = None
+    if title_dedup:
+        title = getattr(entry, 'title', '') or ''
+        title_hash = hashlib.sha256(title.strip().encode('utf-8')).hexdigest()
     
-    # 获取发布时间（如果有）
-    pub_date = ''
-    if hasattr(entry, 'published'):
-        pub_date = entry.published
-    elif hasattr(entry, 'updated'):
-        pub_date = entry.updated
-    
-    pub_date = pub_date.strip().encode('utf-8')
-    
-    # 创建统一的哈希字符串
-    raw_text = title + b'|||' + summary + b'|||' + pub_date
-    content_hash = hashlib.sha256(raw_text).hexdigest()
-    
-    # ✅ 调试日志
     logger.warning(
-        f"🔍 [哈希] hash={content_hash[:16]} | "
-        f"title={title[:50]} | "
-        f"summary_len={len(summary)} | "
-        f"pub_date={pub_date[:30]}"
+        f"🔍 [哈希] link={link_hash[:16]} | "
+        f"title={title_hash[:16] if title_hash else 'N/A'} | "
+        f"title_dedup={title_dedup}"
     )
     
-    return content_hash
+    return link_hash, title_hash
 
 def signal_handler(signum, frame):
     """改进的信号处理"""
@@ -1255,6 +1293,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         batch_send_interval = group_config.get("batch_send_interval", None)
         send_separately = group_config.get("send_separately", False)
         shared_dedup = group_config.get("shared_dedup", False)
+        title_dedup = group_config.get("title_dedup", False)
         
         try:
             last_run = await db.load_last_run_time(group_key)
@@ -1272,42 +1311,47 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     if not feed_data or not feed_data.entries:
                         continue
                     
-                    # ✅ 初始化每批次变量
-                    new_entries = []
-                    new_hashes_in_batch = set()
-                    
+                    # ✅ 1. 计算哈希
+                    entries_with_hashes = []
                     for entry in feed_data.entries:
                         entry_id = get_entry_identifier(entry)
-                        content_hash = get_entry_content_hash(entry)
-                        
-                        # ✅ 数据库去重（唯一依据）
-                        is_dup = await db.has_content_hash(group_key, content_hash)
-                        
-                        logger.warning(
-                            f"🔍 [去重检查] group={group_key} | "
-                            f"entry_id={entry_id[:12]} | "
-                            f"hash={content_hash[:12]} | "
-                            f"是否重复={is_dup} | "
-                            f"title={getattr(entry, 'title', '')[:40]}"
-                        )
-                        
-                        if is_dup:
-                            logger.warning(f"✅ 命中重复，跳过: {content_hash[:12]}")
-                            continue
-                        
-                        # ✅ 过滤检查
-                        if not await should_send_entry(entry, processor):
-                            logger.debug(f"跳过不符合过滤条件的条目")
-                            continue
-                        
-                        new_hashes_in_batch.add(content_hash)
-                        new_entries.append((entry, content_hash, entry_id))
+                        link_hash, title_hash = get_entry_hashes(entry, title_dedup)
+                        entries_with_hashes.append((entry, link_hash, title_hash, entry_id))
                     
-                    # ✅ 处理新条目
+                    # ✅ 2. 批量查询
+                    all_link_hashes = [lh for _, lh, _, _ in entries_with_hashes]
+                    all_title_hashes = [th for _, _, th, _ in entries_with_hashes if th] if title_dedup else None
+                    existing_links, existing_titles = await db.batch_has_hashes(
+                        group_key, all_link_hashes, all_title_hashes
+                    )
+                    
+                    # ✅ 3. 过滤
+                    new_entries = []
+                    seen_links = set()
+                    seen_titles = set()
+                    for entry, link_hash, title_hash, entry_id in entries_with_hashes:
+                        if link_hash in existing_links:
+                            logger.warning(f"✅ 命中 link 重复: {link_hash[:12]}")
+                            continue
+                        if title_dedup and title_hash and title_hash in existing_titles:
+                            logger.warning(f"✅ 命中 title 重复: {title_hash[:12]}")
+                            continue
+                        if link_hash in seen_links:
+                            continue
+                        if title_dedup and title_hash and title_hash in seen_titles:
+                            continue
+                        if not await should_send_entry(entry, processor):
+                            continue
+                        seen_links.add(link_hash)
+                        if title_hash:
+                            seen_titles.add(title_hash)
+                        new_entries.append((entry, link_hash, title_hash, entry_id))
+                    
+                    # ✅ 4. 发送 + 批量写入
                     if new_entries:
                         if batch_send_interval and not send_separately:
-                            # 批量发送模式：存入待发送队列
-                            for entry, content_hash, entry_id in new_entries:
+                            # 批量发送模式
+                            for entry, link_hash, title_hash, entry_id in new_entries:
                                 raw_subject = remove_html_tags(getattr(entry, "title", "") or "")
                                 if processor.get("translate", False) and is_need_translate(raw_subject):
                                     translated_subject = await auto_translate_text(raw_subject)
@@ -1315,19 +1359,24 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     translated_subject = raw_subject
                                     
                                 await db.add_pending_message(
-                                    group_key, canonical_url, entry_id, content_hash,
+                                    group_key, canonical_url, entry_id, link_hash,
                                     getattr(entry, "title", ""), translated_subject,
                                     getattr(entry, "link", ""), getattr(entry, "summary", ""),
                                     get_entry_timestamp(entry).timestamp() if get_entry_timestamp(entry) else time.time(),
                                     feed_data.feed.get('title', "")
                                 )
-                                await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
-                                logger.warning(f"💾 [已保存] group={group_key} | hash={content_hash[:12]}")
+                            
+                            # ✅ 批量写入 rss_status
+                            records = [
+                                (group_key, canonical_url, entry_id, link_hash, title_hash, time.time())
+                                for entry, link_hash, title_hash, entry_id in new_entries
+                            ]
+                            await db.batch_save_status(records)
                                 
                         elif send_separately:
                             # 单独发送模式
                             messages_data = await generate_single_messages(
-                                feed_data, [e for e,_,_ in new_entries], processor
+                                feed_data, [e for e,_,_,_ in new_entries], processor
                             )
                             
                             if messages_data:
@@ -1335,9 +1384,13 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     bot, TELEGRAM_CHAT_ID[0], messages_data, processor
                                 )
                                 
-                                for i, (entry, content_hash, entry_id) in enumerate(new_entries):
+                                # ✅ 只批量写入发送成功的
+                                records = []
+                                for i, (entry, link_hash, title_hash, entry_id) in enumerate(new_entries):
                                     if i < sent_count:
-                                        await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                        records.append((group_key, canonical_url, entry_id, link_hash, title_hash, time.time()))
+                                if records:
+                                    await db.batch_save_status(records)
                                 
                                 if processor.get("show_count", False):
                                     summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
@@ -1347,15 +1400,19 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                         pass
                         else:
                             # 立即批量发送模式
-                            feed_message = await generate_group_message(feed_data, [e for e,_,_ in new_entries], processor)
+                            feed_message = await generate_group_message(feed_data, [e for e,_,_,_ in new_entries], processor)
                             if feed_message:
                                 try:
                                     await send_single_message(
                                         bot, TELEGRAM_CHAT_ID[0], feed_message,
                                         disable_web_page_preview=not processor.get("preview", True)
                                     )
-                                    for entry, content_hash, entry_id in new_entries:
-                                        await db.save_status(group_key, canonical_url, entry_id, content_hash, time.time())
+                                    # ✅ 发送成功后批量写入
+                                    records = [
+                                        (group_key, canonical_url, entry_id, link_hash, title_hash, time.time())
+                                        for entry, link_hash, title_hash, entry_id in new_entries
+                                    ]
+                                    await db.batch_save_status(records)
                                 except Exception as send_error:
                                     logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
                                     raise

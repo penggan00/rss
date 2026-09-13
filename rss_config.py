@@ -372,6 +372,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "interval": 3590,      # 1小时
         "batch_send_interval": 14350,   # 批量推送
     #    "keep_count": 200,  # ✅ 快讯更新快，保留200条
+        "title_dedup": True,  # ✅ 开启标题去重
         "shared_dedup": True,  # ✅ 新增：整组共享去重（去重池按 group_key）
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
