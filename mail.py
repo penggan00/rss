@@ -1096,19 +1096,21 @@ class EmailToTelegramBot:
         
         print(f"🔤 原始文本: {text}")
         
-        # ★★★ 先把所有 URL 抠出来保护，避免被 replace_dots_safely 误伤 ★★★
+        # ★★★ 先把 URL 和等体字都抠出来保护 ★★★
         url_store = []
         def stash_url(match):
             url_store.append(match.group(0))
             return f'\x00URL{len(url_store)-1}\x00'
         
+        # 保护等体字（包括粗体里的等体字）
+        text = re.sub(r'`[^`]*`', stash_url, text)
         # 保护裸 URL
         text = re.sub(r'https?://[^\s]+', stash_url, text)
         
-        # 现在 URL 被替换成占位符，safe 做点号替换
+        # 现在 URL 和等体字都被替换成占位符，safe 做点号替换
         text = self.replace_dots_safely(text)
         
-        # 恢复 URL
+        # 恢复
         for i, url in enumerate(url_store):
             text = text.replace(f'\x00URL{i}\x00', url)
         
@@ -1212,7 +1214,8 @@ class EmailToTelegramBot:
         def process_monospace_content(match):
             content = match.group(1)
             print(f"\n🔍 找到等体字内容: '{content}' (长度: {len(content)})")
-            
+            content = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', content)
+
             # 第一步：智能清理反斜杠
             if self.looks_like_url(content):
                 # URL特殊处理：保护URL结构
