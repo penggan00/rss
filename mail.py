@@ -289,7 +289,7 @@ class EmailToTelegramBot:
         self.h.ignore_tables = False
         self.h.mark_code = True
         self.h.use_automatic_links = False
-            
+
     def _parse_chat_ids(self, chat_ids_str):
         """解析聊天ID，只支持单个ID"""
         if not chat_ids_str:
@@ -805,6 +805,8 @@ class EmailToTelegramBot:
         # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
         markdown = self.remove_long_urls(markdown)
         # 7. 邮箱不处理（format_email_addresses 现在直接返回原文）
+        markdown = re.sub(r'\*\*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\*\*', r'\1', markdown)
+        markdown = re.sub(r'\*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\*', r'\1', markdown)
         markdown = self.format_email_addresses(markdown)
         # 8. 去嵌套（粗体/斜体套等体字）
         markdown = re.sub(r'\*\*`([^`]+)`\*\*', r'`\1`', markdown)
@@ -1090,18 +1092,20 @@ class EmailToTelegramBot:
         
         print(f"🔤 原始文本: {text}")
         
-        # ★★★ 先把 URL 和等体字都抠出来保护 ★★★
+        # ★★★ 先把 URL、等体字、邮箱都抠出来保护 ★★★
         url_store = []
         def stash_url(match):
             url_store.append(match.group(0))
             return f'\x00URL{len(url_store)-1}\x00'
         
-        # 保护等体字（包括粗体里的等体字）
+        # 保护等体字
         text = re.sub(r'`[^`]*`', stash_url, text)
+        # ★★★ 保护邮箱（不管外面有没有 * 或 **）★★★
+        text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', stash_url, text)
         # 保护裸 URL
         text = re.sub(r'https?://[^\s]+', stash_url, text)
         
-        # 现在 URL 和等体字都被替换成占位符，safe 做点号替换
+        # 现在 URL、等体字、邮箱都被替换成占位符
         text = self.replace_dots_safely(text)
         
         # 恢复
