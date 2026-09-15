@@ -453,9 +453,7 @@ class EmailToTelegramBot:
         if from_email:
             from_email = from_email.replace('\\', ' ')  # 去除反斜杠
             
-        # 优先使用HTML内容，如果没有则使用纯文本
         if email_data['html_content']:
-            # 在转换前先预处理HTML（包括移除空链接）
             content = self.convert_html_to_markdown(email_data['html_content'])
         elif email_data['plain_content']:
             content = email_data['plain_content']
@@ -497,6 +495,10 @@ class EmailToTelegramBot:
             except Exception as e:
                 logging.error(f"安全翻译失败: {e}")
                 # 翻译失败时保留原文
+        
+        # ★★★ 翻译之后统一做 URL 边界处理（关键：必须在翻译之后）★★★
+        content = self.separate_url_from_chinese(content)
+        content = re.sub(r'(\n\s*){3,}', '\n\n', content)
         
         # 构建符合要求的Markdown消息格式
         markdown_message = ""
@@ -775,51 +777,71 @@ class EmailToTelegramBot:
         result = '\n'.join(processed_lines)
         
         return result
-    
+        
     def postprocess_markdown(self, markdown):
         """后处理Markdown内容 - 优化空行和特殊字符处理"""
         if not markdown:
             return ""
 
-        # 清理特殊字符和标准化空白
+        # 1. 清理特殊字符和标准化空白
         markdown = self.normalize_whitespace(markdown)
-        # 新增：删除整行都是不可见字符的行
+        # 2. 删除整行都是不可见字符的行
         markdown = self.remove_invisible_lines(markdown)
-
-        # 新增：专门清理空文本的Markdown链接
+        # 3. 清理空文本的 Markdown 链接
         markdown = self.remove_empty_markdown_links(markdown)
-        
-        # 新增：移除超长URL
+        # 4. 修复链接文本和 URL 中的换行（关键：在 URL 长度判断前）
+        markdown = self.fix_multiline_links(markdown)
+        # 5. 裸 URL 后紧跟中文时插空格（关键：让 URL 边界清晰）
+        markdown = self.separate_url_from_chinese(markdown)
+        # 6. 移除超长 URL（此时 URL 已单行、边界清晰）
         markdown = self.remove_long_urls(markdown)
-        
-        # 新增：将邮箱地址转换为等宽字体
+        # 7. 邮箱转等宽
         markdown = self.format_email_addresses(markdown)
-        
-        # 新增：清理序号间的空行（保持独立功能）
-        #  markdown = self.remove_blank_lines_between_sequences(markdown)
-
-        # 新增：去除空的 [] 和 () 组合
+        # 8. 去除空的括号组合
         markdown = self.remove_empty_brackets(markdown)
 
-        # ★★★ 新增：修复链接文本中的换行 ★★★
-        markdown = self.fix_multiline_links(markdown)
-
         return markdown
-
-    # ★★★ 新增这个函数 ★★★
+    
+    def separate_url_from_chinese(self, text):
+        """纯文本 URL 后紧跟中文时插入空格（不动 Markdown 链接）"""
+        if not text:
+            return text
+        
+        # 先把 Markdown 链接 []() 抠出来保护
+        link_store = []
+        def stash_link(match):
+            link_store.append(match.group(0))
+            return f'\x00LINK{len(link_store)-1}\x00'
+        
+        text = re.sub(r'\[[^\]]*\]\([^)]*\)', stash_link, text, flags=re.DOTALL)
+        
+        # 在裸 URL 后紧跟中文/全角标点时插空格
+        def add_space(match):
+            return f'{match.group(1)} {match.group(2)}'
+        
+        pattern = r'(https?://[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+)([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])'
+        text = re.sub(pattern, add_space, text)
+        
+        # 放回 Markdown 链接
+        for i, link in enumerate(link_store):
+            text = text.replace(f'\x00LINK{i}\x00', link)
+        
+        return text
     def fix_multiline_links(self, text):
-        """修复 Markdown 链接文本中的换行，避免 Telegram 解析失败"""
+        """修复 Markdown 链接文本和 URL 中的换行"""
         if not text:
             return text
         
         def fix_link(match):
             link_text = match.group(1)
             url = match.group(2)
-            # 把链接文本里的换行替换成空格
+            # 链接文本：换行 → 空格
             link_text = re.sub(r'\s+', ' ', link_text).strip()
+            # URL：删除所有换行和空白（URL 里不能有换行！）
+            url = re.sub(r'\s+', '', url)
             return f'[{link_text}]({url})'
         
-        # 匹配 [文本](URL)，文本里可能含换行
+        # 匹配 [文本](URL)，文本和 URL 都允许含换行
         text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', fix_link, text, flags=re.DOTALL)
         return text
 
@@ -1044,18 +1066,14 @@ class EmailToTelegramBot:
     def normalize_essential_symbols(self, text):
         """只处理MarkdownV2必须处理的符号"""
         translation_map = str.maketrans({
-            # 必须处理的（影响Markdown语法）
-            '（': '(',  # 括号
+            '（': '(',  # 括号，必须转半角，因为 Markdown 链接用 ()
             '）': ')',
-            '【': '[',
+            '【': '[',  # 方括号，必须转半角，因为 Markdown 链接用 []
             '】': ']',
-            '＃': '#',  # 井号
-            
-            # 建议处理的
-            '：': ':',  # 冒号
-            '！': '!',  # 感叹号
+            '＃': '#',  # 井号，Markdown 标题
+            # '：': ':',  # ← 删掉
+            # '！': '!',  # ← 删掉
         })
-        
         text = text.translate(translation_map)
         
         # 额外的正则处理
@@ -1069,27 +1087,44 @@ class EmailToTelegramBot:
         return text
     
     def escape_markdown_v2(self, text):
-        """使用md2tgmd进行MarkdownV2格式转义，然后清理等体字中的反斜杠并修复等体字内的URL"""
         if not text:
             return ""
         
         print(f"🔤 原始文本: {text}")
         
-        # 第一步：安全替换点号（在翻译后处理）
-        text = self.replace_dots_safely(text)
-   #     print(f"🔤 替换点号后: {text}")
+        # ★★★ 先把所有 URL 抠出来保护，避免被 replace_dots_safely 误伤 ★★★
+        url_store = []
+        def stash_url(match):
+            url_store.append(match.group(0))
+            return f'\x00URL{len(url_store)-1}\x00'
         
-        # 新增：在转义之前清理符号
+        # 保护裸 URL
+        text = re.sub(r'https?://[^\s]+', stash_url, text)
+        
+        # 现在 URL 被替换成占位符，safe 做点号替换
+        text = self.replace_dots_safely(text)
+        
+        # 恢复 URL
+        for i, url in enumerate(url_store):
+            text = text.replace(f'\x00URL{i}\x00', url)
+        
+        # 后续处理不变
         text = re.sub(r'#+', '# ', text)
         text = re.sub(r'\u200c+', '\u200c', text)
-        
         text = self.normalize_essential_symbols(text)
-
-        # 第二步：使用md2tgmd进行转义
         escaped_text = escape(text)
+
         print(f"🔄 转义后文本: {escaped_text}")
+
+        def fix_url_escapes(match):
+            url = match.group(0)
+            url = re.sub(r'\\([.\-_=&?/%:])', r'\1', url)
+            return url
         
+        escaped_text = re.sub(r'https?:\\?/\\?/[^\s\u4e00-\u9fff]+', fix_url_escapes, escaped_text)
+
         # 第三步：在转义之后，等体字处理之前，检查前3行并替换 \_ 为 _
+    
         def replace_underscore_escape_in_first_lines(text):
             r"""替换前4行中的 \_ 为 _"""
             lines = text.split('\n')
@@ -1245,7 +1280,7 @@ class EmailToTelegramBot:
             return text
         
         # Telegram MarkdownV2需要转义的特殊字符
-        markdown_special_chars = '_*[]()~`>#+-=|{}.!'
+        markdown_special_chars = '_*[]()~`>#+-=|{}!'
         
         result = text
         for char in markdown_special_chars:
