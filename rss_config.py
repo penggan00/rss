@@ -237,6 +237,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "group_key": "FIFTH_RSS_RRSS_SAN",
         "interval": 3590,      # 60分钟 
         "batch_send_interval": 17990,   # 批量推送
+        "keep_count": 100000,  # ✅ 快讯更新快，保留100000条
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开

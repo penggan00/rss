@@ -308,6 +308,75 @@ class EmailToTelegram:
             'html': html_content,
             'plain': plain_content,
         }
+
+    def _dump(self, title, content, max_len=999999):
+        if not VERBOSE_LOG:
+            return
+        sep = "=" * 70
+        header = f"📋 {title}  (长度={len(content) if content else 0})"
+        body = content or "(空)"
+        if len(body) > max_len:
+            body = body[:max_len] + f"\n... [已截断，共 {len(content)} 字符]"
+        logger.info("\n%s\n%s\n%s\n%s\n%s", sep, header, sep, body, sep)
+    def _debug_escape(self, html, stage, force=False):
+        """调试：检查 HTML 里的转义问题
+
+        - 默认只在 VERBOSE_LOG=true 时输出
+        - force=True 时无视 VERBOSE_LOG，强制输出（用于发送失败等关键场景）
+        """
+        if not VERBOSE_LOG and not force:
+            return
+
+        if not html:
+            logger.debug(f"[{stage}] HTML 为空")
+            return
+
+        logger.info(f"[{stage}] 长度={len(html)}")
+
+        # 1. 统计裸 & （未转义的 &）
+        bare_amp = re.findall(
+            r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)',
+            html
+        )
+        if bare_amp:
+            ctx = []
+            for m in re.finditer(
+                r'.{0,20}&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);).{0,20}',
+                html
+            ):
+                ctx.append(m.group(0))
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_amp)} 个裸 & ：{ctx[:5]}")
+
+        # 2. 统计可疑的 < （后面不是合法标签名）
+        bare_lt = re.findall(
+            r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\s|/?>))[^>]{0,50}>',
+            html
+        )
+        if bare_lt:
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_lt)} 个可疑 < ：{bare_lt[:5]}")
+
+        # 3. 统计双重转义
+        dbl = re.findall(r'&amp;(?:amp|lt|gt|quot);', html)
+        if dbl:
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(dbl)} 个双重转义：{dbl[:5]}")
+
+        # 4. 检查 href
+        hrefs = re.findall(r'href="([^"]*)"', html)
+        for h in hrefs:
+            if re.search(r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', h):
+                logger.warning(f"[{stage}] ⚠️ href 里有裸 & ：{h[:100]}")
+            if '&amp;amp;' in h:
+                logger.warning(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
+
+        # 5. 检查未闭合标签
+        for tag in ['a', 'b', 'i', 'u', 's', 'code', 'pre']:
+            opens = len(re.findall(rf'<{tag}(?:\s|>)', html))
+            closes = len(re.findall(rf'</{tag}>', html))
+            if opens != closes:
+                logger.warning(
+                    f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}"
+                )
+
     def remove_long_urls(self, html, max_url_length=500):
         """
         移除 HTML 里的超长 URL：
@@ -349,6 +418,353 @@ class EmailToTelegram:
         )
 
         return html
+
+    def _preprocess_blank_lines(self, html):
+        if not html:
+            return html
+
+        INVISIBLE = (
+            '\u00ad'
+            '\u2000-\u200a'
+            '\u200b\u200c\u200d\u2060\ufeff'
+            '\u00a0\u202f\u205f\u3000'
+            '\t\r'
+        )
+
+        segments = self.split_html_segments(html)
+        result = []
+        for typ, content in segments:
+            if typ == 'tag':
+                result.append(content)
+                continue
+
+            lines = content.split('\n')
+            cleaned = []
+            for line in lines:
+                # 去掉隐藏/空白后，看还有没有可见内容
+                stripped = re.sub(f'[{INVISIBLE}]+', '', line.strip())
+                if stripped:
+                    cleaned.append(line)     # 有文字 → 原样保留（行内隐藏字符不动）
+                else:
+                    cleaned.append('')       # 整行只有隐藏/空白 → 清空
+            result.append('\n'.join(cleaned))
+
+        text = ''.join(result)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = text.strip('\n')
+        return text
+
+    def is_boc_mail(self, data):
+        from_ = (data.get('from') or '').lower()
+        subject = data.get('subject') or ''
+        return 'bankofchina.com' in from_ or 'boc.cn' in from_ or '中国银行' in subject
+    
+    def is_ccb_mail(self, data):
+        """判断是否建行信用卡邮件"""
+        from_ = (data.get('from') or '').lower()
+        subject = data.get('subject') or ''
+        return 'ccb.com' in from_ or '中国建设银行' in subject
+
+    def format_ccb_summary(self, text):
+        """建行账单汇总精简：去掉啰嗦表头，压缩成键值一行"""
+        if not text:
+            return text
+
+        AMT = r'(-?[\d,]+(?:\.\d+)?)'
+
+        # ---- 1. 删掉账单汇总表头块 ----
+        text = re.sub(
+            r'账户币种Currency\s*\n'
+            r'\s*上期全部应还款额Last Statement Balance\s*\n'
+            r'\s*\+\s*\n'
+            r'\s*消费/取现/其它费用New Spending/Cash advance/Charges\s*\n'
+            r'\s*-\s*\n'
+            r'\s*还款/退货/费用返还Payment/Credit\s*\n'
+            r'\s*=\s*\n'
+            r'\s*<b>本期全部应还款额</b><b>New Balance</b>\s*\n',
+            '',
+            text
+        )
+
+        # ---- 2. 币种汇总：人民币/美元/欧元 各 4 个金额 → 一行（宽松版） ----
+        for cn, en in [('人民币', 'CNY'), ('美元', 'USD'), ('欧元', 'EUR')]:
+            pat = re.compile(
+                rf'{cn}（{en}）\s*\n'
+                rf'\s*{AMT}\s*\n'
+                rf'\s*{AMT}\s*\n'
+                rf'\s*{AMT}\s*\n'
+                rf'\s*<b>{AMT}</b>',
+                re.MULTILINE
+            )
+            text = pat.sub(
+                lambda m: (f"{cn} 上期{m.group(1)} +消费{m.group(2)} "
+                        f"-还款{m.group(3)} =应还{m.group(4)}"),
+                text
+            )
+
+        # ---- 3. 信用信息：本期账单日 / 授信额度 / 取现额度 / 可用额度 ----
+        text = re.sub(
+            r'本期账单日\s*\n\s*Statement Date\s*\n\s*\n\s*(\d{4}-\d{2}-\d{2})',
+            r'本期账单日 \1',
+            text
+        )
+        # 授信额度（宽松版）
+        text = re.sub(
+            r'授信额度\s*\n\s*Credit Limit\s*\n+'
+            r'\s*<a href="[^"]*">\s*\n+'
+            r'\s*((?:CNY\s*)?[\d,]+(?:\.\d+)?)</a>',
+            r'授信额度 \1',
+            text
+        )
+        text = re.sub(
+            r'取现额度\s*\n\s*Cash Advance Limit\s*\n\s*\n\s*((?:CNY\s*)?[\d,]+(?:\.\d+)?)',
+            r'取现额度 \1',
+            text
+        )
+        text = re.sub(
+            r'截止本期账单日\s*\n\s*可用额度\s*\n\s*Available Limit\s*\n\s*\n\s*([\d,]+(?:\.\d+)?)',
+            r'可用额度 \1',
+            text
+        )
+
+        # ---- 4. 积分余额：整行删（宽松版） ----
+        text = re.sub(
+            r'<b>\s*积分余额.*?点击查询积分</a></b>',
+            '',
+            text,
+            flags=re.DOTALL
+        )
+
+        # ---- 5. 账单周期/到期还款日 ----
+        text = re.sub(
+            r'账单周期Statement Cycle\s*\n'
+            r'\s*<b>([^<]+)</b>'
+            r'<b>本期到期还款日</b><b>Payment Due Date</b><b>([^<]+)</b>',
+            r'账单周期 \1\n到期还款日 \2',
+            text
+        )
+
+        # ---- 6. 应还款表头删掉 ----
+        text = re.sub(
+            r'账户币种Currency\s*\n'
+            r'\s*<b>本期全部应还款额</b><b>New Balance</b>\s*\n'
+            r'\s*最低还款额Min\.Payment\s*\n'
+            r'\s*争议款/笔数Dispute Amt/Nbr\s*\n',
+            '',
+            text
+        )
+
+        # ---- 7. 应还款行：人民币（CNY） 应还 最低 争议 ----
+        text = re.sub(
+            rf'^(人民币（CNY）)\s*\n'
+            rf'\s*<b>{AMT}</b>\s*\n'
+            rf'\s*{AMT}\s*\n'
+            r'\s*(-)',
+            lambda m: f"{m.group(1)} 应还{m.group(2)} 最低{m.group(3)} 争议{m.group(4)}",
+            text,
+            flags=re.MULTILINE
+        )
+
+        # ---- 8. 专项分期：整块替换（宽松版） ----
+        text = re.sub(
+            r'<b>\s*专项分期剩余总金额：\s*CNY\s*[\d.]+</b>.*?服务。',
+            '专项分期：CNY 0.00',
+            text,
+            flags=re.DOTALL
+        )
+
+        # ---- 9. 应还款明细表头删掉 ----
+        text = re.sub(
+            r'信用卡卡号Card Number\s*\n'
+            r'\s*账户币种Currency\s*\n'
+            r'\s*应还款额/溢缴款New Balance\s*\n'
+            r'\s*最低还款额Min\.Payment\s*\n'
+            r'\s*账户币种Currency\s*\n'
+            r'\s*应还款额/溢缴款New Balance\s*\n'
+            r'\s*最低还款额Min\.Payment\s*\n',
+            '',
+            text
+        )
+
+        # ---- 10. 应还款明细行（卡号那行） ----
+        text = re.sub(
+            rf'^(\d{{8}}\*{{4}}\d{{4}})\s*\n'
+            rf'\s*(人民币\(CNY\))\s*\n'
+            rf'\s*{AMT}\s*\n'
+            rf'\s*{AMT}',
+            lambda m: f"{m.group(1)} {m.group(2)} 应还{m.group(3)} 最低{m.group(4)}",
+            text,
+            flags=re.MULTILINE
+        )
+
+        # ---- 11. 交易明细表头删掉 ----
+        text = re.sub(
+            r'交易日\s*\n'
+            r'\s*银行记账日\s*\n'
+            r'\s*卡号后四位\s*\n'
+            r'\s*交易描述\s*\n'
+            r'\s*交易币/金额\s*\n'
+            r'\s*结算币/金额\s*\n'
+            r'\s*T-Date\s*\n'
+            r'\s*P-Date\s*\n'
+            r'\s*Card Number\s*\n'
+            r'\s*Description\s*\n'
+            r'\s*Trans\.Curr/Amt\s*\n'
+            r'\s*Sett\.Curr/Amt\s*\n',
+            '',
+            text
+        )
+
+        # ---- 12. [人民币账户] 那行删掉 ----
+        text = re.sub(
+            r'\[人民币账户\] RMB Account\s*\n'
+            r'\s*上期账单余额\(Previous Balance\)\s*\n'
+            r'\s*[\d,]+(?:\.\d+)?\s*\n',
+            '',
+            text
+        )
+
+        # ---- 13. 去掉行首缩进 ----
+        lines = text.split('\n')
+        lines = [ln.lstrip() if ln.strip() else '' for ln in lines]
+        text = '\n'.join(lines)
+
+        # ---- 14. 压缩空行 ----
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip('\n')
+    
+    def format_ccb_records(self, text):
+        """建行交易明细：8 行一条 → 2 行一条"""
+        if not text:
+            return text
+
+        DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+        CARD_RE = re.compile(r'^\d{4}$')
+        CUR_RE = re.compile(r'^[A-Z]{3}$')
+        AMT_RE = re.compile(r'^-?[\d,]+(?:\.\d+)?$')
+
+        lines = text.split('\n')
+        out = []
+        i = 0
+        n = len(lines)
+
+        while i < n:
+            if not lines[i].strip():
+                out.append('')
+                i += 1
+                continue
+
+            # 收集接下来 8 个非空字段
+            fields = []
+            j = i
+            while j < n and len(fields) < 8:
+                s = lines[j].strip()
+                if s:
+                    fields.append(s)
+                j += 1
+
+            if (len(fields) == 8
+                    and DATE_RE.match(fields[0])
+                    and DATE_RE.match(fields[1])
+                    and CARD_RE.match(fields[2])
+                    and CUR_RE.match(fields[4])
+                    and CUR_RE.match(fields[6])
+                    and AMT_RE.match(fields[5])
+                    and AMT_RE.match(fields[7])):
+                out.append(f"{fields[0]} {fields[3]}")
+                out.append(f"{fields[2]} {fields[4]} {fields[5]}")
+                out.append('')
+                i = j
+            else:
+                out.append(lines[i].rstrip())
+                i += 1
+
+        result = '\n'.join(out)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        return result.strip('\n')
+
+    def format_boc_pdf(self, pdf_text):
+        """中国银行信用卡账单 PDF 格式化"""
+        if not pdf_text:
+            return pdf_text
+
+        lines = pdf_text.split('\n')
+        out = []
+
+        # 头部：账单月份
+        m = re.search(r'中国银行信用卡账单\((\d{4}年\d{2}月)\)', pdf_text)
+        if m:
+            out.append(f"中国银行信用卡账单 {m.group(1)}")
+            out.append('')
+
+        # 总览
+        m = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})\s+([\d.]+)', pdf_text)
+        if m:
+            out.append(f"到期还款日 {m.group(1)}")
+            out.append(f"账单日 {m.group(2)}")
+            out.append(f"本期人民币欠款 {m.group(3)}")
+            out.append('')
+
+        # 卡列表（卡号 + 应还 + 最低）
+        card_lines = re.findall(
+            r'(\d{4}\s+\d{4}\s+\*{4}\s+\d{4})\s+([\d.]+)\s+([\d.]+)',
+            pdf_text
+        )
+        for card, balance, minpay in card_lines:
+            out.append(f"【卡 {card.replace(' ', '')}】")
+            out.append(f"本期应还 {balance} 最低 {minpay}")
+            out.append('')
+
+        # 明细：按"人民币交易明细"分块
+        # 每块对应一张卡，直到下一个卡名或"第 N 页"
+        blocks = re.split(r'人民币交易明细/RMB Transaction Detailed List', pdf_text)
+
+        for block in blocks[1:]:   # 跳过第一块（表头之前）
+            # 找卡名和卡号
+            card_m = re.search(r'(.+?)\(卡号：(\d{4})\)', block)
+            card_name = card_m.group(1).strip() if card_m else ''
+            card_no = card_m.group(2) if card_m else ''
+
+            # 找汇总行
+            sum_m = re.search(
+                r'人民币/RMB\s+(欠款/DEBT|存款/CREDIT)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)',
+                block
+            )
+
+            if card_name:
+                out.append(f"━━━ 卡 {card_no}（{card_name}）━━━")
+            if sum_m:
+                out.append(f"本期支出 {sum_m.group(3)} 存入 {sum_m.group(2)} 余额 {sum_m.group(4)}")
+
+            # 明细行：扫描 block，遇到日期行就提取
+            # 描述可能跨行，攒"上一行"
+            block_lines = block.split('\n')
+            pending_desc = []
+            for line in block_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # 匹配明细行：日期 日期 卡号 [描述] 金额
+                dm = re.match(
+                    r'^(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})\s+(\d{4})\s+(.*?)\s+([\d,]+\.\d{2})$',
+                    line
+                )
+                if dm:
+                    date, post, cn, desc, amt = dm.groups()
+                    full_desc = ' '.join(pending_desc + [desc]).strip()
+                    full_desc = re.sub(r'\s*CHN\s*$', '', full_desc)
+                    out.append(f"{date} {full_desc} 支出{amt}")
+                    pending_desc = []
+                else:
+                    # 攒可能属于下一行描述的内容
+                    if not line.startswith(('交易日', '银行记账日', '第', '卡号后四位',
+                                            'Transaction', 'Posting', 'Description',
+                                            'Digits', 'of Card', '人民币交易明细')):
+                        pending_desc.append(line)
+
+            out.append('')
+
+        return '\n'.join(out).strip('\n')
     # ---------- PDF 提取 ----------
     def extract_pdf_text(self, msg):
         texts = []
@@ -356,33 +772,41 @@ class EmailToTelegram:
             ctype = part.get_content_type()
             filename = part.get_filename() or ""
             disp = str(part.get('Content-Disposition', ''))
+
             is_pdf = (
-                ctype == 'application/pdf' or
-                filename.lower().endswith('.pdf') or
-                ('attachment' in disp and 'pdf' in ctype.lower())
+                ctype == 'application/pdf'
+                or ctype in ('application/x-pdf', 'application/octet-stream')
+                or filename.lower().endswith('.pdf')
+                or ('attachment' in disp and 'pdf' in ctype.lower())
+                or 'pdf' in filename.lower()
             )
             if not is_pdf:
                 continue
             data = part.get_payload(decode=True)
             if not data:
+                logger.warning(f"📄 PDF {filename} 数据为空")
                 continue
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as f:
                     f.write(data)
                     path = f.name
                 try:
+                    page_count = 0
                     with pdfplumber.open(path) as pdf:
+                        page_count = len(pdf.pages)
                         for page in pdf.pages:
                             t = page.extract_text()
                             if t:
                                 texts.append(t)
+                    total = sum(len(t) for t in texts)
+                    logger.info(f"📄 PDF 已解析: {filename} 页数={page_count} 提取字符={total}")
+                    if total == 0:
+                        logger.warning(f"📄 PDF {filename} 提取到 0 字符——可能是扫描件或图片型 PDF")
                 finally:
                     os.unlink(path)
-                logger.info(f"📄 PDF 已解析: {filename}")
             except Exception as e:
                 logger.warning(f"PDF 解析失败 {filename}: {e}")
         return "\n".join(texts)
-
     # ---------- 中文检测 ----------
     def is_chinese(self, text):
         if not text:
@@ -440,7 +864,7 @@ class EmailToTelegram:
             import requests
             r = requests.post(
                 LIBRETRANSLATE_URL,
-                json={"q": text, "source": "auto", "target": "zh"},
+                json={"q": text, "source": "auto", "target": "zh", "format": "html"},
                 timeout=15)
             if r.status_code == 200:
                 t = r.json().get("translatedText")
@@ -497,75 +921,96 @@ class EmailToTelegram:
 
     def is_url(self, text):
         return bool(re.search(r'https?://\S+', text))
+
     def translate_html(self, html):
         if not html or not ENABLE_TRANSLATION:
             return html
 
-        stash = []
+        # 翻译前：把非自然语言的符号统一处理掉
+        # 注意：这些正则只作用于"标签外的纯文本"，不能碰 <a href="..."> 里的属性
 
-        def st(m):
-            stash.append(m.group(0))
-            return f'\x00S{len(stash)-1}\x00'
+        # 简单做法：先不区分标签内外，直接替换（风险：可能碰到 href 里的字符）
+        # 更安全做法：先按标签切段，只处理标签外的文本
 
-        # 1. 先切 URL
-        html = re.sub(r'https?://[^\s<>"\']+', st, html)
-        # 2. 切 ASS 串
-        html = re.sub(r'\{[^{}]*\\[^{}]*\}', st, html)
-        # 3. 切反斜杠命令
-        html = re.sub(r'\\[a-zA-Z]+[0-9]*', st, html)
-        # 4. 切 Windows 路径
-        html = re.sub(r'[A-Za-z]:\\[^\s<>"\'{}|]+', st, html)
-        # 5. 切货币
-        html = re.sub(r'\$[\d,]+(?:\.\d+)?', st, html)
-        # 6. 切下划线标识符
-        html = re.sub(r'\b\w+_\w+\b', st, html)
-        # 7. 切竖线表达式
-        html = re.sub(r'\b\w+(?:\|\w+)+\b', st, html)
-        # 8. 切英文缩写
-        html = re.sub(r"\b\w+'\w+\b", st, html)
-        # 9. 切分号表达式
-        html = re.sub(r'\b\w+;\w+\b', st, html)
+        def clean_text(t):
+            # ASS 串
+            t = re.sub(r'\{[^{}]*\\[^{}]*\}', '-', t)
+            # 反斜杠命令
+            t = re.sub(r'\\[a-zA-Z]+[0-9]*', '-', t)
+            # Windows 路径
+            t = re.sub(r'[A-Za-z]:\\[^\s<>"\'{}|]+', '-', t)
+            # 货币
+            t = re.sub(r'\$[\d,]+(?:\.\d+)?', '-', t)
+            # 下划线标识符
+            t = re.sub(r'\b\w+_\w+\b', '-', t)
+            # 竖线表达式
+            t = re.sub(r'\b\w+(?:\|\w+)+\b', '-', t)
+            # 英文缩写（don't 这种，保留可能更好，看需求）
+            # t = re.sub(r"\b\w+'\w+\b", '-', t)
+            # 分号表达式
+            t = re.sub(r'\b\w+;\w+\b', '-', t)
+            # 连续多个 '-' 合并成一个
+            t = re.sub(r'-{2,}', '-', t)
+            return t
 
-        # ★★★ 关键：把 HTML 标签也抠成占位符
-        tags = []
-        def tag_st(m):
-            tags.append(m.group(0))
-            return f'\x00T{len(tags)-1}\x00'
-        html = re.sub(r'<[^>]+>', tag_st, html)
-
-        # ★★★ 现在 html 里只剩纯文本和占位符，合并相邻纯文本
-        parts = re.split(r'(\x00[S T]\d+\x00)', html)
-        merged = []
-        buf = ""
-        for p in parts:
-            if p.startswith('\x00S') or p.startswith('\x00T'):
-                if buf:
-                    merged.append(('text', buf))
-                    buf = ""
-                merged.append(('stash', p))
-            else:
-                buf += p
-        if buf:
-            merged.append(('text', buf))
-
-        # ★★★ 翻译合并后的纯文本段（大幅减少请求次数）
+        # 按标签切段，只处理标签外的文本
+        segments = self.split_html_segments(html)
         result = []
-        for typ, content in merged:
-            if typ == 'stash':
-                result.append(content)
+        for typ, content in segments:
+            if typ == 'tag':
+                result.append(content)          # 标签原样保留
             else:
-                result.append(self.translate(content))
+                result.append(clean_text(content))  # 只清文本
+        html = ''.join(result)
 
-        text = ''.join(result)
+        # 整段交给 LibreTranslate（带 format=html，它会保护标签和链接）
+        return self.translate(html)
+    
+    def _clean_translate_artifacts(self, text):
+        """清理翻译后产生的语言标注括号和 ASS 样式串
 
-        # 还原
-        for i, s in enumerate(stash):
-            text = text.replace(f'\x00S{i}\x00', s)
-        for i, t in enumerate(tags):
-            text = text.replace(f'\x00T{i}\x00', t)
+        只在翻译成功后调用，不翻译时不会触发。
+        """
+        if not text:
+            return text
+
+        # 1. ASS/SSA 样式串：{\fn黑体\fs22\bord1...}
+        text = re.sub(r'\{[^{}]*\\[^{}]*\}', '', text)
+
+        # 2. 语言标注括号：(英语) (韩语) (中文(简体)) 等
+        lang_names = (
+            r'中文(?:\([^)]*\))?|繁体中文|简体中文'
+            r'|英语|英文'
+            r'|韩语|韩文|朝鲜语'
+            r'|日语|日文'
+            r'|俄语|俄文'
+            r'|法语|法文'
+            r'|德语|德文'
+            r'|西班牙语|西班牙文'
+            r'|葡萄牙语|葡萄牙文'
+            r'|意大利语|意大利文'
+            r'|阿拉伯语|阿拉伯文'
+        )
+        text = re.sub(rf'[（(]\s*(?:{lang_names})\s*[）)]', '', text)
 
         return text
-
+    def _resanitize_href(self, html):
+        """翻译后修复 href 里的转义"""
+        if 'href=' not in html:
+            return html
+        try:
+            soup = BeautifulSoup(html, 'html5lib')
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                href = href.replace('&amp;', '&').replace('&', '&amp;')
+                a['href'] = href
+            # 只取 body 内容
+            if soup.body:
+                return ''.join(str(c) for c in soup.body.children)
+            return str(soup)
+        except Exception as e:
+            logger.warning(f"_resanitize_href 失败: {e}")
+            return html
     # ---------- 转义 HTML ----------
     def escape_html(self, text):
         if not text:
@@ -575,7 +1020,6 @@ class EmailToTelegram:
         text = text.replace('>', '&gt;')
         return text
 
-    # ---------- 构造消息 ----------
     def build(self, data, msg=None):
         subject = data['subject']
         from_ = data['from']
@@ -593,23 +1037,38 @@ class EmailToTelegram:
         else:
             content = "【此邮件无正文内容】"
 
-        # 2. PDF（放在超长 URL 过滤之前）
+        # 2. PDF
         if msg is not None:
             pdf_text = self.extract_pdf_text(msg)
             if pdf_text:
+                # ★ 中行 PDF 格式化
+                if self.is_boc_mail(data):
+                    pdf_text = self.format_boc_pdf(pdf_text)
                 content += "\n\n<b>📄 PDF 附件内容</b>\n\n"
                 content += self.escape_html(pdf_text)
 
-        # 3. 超长 URL 过滤（正文 + PDF 一起过滤）
+        # 3. 超长 URL 过滤
         content = self.remove_long_urls(content)
 
-        # 4. 判断要不要翻译
+        # 3.5 隐藏行清理 + 空行压缩
+        content = self._preprocess_blank_lines(content)
+        # ★ 建行明细格式化
+        if self.is_ccb_mail(data):
+            content = self.format_ccb_summary(content)   # ← 先精简汇总
+            content = self.format_ccb_records(content)   # ← 再格式化明细
+            self._dump("③.5 建行格式化后", content)
+        # 4. 翻译
         need_translation = ENABLE_TRANSLATION and not self.is_chinese(content)
         logger.info(f"🌐 需要翻译: {need_translation}")
 
         if need_translation:
             subject = self.translate(subject) or subject
+            subject = self._clean_translate_artifacts(subject)
+
             content = self.translate_html(content)
+            content = self._resanitize_href(content)
+            content = self._clean_translate_artifacts(content)
+
 
         # 5. 组装
         parts = []
@@ -620,7 +1079,9 @@ class EmailToTelegram:
         header = " ".join(parts)
         if subject:
             header += f"\n<i>{self.escape_html(subject)}</i>"
-        return f"{header}\n\n{content}"
+        result = f"{header}\n\n{content}"
+
+        return result
 
     # ---------- 发送 ----------
     def split_message(self, text, max_length=3800):
@@ -647,9 +1108,11 @@ class EmailToTelegram:
         return parts
 
     async def send(self, text):
-        """分段发送"""
         text = re.sub(r'(\n\s*){3,}', '\n\n', text).strip()
         parts = self.split_message(text)
+
+        for i, p in enumerate(parts):
+            self._dump(f"② 发送前 第 {i+1}/{len(parts)} 段", p)   # ← 新增
 
         success = True
         for i, part in enumerate(parts):
@@ -667,6 +1130,9 @@ class EmailToTelegram:
         vprint(part[:500])
         vprint("=" * 60)
 
+        # 发送前也检查一遍（可选，建议加）
+        self._debug_escape(part, f"发送前 {idx}/{total}")
+
         try:
             await self.bot.send_message(
                 chat_id=self.chat_id,
@@ -677,9 +1143,14 @@ class EmailToTelegram:
             logger.info(f"✅ 发送成功 (HTML) {idx}/{total}")
             return True
         except Exception as e:
-            logger.warning(f"HTML 发送失败，降级纯文本: {e}")
+            logger.warning(f"❌ HTML 发送失败: {e}")
+            logger.warning(f"❌ 失败段落全文（{len(part)} 字符）：\n{part}")
+            self._debug_escape(part, f"发送失败 {idx}/{total}", force=True)
+
+            # ---- 回退到纯文本 ----
             plain = re.sub(r'<[^>]+>', '', part)
             plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+
             try:
                 await self.bot.send_message(
                     chat_id=self.chat_id,
@@ -691,6 +1162,8 @@ class EmailToTelegram:
                 return True
             except Exception as e2:
                 logger.error(f"❌ 纯文本也失败: {e2}")
+                logger.error(f"❌ plain 全文（{len(plain)} 字符）：\n{plain}")
+                self._debug_escape(plain, f"纯文本发送失败 {idx}/{total}", force=True)
                 return False
 
     # ---------- 主流程 ----------
@@ -722,7 +1195,10 @@ class EmailToTelegram:
                     info = self.extract(msg)
                     logger.info(f"   主题: {info['subject']}")
                     logger.info(f"   发件人: {info['from']}")
-
+                    if info['html']:
+                        self._dump(f"① 解析后 HTML（邮件 {eid}）", info['html'])
+                    elif info['plain']:
+                        self._dump(f"① 解析后 plain（邮件 {eid}）", info['plain'])
                     text = self.build(info, msg)
                     if await self.send(text):
                         mail.store(eid, '+FLAGS', '\\Seen')
