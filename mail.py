@@ -124,6 +124,7 @@ class TelegramHTMLCleaner:
             result = self._final_cleanup(result)
             vprint(f"📤 清理后 HTML 长度: {len(result)}")
             vprint(f"📊 清理统计: {self.stats}")
+            logger.info(f"🔍 clean 后前 300 字符：{repr(result[:300])}")   # ← 加这行
             return result.strip()
 
         except Exception as e:
@@ -153,13 +154,13 @@ class TelegramHTMLCleaner:
                 count += 1
         self.stats['empty_links'] = count
 
-    def _unwrap_tags(self, soup):                # ← 新增
+    def _unwrap_tags(self, soup):
         count = 0
         for tag_name in self.UNWRAP_TAGS:
             for el in soup.find_all(tag_name):
                 if tag_name in self.BLOCK_TAGS:
                     el.insert_before(soup.new_string('\n'))
-                    el.insert_after(soup.new_string('\n'))
+                    el.insert_after(soup.new_string('\n\n'))
                 el.unwrap()
                 count += 1
         self.stats['unwrapped'] = count
@@ -180,7 +181,7 @@ class TelegramHTMLCleaner:
         count = 0
         for _ in range(5):
             unknown = [t for t in soup.find_all(True)
-                       if t.name not in self.ALLOWED_TAGS]
+                    if t.name not in self.ALLOWED_TAGS]
             if not unknown:
                 break
             for tag in unknown:
@@ -206,7 +207,7 @@ class TelegramHTMLCleaner:
         html = re.sub(r'<!DOCTYPE[^>]*>', '', html, flags=re.IGNORECASE)
         html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
         html = re.sub(r'(\n\s*){3,}', '\n\n', html)
-        html = re.sub(r'>\s+<', '><', html)
+        html = re.sub(r'>[ \t]+<', '><', html)   # ← 只删空格/制表符，保留 \n
         return html
 # ============ 邮件 → Telegram ============
 class EmailToTelegram:
@@ -926,45 +927,72 @@ class EmailToTelegram:
         if not html or not ENABLE_TRANSLATION:
             return html
 
-        # 翻译前：把非自然语言的符号统一处理掉
-        # 注意：这些正则只作用于"标签外的纯文本"，不能碰 <a href="..."> 里的属性
+        # ============ 1. 先保护文件名、URL 等 ============
+        placeholders = {}
+        counter = [0]
 
-        # 简单做法：先不区分标签内外，直接替换（风险：可能碰到 href 里的字符）
-        # 更安全做法：先按标签切段，只处理标签外的文本
+        def protect(m):
+            key = f"ZXQPH{counter[0]}ZXQ"
+            placeholders[key] = m.group(0)
+            counter[0] += 1
+            return f"<code>{key}</code>"
 
+        # URL
+        html = re.sub(r'https?://[^\s<>"\']+', protect, html)
+        # 文件名
+        html = re.sub(
+            r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
+            protect, html, flags=re.IGNORECASE
+        )
+        # SHA256SUMS
+        html = re.sub(r'\bSHA256SUMS\b', protect, html)
+        # owner/repo
+        html = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, html)
+        # 版本号
+        html = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, html)
+        # commit hash
+        html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)
+
+        # ============ 2. 再保护换行 ============
+        html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
+        html = html.replace('\n', '<code>ZXQNL1ZXQ</code>')
+
+        # ============ 3. clean_text ============
         def clean_text(t):
-            # ASS 串
             t = re.sub(r'\{[^{}]*\\[^{}]*\}', '-', t)
-            # 反斜杠命令
             t = re.sub(r'\\[a-zA-Z]+[0-9]*', '-', t)
-            # Windows 路径
             t = re.sub(r'[A-Za-z]:\\[^\s<>"\'{}|]+', '-', t)
-            # 货币
             t = re.sub(r'\$[\d,]+(?:\.\d+)?', '-', t)
-            # 下划线标识符
             t = re.sub(r'\b\w+_\w+\b', '-', t)
-            # 竖线表达式
             t = re.sub(r'\b\w+(?:\|\w+)+\b', '-', t)
-            # 英文缩写（don't 这种，保留可能更好，看需求）
-            # t = re.sub(r"\b\w+'\w+\b", '-', t)
-            # 分号表达式
             t = re.sub(r'\b\w+;\w+\b', '-', t)
-            # 连续多个 '-' 合并成一个
             t = re.sub(r'-{2,}', '-', t)
             return t
 
-        # 按标签切段，只处理标签外的文本
         segments = self.split_html_segments(html)
         result = []
         for typ, content in segments:
             if typ == 'tag':
-                result.append(content)          # 标签原样保留
+                result.append(content)
             else:
-                result.append(clean_text(content))  # 只清文本
+                result.append(clean_text(content))
         html = ''.join(result)
 
-        # 整段交给 LibreTranslate（带 format=html，它会保护标签和链接）
-        return self.translate(html)
+        # ============ 4. 翻译 ============
+        translated = self.translate(html)
+
+        # ============ 5. 还原占位符 ============
+        for key, val in placeholders.items():
+            translated = translated.replace(f"<code>{key}</code>", val)
+            translated = translated.replace(key, val)
+
+        # 还原换行
+        translated = translated.replace('<code>ZXQNL2ZXQ</code>', '\n\n')
+        translated = translated.replace('ZXQNL2ZXQ', '\n\n')
+        translated = translated.replace('<code>ZXQNL1ZXQ</code>', '\n')
+        translated = translated.replace('ZXQNL1ZXQ', '\n')
+
+        return translated
     
     def _clean_translate_artifacts(self, text):
         """清理翻译后产生的语言标注括号和 ASS 样式串
