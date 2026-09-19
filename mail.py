@@ -927,7 +927,7 @@ class EmailToTelegram:
         if not html or not ENABLE_TRANSLATION:
             return html
 
-        # ============ 1. 先保护文件名、URL 等 ============
+        # ============ 1. 保护不该翻译的内容 ============
         placeholders = {}
         counter = [0]
 
@@ -939,7 +939,12 @@ class EmailToTelegram:
 
         # URL
         html = re.sub(r'https?://[^\s<>"\']+', protect, html)
-        # 文件名
+        # 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe）
+        html = re.sub(
+            r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
+            protect, html, flags=re.IGNORECASE
+        )
+        # 普通文件名
         html = re.sub(
             r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
             protect, html, flags=re.IGNORECASE
@@ -953,19 +958,12 @@ class EmailToTelegram:
         # commit hash
         html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)
 
-        # ============ 2. 再保护换行 ============
+        # ============ 2. 保护换行 ============
         html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
         html = html.replace('\n', '<code>ZXQNL1ZXQ</code>')
 
-        # ============ 3. clean_text ============
+        # ============ 3. 简化 clean_text ============
         def clean_text(t):
-            t = re.sub(r'\{[^{}]*\\[^{}]*\}', '-', t)
-            t = re.sub(r'\\[a-zA-Z]+[0-9]*', '-', t)
-            t = re.sub(r'[A-Za-z]:\\[^\s<>"\'{}|]+', '-', t)
-            t = re.sub(r'\$[\d,]+(?:\.\d+)?', '-', t)
-            t = re.sub(r'\b\w+_\w+\b', '-', t)
-            t = re.sub(r'\b\w+(?:\|\w+)+\b', '-', t)
-            t = re.sub(r'\b\w+;\w+\b', '-', t)
             t = re.sub(r'-{2,}', '-', t)
             return t
 
