@@ -603,6 +603,67 @@ class RSSDatabase:
                 await self.conn.commit()
 
 # ========== 业务逻辑 ==========
+def protect_special_content(text):
+    """翻译前：把不该被翻译/会被破坏的内容替换成占位符
+    返回 (protected_text, placeholders_dict)
+    注：只用于 RSS 标题（单行），不处理换行
+    """
+    if not text:
+        return text, {}
+
+    placeholders = {}
+    counter = [0]
+
+    def protect(m):
+        key = f"ZXQPH{counter[0]}ZXQ"
+        placeholders[key] = m.group(0)
+        counter[0] += 1
+        return f"<code>{key}</code>"
+
+    # ---- 1. URL ----
+    text = re.sub(r'https?://[^\s<>"\']+', protect, text)
+
+    # ---- 2. 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe） ----
+    text = re.sub(
+        r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
+        protect, text, flags=re.IGNORECASE
+    )
+
+    # ---- 3. 普通文件名 ----
+    text = re.sub(
+        r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
+        protect, text, flags=re.IGNORECASE
+    )
+
+    # ---- 4. SHA256SUMS ----
+    text = re.sub(r'\bSHA256SUMS\b', protect, text)
+
+    # ---- 5. owner/repo ----
+    text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)
+
+    # ---- 6. 版本号 ----
+    text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)
+
+    # ---- 7. commit hash ----
+    text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
+
+    # ---- 8. 翻译会破坏的字符：; _ ' \ $ | ----
+    text = re.sub(r"[;_'\\$|]", protect, text)
+
+    return text, placeholders
+
+
+def restore_special_content(text, placeholders):
+    """翻译后：还原占位符"""
+    if not text:
+        return text
+
+    # 还原占位符（双保险：带 <code> 和不带 <code>）
+    for key, val in placeholders.items():
+        text = text.replace(f"<code>{key}</code>", val)
+        text = text.replace(key, val)
+
+    return text
 
 def remove_html_tags(text):
     text = re.sub(r'<[^>]+>', '', text)
@@ -922,37 +983,57 @@ async def translate_with_deepl(text):
         logger.warning(f"⚠️ DeepL 翻译失败: {e}")
         return None
 
-# ========== 翻译主函数（LibreTranslate → DeepL → 原文） ==========
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, min=2, max=10),
 )
-async def auto_translate_text(text):
-    cleaned_text = remove_html_tags(text).strip()
-    
-    # 如果文本过短或主要是符号/数字，直接返回原文（不 escape）
-    if len(cleaned_text) <= 3 or is_mostly_symbols(cleaned_text):
+async def _translate_raw(text):
+    """底层翻译：文本已由外层清理和保护，这里只负责调翻译服务"""
+    cleaned_text = text.strip()
+
+    if not cleaned_text:
         return cleaned_text
-    
-    # ✅ 第一优先级：LibreTranslate
+
+    # 第一优先级：LibreTranslate
     try:
         translated = await translate_with_libretranslate(cleaned_text)
         if translated is not None:
             return translated
     except Exception as e:
         logger.warning(f"LibreTranslate 失败: {e}")
-    
-    # ✅ 第二优先级：DeepL
+
+    # 第二优先级：DeepL
     try:
         translated = await translate_with_deepl(cleaned_text)
         if translated is not None:
             return translated
     except Exception as e:
         logger.warning(f"DeepL 失败: {e}")
-    
-    # ✅ 所有翻译都失败，返回原文
+
     logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
+
+# ========== 翻译主函数（LibreTranslate → DeepL → 原文） ==========
+async def auto_translate_text(text):
+    """翻译前保护 → 翻译 → 还原"""
+    if not text or not text.strip():
+        return text
+
+    cleaned = remove_html_tags(text).strip()
+
+    if len(cleaned) <= 3 or is_mostly_symbols(cleaned):
+        return cleaned
+
+    # 1. 占位符保护
+    protected, placeholders = protect_special_content(cleaned)
+
+    # 2. 调底层翻译（不是调自己！）
+    translated = await _translate_raw(protected)
+
+    # 3. 还原占位符
+    restored = restore_special_content(translated, placeholders)
+
+    return restored
 
 async def generate_group_message(feed_data, entries, processor):
     try:
