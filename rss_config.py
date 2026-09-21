@@ -30,10 +30,10 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译默认 False: 关闭 / True: 开启
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": True,         # False 禁止预览  True 允许预览
-            "show_count": False         # ✅新增📢
+            "show_count": False         # ✅新增📢▎
         }
     },
 
@@ -52,7 +52,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": False,       #翻译 False: 关闭 / True: 开启
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增
@@ -74,7 +74,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "batch_send_interval": 21590,   # 批量推送
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,            # 禁止预览
             "show_count": False          #计数
@@ -94,7 +94,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "batch_send_interval": 21590,   # 批量推送
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "templates": {  # 改为 templates（复数），支持多种模板
           #      "normal": "{subject}\n[more]({url})",  # 普通模板
                 "normal": "*{subject}*\n[more]({url})",  # 普通模板
@@ -132,7 +132,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "batch_send_interval": 35990,   # 批量推送
         "bot_token": os.getenv("TONGHUASHUN_RSS"),  #   Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,            # 禁止预览
             "show_count": False          #计数
@@ -155,7 +155,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "history_days": 90,     # 新增，保留300天
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "[{subject}]({url})",
             "filter": {
                 "enable": True,  # 过滤开关     False: 关闭 / True: 开启
@@ -185,7 +185,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "batch_send_interval": 17990,   # 批量推送    
         "bot_token": os.getenv("RRSS_LINDA"),  # Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{summary}*\n[more]({url})",
             "preview": False,        # 禁止预览
@@ -205,7 +205,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_SAN"),
         "processor": {
             "translate": False,
-            "header_template": "▎ _{source}_\n",
+            "header_template": "📢 _{source}_\n",
             "templates": {  # 改为 templates（复数），支持多种模板
                 "normal": "*{subject}*\n[more]({url})",  # 普通过滤加粗
            #     "normal": "{subject}\n[more]({url})",  # 普通模板
@@ -241,7 +241,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译开
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
             "show_count": False        # ✅新增📢
@@ -279,7 +279,7 @@ RSS_GROUPS = [ # RSS 组配置列表
        # "batch_send_interval": 10800,   # 批量推送
         "bot_token": os.getenv("RSS_TOKEN"),   # Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": True,                # 预览
             "show_count": False               #计数
@@ -324,7 +324,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "batch_send_interval": 71990,   # 批量推送
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
-        "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+        "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
             "filter": {
@@ -354,7 +354,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "bot_token": os.getenv("YOUTUBE_RSS"),  # Telegram Bot Token
         "processor": {
             "translate": True,          #翻译开
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
          #   "template": "*{subject}*\n🔗 {url}",
             "template": "*{subject}*\n[more]({url})",
             "preview": True,        # 预览
@@ -377,7 +377,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "shared_dedup": True,  # ✅ 新增：整组共享去重（去重池按 group_key）
         "bot_token": os.getenv("RSS_LINDA_YOUTUBE"), # Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,                             # 禁止预览
             "show_count": False                       #计数
@@ -399,7 +399,7 @@ RSS_GROUPS = [ # RSS 组配置列表
      #   "batch_send_interval": 21590,   # 批量推送
         "bot_token": os.getenv("RSS_ZONGHE"),  #   Telegram Bot Token
         "processor": {
-            "header_template": "▎ _{source}_\n",  # 新增标题模板 ★
+            "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "[{subject}]({url})",
             "preview": False,            # 禁止预览
             "show_count": False          #计数
