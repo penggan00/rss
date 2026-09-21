@@ -957,6 +957,8 @@ class EmailToTelegram:
         html = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, html)
         # commit hash
         html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)
+        # 其他符号保护（避免翻译器乱加空格）
+        html = re.sub(r'[;_\\$|]', protect, html)
 
         # ============ 2. 保护换行 ============
         html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')

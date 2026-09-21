@@ -648,7 +648,7 @@ def protect_special_content(text):
     text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
 
     # ---- 8. 翻译会破坏的字符：; _ ' \ $ | ----
-    text = re.sub(r"[;_'\\$|]", protect, text)
+    text = re.sub(r"[;_\\$|]", protect, text)
 
     return text, placeholders
 
