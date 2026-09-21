@@ -66,8 +66,12 @@ python3 ~/rss/rss.py
 python3 mail.py
 python3 usd.py
 # alpine
+
 /root/rss/rss_venv/bin/python /root/rss/mail.py
-chmod +x /root/rss/mail.sh && \
+
+(crontab -l 2>/dev/null; echo "0 18 * * * /root/rss/github.sh >> /root/rss_cron.log 2>&1") | awk '!seen[$0]++' | crontab -
+
+chmod +x /root/rss/github.sh && \
 #( crontab -l 2>/dev/null | grep -v '/root/rss/mail.sh'; echo "*/5 * * * * /root/rss/mail.sh >> /root/rss/cron.log 2>&1" ) | crontab - && \
 #rc-update add crond default 2>/dev/null; rc-service crond start 2>/dev/null; \
 echo "✅ 完成" && crontab -l
