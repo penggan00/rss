@@ -96,7 +96,32 @@ class TelegramHTMLCleaner:
         'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
         'tr', 'li', 'blockquote',
     }
+    def _compact_links(self, soup):
+        """压缩 <a> 内部和相邻 <a> 之间的空白"""
+        for a in soup.find_all('a'):
+            # 1. 把 <a> 内部的文本节点 trim，去掉首尾空白
+            texts = []
+            for child in list(a.children):
+                if isinstance(child, str):
+                    t = child.strip()
+                    if t:
+                        texts.append(t)
+                    child.extract()
+            if texts:
+                a.append(' '.join(texts))
 
+        # 2. 删除相邻 <a> 之间的纯空白兄弟节点
+        for a in soup.find_all('a'):
+            nxt = a.next_sibling
+            while nxt is not None:
+                if getattr(nxt, 'name', None) == 'a':
+                    break
+                if isinstance(nxt, str) and not nxt.strip():
+                    to_del = nxt
+                    nxt = nxt.next_sibling
+                    to_del.replace_with('\n')   # 换成一个 \n
+                else:
+                    break
     def __init__(self):
         self.stats = {}
 
@@ -114,6 +139,7 @@ class TelegramHTMLCleaner:
             self._unwrap_unknown_tags(soup)      # ← 加这行
             self._clean_attributes(soup)
             self._preserve_breaks(soup)
+            self._compact_links(soup)
 
             # 只取 body 内容，避免 <html>/<head>/<body>/<!DOCTYPE> 传给 Telegram
             if soup.body:
@@ -453,7 +479,47 @@ class EmailToTelegram:
         text = ''.join(result)
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = text.strip('\n')
+        logger.info(f"🔍 _preprocess_blank_lines 后最大连续换行数: {max((len(m.group(0)) for m in re.finditer(r'\n+', text)), default=0)}")
         return text
+
+    def dedup_links(self, html):
+        if not html:
+            return html
+
+        seen = set()          # ← 共用一个
+
+        def replace_a(match):
+            full = match.group(0)
+            href = match.group(1)
+            text = match.group(2)
+            if href in seen:
+                logger.info(f"🔁 重复超链接，只留文本: {href[:80]}")
+                return text
+            seen.add(href)
+            return full
+
+        html = re.sub(
+            r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>',
+            replace_a, html,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+
+        def replace_url(match):
+            url = match.group(0)
+            core = re.sub(r'[。，、；：！？）】」》\'"]+$', '', url)
+            tail = url[len(core):]
+            if core in seen:
+                logger.info(f"🔁 重复裸 URL，删除: {core[:80]}")
+                return ''
+            seen.add(core)
+            return core + tail
+
+        html = re.sub(
+            r'(?<!["\'=])https?://[^\s<>"\']+',
+            replace_url, html
+        )
+
+        return html
 
     def is_boc_mail(self, data):
         from_ = (data.get('from') or '').lower()
@@ -632,7 +698,9 @@ class EmailToTelegram:
 
         # ---- 14. 压缩空行 ----
         text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip('\n')
+        text = text.strip('\n')
+        logger.info(f"🔍 _preprocess_blank_lines 后最大连续换行数: {max((len(m.group(0)) for m in re.finditer(r'\n+', text)), default=0)}")
+        return text
     
     def format_ccb_records(self, text):
         """建行交易明细：8 行一条 → 2 行一条"""
@@ -1077,9 +1145,17 @@ class EmailToTelegram:
 
         # 3. 超长 URL 过滤
         content = self.remove_long_urls(content)
-
+        content = self.dedup_links(content)
         # 3.5 隐藏行清理 + 空行压缩
         content = self._preprocess_blank_lines(content)
+
+        # ★ 调试：打印链接附近真实字符
+        idx = content.find('您可能需要')
+        if idx >= 0:
+            logger.info(f"🔍 链接附近 repr：{repr(content[idx:idx+600])}")
+
+        content = re.sub(r'(</a>)\s*\n+\s*(<a\s)', r'\1\n\2', content)
+        
         # ★ 建行明细格式化
         if self.is_ccb_mail(data):
             content = self.format_ccb_summary(content)   # ← 先精简汇总
