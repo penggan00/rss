@@ -3,10 +3,8 @@ mkdir ~/rss
 git clone https://github.com/penggan00/rss.git
 git clone https://github.com/DIYgod/RSSHub.git
 git@github.com:DIYgod/RSSHub.git
-# 安装
-/bin/bash ~/rss/setup.sh
+# 
 /bin/bash ~/rss/github.sh
-chmod +x ~/rss/{rss.sh,ssh.sh,usd.sh,mail.sh}
 chmod +x ~/rss/github.sh
 ```
 ```
@@ -67,7 +65,12 @@ source rss_venv/bin/activate
 python3 ~/rss/rss.py
 python3 mail.py
 python3 usd.py
-
+# alpine
+/root/rss/rss_venv/bin/python /root/rss/mail.py
+chmod +x /root/rss/mail.sh && \
+#( crontab -l 2>/dev/null | grep -v '/root/rss/mail.sh'; echo "*/5 * * * * /root/rss/mail.sh >> /root/rss/cron.log 2>&1" ) | crontab - && \
+#rc-update add crond default 2>/dev/null; rc-service crond start 2>/dev/null; \
+echo "✅ 完成" && crontab -l
 ```
 #安装依赖
 python3 -m pip install -r requirements.txt
