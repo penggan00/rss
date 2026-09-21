@@ -1,8 +1,10 @@
 # source rss_venv/bin/activate
-# pip install psutil python-dotenv python-telegram-bot aiosqlite aiohttp
+# pip install psutil python-dotenv python-telegram-bot aiohttp
 import os
 import re
 import asyncio
+import signal
+import hashlib
 import psutil
 import time
 import subprocess
@@ -11,26 +13,15 @@ import aiohttp
 from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import wraps
+from collections import OrderedDict
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-import aiosqlite
-import logging
 
 # ============================================================
-# 基础配置（必须最先初始化）
+# 基础配置
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-logging.getLogger('telegram').setLevel(logging.WARNING)
-logging.getLogger('aiosqlite').setLevel(logging.WARNING)
 
 # 加载环境变量
 load_dotenv()
@@ -49,7 +40,6 @@ class Config:
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
         if not value:
-            logger.error(f"Missing required environment variable: {var_name}")
             raise ValueError(f"Missing required environment variable: {var_name}")
         return value
 
@@ -63,172 +53,60 @@ class Config:
         try:
             return [int(id_str.strip()) for id_str in ids_str.split(',')]
         except ValueError:
-            logger.error(f"Invalid {var_name} format")
             raise ValueError(f"Invalid {var_name} format")
 
 # 初始化全局配置
-try:
-    config = Config()
-    logger.info("Configuration loaded successfully")
-    logger.info(f"Authorized chat IDs: {config.AUTHORIZED_CHAT_IDS}")
-except Exception as e:
-    logger.critical(f"Failed to load configuration: {e}")
-    raise
+config = Config()
 
 # ============================================================
-# 数据库连接池管理
+# 内存缓存（LRU，上限 2000 条）
 # ============================================================
-class AsyncTranslationCache:
-    """使用持久连接和WAL模式的翻译缓存"""
-    
-    def __init__(self, db_path: str = 'translations.db'):
-        self.db_path = db_path
-        self._conn: Optional[aiosqlite.Connection] = None
+class InMemoryCache:
+    """基于 OrderedDict 的 LRU 内存缓存，超过上限自动淘汰最久未使用的条目"""
+
+    def __init__(self, max_size: int = 2000):
+        self._data: OrderedDict = OrderedDict()
+        self._max = max_size
+        self._hits = 0
+        self._misses = 0
         self._lock = asyncio.Lock()
-        self._update_lock = asyncio.Lock()
-        self._init_done = False
-        
-    async def init_db(self):
-        """初始化数据库连接"""
-        if self._init_done:
-            return
-            
-        self._conn = await aiosqlite.connect(self.db_path)
-        
-        # 启用WAL模式
-        await self._conn.execute('PRAGMA journal_mode=WAL')
-        await self._conn.execute('PRAGMA synchronous=NORMAL')
-        await self._conn.execute('PRAGMA cache_size=10000')
-        await self._conn.execute('PRAGMA temp_store=MEMORY')
-        
-        # 创建表
-        await self._conn.execute('''
-            CREATE TABLE IF NOT EXISTS translations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_text TEXT NOT NULL,
-                source_lang TEXT NOT NULL,
-                target_lang TEXT NOT NULL,
-                translated_text TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 1,
-                UNIQUE(source_text, source_lang, target_lang)
-            )
-        ''')
-        
-        await self._conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_translations_key 
-            ON translations(source_text, source_lang, target_lang)
-        ''')
-        
-        await self._conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_translations_created 
-            ON translations(created_at)
-        ''')
-        
-        await self._conn.commit()
-        self._init_done = True
-        logger.info(f"Database initialized: {self.db_path}")
-        
-    async def close(self):
-        """关闭数据库连接"""
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
-            self._init_done = False
-            
-    async def get(self, source_text: str, source_lang: str, target_lang: str) -> Optional[str]:
-        """查询缓存"""
-        try:
-            async with self._lock:
-                cursor = await self._conn.execute(
-                    '''
-                    SELECT translated_text FROM translations 
-                    WHERE source_text=? AND source_lang=? AND target_lang=?
-                    ''', 
-                    (source_text, source_lang, target_lang)
-                )
-                row = await cursor.fetchone()
-                if row:
-                    asyncio.create_task(self._update_access_count(
-                        source_text, source_lang, target_lang
-                    ))
-                    return row[0]
-                return None
-        except Exception as e:
-            logger.error(f"Cache get error: {e}")
-            return None
-            
-    async def _update_access_count(self, source_text: str, source_lang: str, target_lang: str):
-        """更新访问计数"""
-        try:
-            async with self._update_lock:
-                await self._conn.execute(
-                    '''
-                    UPDATE translations 
-                    SET access_count = access_count + 1
-                    WHERE source_text=? AND source_lang=? AND target_lang=?
-                    ''',
-                    (source_text, source_lang, target_lang)
-                )
-                await self._conn.commit()
-        except Exception as e:
-            logger.debug(f"Update access count skipped: {e}")
-        
-    async def set(self, source_text: str, source_lang: str, target_lang: str, translated_text: str) -> bool:
-        """写入缓存"""
-        try:
-            async with self._lock:
-                await self._conn.execute(
-                    '''
-                    INSERT OR REPLACE INTO translations 
-                    (source_text, source_lang, target_lang, translated_text) 
-                    VALUES (?, ?, ?, ?)
-                    ''',
-                    (source_text, source_lang, target_lang, translated_text)
-                )
-                await self._conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Cache set error: {e}")
-            return False
-            
-    async def clean_expired(self, days: int = 99999):
-        """清理过期缓存"""
-        try:
-            async with self._lock:
-                await self._conn.execute(
-                    """
-                    DELETE FROM translations 
-                    WHERE created_at < datetime('now', ?)
-                    AND access_count < 5
-                    """,
-                    (f'-{days} days',)
-                )
-                await self._conn.commit()
-            logger.info("Cache cleanup completed")
-        except Exception as e:
-            logger.error(f"Cache cleanup error: {e}")
-            
-    async def get_stats(self):
-        """获取缓存统计"""
-        try:
-            async with self._lock:
-                cursor = await self._conn.execute("SELECT COUNT(*) FROM translations")
-                total = (await cursor.fetchone())[0]
-                
-                cursor = await self._conn.execute("SELECT COUNT(*) FROM translations WHERE access_count > 1")
-                reused = (await cursor.fetchone())[0]
-                
-                return {
-                    'total_entries': total,
-                    'reused_entries': reused,
-                    'reuse_rate': f"{reused/total*100:.1f}%" if total > 0 else "N/A"
-                }
-        except Exception as e:
-            logger.error(f"Get cache stats error: {e}")
-            return {'total_entries': 0, 'reused_entries': 0, 'reuse_rate': 'N/A'}
 
-cache = AsyncTranslationCache()
+    def _make_key(self, source_text: str, source_lang: str, target_lang: str) -> str:
+        # 用 MD5 摘要作为 key，避免长文本把 key 本身撑大
+        raw = f"{source_lang}|{target_lang}|{source_text}"
+        return hashlib.md5(raw.encode('utf-8')).hexdigest()
+
+    async def get(self, source_text: str, source_lang: str, target_lang: str) -> Optional[str]:
+        key = self._make_key(source_text, source_lang, target_lang)
+        async with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)   # 标记为最近使用
+                self._hits += 1
+                return self._data[key]
+            self._misses += 1
+            return None
+
+    async def set(self, source_text: str, source_lang: str, target_lang: str, translated_text: str) -> bool:
+        key = self._make_key(source_text, source_lang, target_lang)
+        async with self._lock:
+            self._data[key] = translated_text
+            self._data.move_to_end(key)
+            if len(self._data) > self._max:
+                self._data.popitem(last=False)  # 淘汰最久未使用的
+        return True
+
+    async def get_stats(self) -> dict:
+        async with self._lock:
+            total = self._hits + self._misses
+            return {
+                'total_entries': len(self._data),
+                'max_entries': self._max,
+                'hits': self._hits,
+                'misses': self._misses,
+                'hit_rate': f"{self._hits / total * 100:.1f}%" if total > 0 else "N/A"
+            }
+
+cache = InMemoryCache(max_size=2000)
 
 # ============================================================
 # 语言检测
@@ -270,98 +148,70 @@ class LibreTranslator:
         self.libretranslate_url = config.LIBRETRANSLATE_URL
         self.deepl_api_key = config.DEEPL_API_KEY
         self.deepl_api_url = config.DEEPL_API_URL
-        
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """复用全局 aiohttp session，避免每次翻译重新建连"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self):
+        """关闭全局 session（在 bot shutdown 时调用）"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
     async def translate_with_libretranslate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
         """使用 LibreTranslate 翻译"""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.libretranslate_url,
-                    json={"q": text, "source": source_lang, "target": target_lang},
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        translated = result.get("translatedText")
-                        if translated and translated != text:
-                            logger.info("✅ LibreTranslate 翻译成功")
-                            return translated
-                        else:
-                            logger.warning("⚠️ LibreTranslate 返回空或相同文本")
-                            return None
-                    else:
-                        logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
-                        return None
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ LibreTranslate 请求超时")
-            return None
-        except aiohttp.ClientError as e:
-            logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+            session = await self._get_session()
+            async with session.post(
+                self.libretranslate_url,
+                json={"q": text, "source": source_lang, "target": target_lang},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    translated = result.get("translatedText")
+                    if translated and translated != text:
+                        return translated
+                    return None
+                return None
+        except Exception:
             return None
 
     async def translate_with_deepl(self, text: str, target_lang: str) -> Optional[str]:
         """使用 DeepL 翻译（备用）"""
         if not self.deepl_api_key:
-            logger.warning("⚠️ DeepL API Key 未配置")
             return None
-        
-        # DeepL 语言代码映射
+
         lang_map = {
-            'zh': 'ZH',
-            'en': 'EN',
-            'ja': 'JA',
-            'ko': 'KO',
-            'ru': 'RU',
-            'fr': 'FR',
-            'de': 'DE',
-            'es': 'ES',
-            'it': 'IT',
-            'pt': 'PT',
-            'nl': 'NL',
-            'pl': 'PL',
+            'zh': 'ZH', 'en': 'EN', 'ja': 'JA', 'ko': 'KO', 'ru': 'RU',
+            'fr': 'FR', 'de': 'DE', 'es': 'ES', 'it': 'IT',
+            'pt': 'PT', 'nl': 'NL', 'pl': 'PL',
         }
-        
-        # 目标语言转大写
         target = lang_map.get(target_lang, target_lang.upper())
-        
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.deepl_api_url,
-                    json={
-                        "text": [text],
-                        "target_lang": target
-                    },
-                    headers={
-                        "Authorization": f"DeepL-Auth-Key {self.deepl_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        translated = result.get("translations", [{}])[0].get("text")
-                        if translated and translated != text:
-                            logger.info("✅ DeepL 翻译成功")
-                            return translated
-                        else:
-                            logger.warning("⚠️ DeepL 返回空或相同文本")
-                            return None
-                    else:
-                        error_text = await response.text()
-                        logger.warning(f"⚠️ DeepL 返回状态码: {response.status}, 响应: {error_text}")
-                        return None
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ DeepL 请求超时")
-            return None
-        except aiohttp.ClientError as e:
-            logger.warning(f"⚠️ DeepL 网络错误: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"⚠️ DeepL 翻译失败: {e}")
+            session = await self._get_session()
+            async with session.post(
+                self.deepl_api_url,
+                json={"text": [text], "target_lang": target},
+                headers={
+                    "Authorization": f"DeepL-Auth-Key {self.deepl_api_key}",
+                    "Content-Type": "application/json"
+                },
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    translated = result.get("translations", [{}])[0].get("text")
+                    if translated and translated != text:
+                        return translated
+                    return None
+                return None
+        except Exception:
             return None
 
     async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
@@ -371,23 +221,17 @@ class LibreTranslator:
         """
         if not text or not text.strip():
             return text
-        
-        # 第一优先级：LibreTranslate
+
         result = await self.translate_with_libretranslate(text, source_lang, target_lang)
         if result is not None:
             return result
-        
-        # 第二优先级：DeepL
-        logger.info("🔄 尝试 DeepL 翻译（备用）...")
+
         result = await self.translate_with_deepl(text, target_lang)
         if result is not None:
             return result
-        
-        # 都失败，返回原文
-        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
+
         return text
 
-# 初始化翻译器
 translator = LibreTranslator()
 
 # ============================================================
@@ -397,7 +241,6 @@ def require_auth(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         if update.effective_chat.id not in config.AUTHORIZED_CHAT_IDS:
-            logger.warning(f"Unauthorized access: {update.effective_chat.id}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -411,37 +254,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = update.message.text
     if not text or len(text) > 5000:
         return
-        
+
     source_lang, target_lang = get_translation_direction(text)
-    logger.info(f"Chat {update.effective_chat.id}: [{source_lang}->{target_lang}] '{text[:80]}...'")
-    
-    # 第一步：检查缓存
-    try:
-        cached = await cache.get(text, source_lang, target_lang)
-        if cached:
-            await send_long_message(update, cached)
-            logger.info(f"Cache hit for: '{text[:50]}...'")
-            return
-    except Exception as e:
-        logger.error(f"Cache get error: {e}")
-    
+
+    # 第一步：检查内存缓存
+    cached = await cache.get(text, source_lang, target_lang)
+    if cached:
+        await send_long_message(update, cached)
+        return
+
     # 第二步：翻译
     try:
         translated = await translator.translate(text, source_lang, target_lang)
-        
-        # 如果翻译结果和原文不同，缓存结果
+
         if translated != text:
             await cache.set(text, source_lang, target_lang, translated)
-        
-        # 发送结果
+
         await send_long_message(update, translated)
-        
+
     except Exception as e:
-        logger.error(f"Translation error: {e}")
         await update.message.reply_text(f"❌ 翻译出错: {str(e)}")
 
 async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
-    """分片发送长消息"""
+    """分片发送长消息，分片之间加延时避免触发 Telegram 限流"""
     idx, length = 0, len(text)
     while idx < length:
         end_idx = min(idx + chunk_size, length)
@@ -450,14 +285,17 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
                 end_idx -= 1
             if end_idx == idx:
                 end_idx = min(idx + chunk_size, length)
-                
+
         chunk = text[idx:end_idx]
         try:
             await update.message.reply_text(chunk)
-        except Exception as e:
-            logger.error(f"Send message error: {e}")
+        except Exception:
             break
+
         idx = end_idx
+        # 分片之间加延时，避免 Telegram 每秒 1 条的软限制
+        if idx < length:
+            await asyncio.sleep(0.5)
 
 # ============================================================
 # 系统命令执行
@@ -466,7 +304,7 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
 async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """执行系统命令"""
     command = ' '.join(context.args) if context.args else None
-    
+
     if not command:
         await update.message.reply_text("用法: /cmd 命令")
         return
@@ -477,10 +315,10 @@ async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             command, shell=True, capture_output=True, text=True, timeout=15, cwd='/root'
         )
         output = result.stdout or result.stderr or "(无输出)"
-        
+
         if len(output) > 3500:
             output = output[:3500] + "\n...截断"
-        
+
         await update.message.reply_text(f"```\n{output}\n```", parse_mode='Markdown')
     except subprocess.TimeoutExpired:
         await update.message.reply_text("⏰ 超时")
@@ -498,15 +336,15 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         memory = psutil.virtual_memory()
         memory_total_gb = memory.total / (1024 ** 3)
         memory_used_gb = memory.used / (1024 ** 3)
-        
+
         disk = psutil.disk_usage('/')
         disk_total_gb = disk.total / (1024 ** 3)
         disk_used_gb = disk.used / (1024 ** 3)
-        
+
         boot_time = datetime.fromtimestamp(psutil.boot_time())
         uptime = datetime.now() - boot_time
         net_io = psutil.net_io_counters()
-        
+
         cache_stats = await cache.get_stats()
 
         message = (
@@ -517,74 +355,56 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"*运行时间:* {str(uptime).split('.')[0]}\n"
             f"*网络发送:* {net_io.bytes_sent / (1024 ** 2):.1f}MB\n"
             f"*网络接收:* {net_io.bytes_recv / (1024 ** 2):.1f}MB\n\n"
-            f"📊 *缓存统计*\n"
-            f"*缓存条目:* {cache_stats['total_entries']}条\n"
-            f"*复用条目:* {cache_stats['reused_entries']}条\n"
-            f"*复用率:* {cache_stats['reuse_rate']}\n\n"
+            f"📊 *缓存统计（内存）*\n"
+            f"*当前条目:* {cache_stats['total_entries']}/{cache_stats['max_entries']}条\n"
+            f"*命中次数:* {cache_stats['hits']}次\n"
+            f"*未命中:* {cache_stats['misses']}次\n"
+            f"*命中率:* {cache_stats['hit_rate']}\n\n"
             f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        
+
         await update.message.reply_text(message, parse_mode='Markdown')
-        
+
     except Exception as e:
-        logger.error(f"Htop command error: {e}")
         await update.message.reply_text(f"❌ 获取系统信息出错: {str(e)}")
 
 # ============================================================
 # 应用生命周期管理
 # ============================================================
 async def startup(application):
-    """应用启动初始化"""
-    logger.info("Initializing bot services...")
-    
-    try:
-        await cache.init_db()
-        logger.info("Database initialized")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-    
-    logger.info("Bot started")
+    pass
 
 async def shutdown(application):
-    """应用关闭清理"""
-    logger.info("Shutting down bot...")
-    
     try:
-        await cache.clean_expired()
-        logger.info("Cache cleaned")
-    except Exception as e:
-        logger.error(f"Cache cleanup failed: {e}")
-    
-    try:
-        await cache.close()
-        logger.info("Database connection closed")
-    except Exception as e:
-        logger.error(f"Database close failed: {e}")
-    
-    logger.info("Bot shutdown complete")
+        await translator.close()
+    except Exception:
+        pass
 
 # ============================================================
 # 主函数
 # ============================================================
 def main():
     """启动机器人"""
-    try:
-        application = Application.builder().token(config.TELEGRAM_TOKEN).build()
-        
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        application.add_handler(CommandHandler("htop", htop_command))
-        application.add_handler(CommandHandler("cmd", cmd_command))
-        
-        application.post_init = startup
-        application.post_shutdown = shutdown
-        
-        logger.info("Bot is starting...")
-        application.run_polling()
-        
-    except Exception as e:
-        logger.critical(f"Failed to start bot: {e}")
-        raise
+    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(CommandHandler("htop", htop_command))
+    application.add_handler(CommandHandler("cmd", cmd_command))
+
+    application.post_init = startup
+    application.post_shutdown = shutdown
+
+    # ---- 优雅退出：注册 SIGINT / SIGTERM 信号处理 ----
+    def _signal_handler(signum, frame):
+        if application.updater and application.updater.running:
+            application.updater.stop()
+        if application.running:
+            application.stop_running()
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
