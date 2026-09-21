@@ -1,0 +1,51 @@
+name: rss OpenWrt aarch64 rss_venv
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: alpine:3.23
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        apk add --no-cache python3 python3-dev py3-pip gcc musl-dev linux-headers rust cargo curl
+
+    - name: Create venv and install packages
+      run: |
+        python3 -m venv --copies rss_venv
+        source rss_venv/bin/activate
+        pip install --upgrade pip
+        pip install -r requirements.txt --break-system-packages
+
+    - name: Clean up unused files
+      run: |
+        rm -rf rss_venv/lib/python3.*/site-packages/pip
+        rm -rf rss_venv/lib/python3.*/site-packages/setuptools
+        find rss_venv -type d -name "__pycache__" -exec rm -rf {} +
+
+    - name: Debug size
+      run: |
+        echo "=== venv size ==="
+        du -sh rss_venv
+        echo "=== file count ==="
+        find rss_venv | wc -l
+
+    - name: Package
+      run: tar -czf rss_venv_openwrt_aarch64.tar.gz rss_venv
+
+    - name: Publish to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: venv-openwrt-aarch64-latest
+        name: venv-openwrt-aarch64-latest
+        files: rss_venv_openwrt_aarch64.tar.gz
+        token: ${{ secrets.GITHUB_TOKEN }}
