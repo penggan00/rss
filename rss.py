@@ -622,30 +622,36 @@ def protect_special_content(text):
         counter[0] += 1
         return f" {key} "                  # 前后加空格，避免与单词粘连
 
-    # ---- 1. URL ----
-    text = re.sub(r'https?://[^\s<>"\']+', protect, text)
-    # ---- 2. 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe） ----
-    text = re.sub(
+    # ===== 绝对可靠 =====
+    text = re.sub(r'https?://[^\s<>"\']+', protect, text)              # 1. URL
+    text = re.sub(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b', protect, text)      # 2. 邮箱
+    text = re.sub(r'\bCVE-\d{4}-\d{4,}\b', protect, text, flags=re.IGNORECASE)  # 3. CVE
+    text = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b', protect, text)       # 4. IP
+    text = re.sub(r'\b[a-f0-9]{64}\b', protect, text)                  # 5. SHA256
+    text = re.sub(r'\b[a-f0-9]{40}\b', protect, text)                  # 6. SHA1
+    text = re.sub(r'\b[a-f0-9]{32}\b', protect, text)                  # 7. MD5
+    text = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', protect, text)  # 8. UUID
+    text = re.sub(r'\bSHA256SUMS\b', protect, text)                    # 9. SHA256SUMS
+    text = re.sub(r'\b0x[0-9a-fA-F]+\b', protect, text)                # 10. 0x
+
+    # ===== 高可靠 =====
+    # ⚠️ 调整：owner/repo 提前到文件名之前
+    text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)  # 11. owner/repo
+    text = re.sub(                                                        # 12. 带空格文件名
         r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
         protect, text, flags=re.IGNORECASE
     )
-    # ---- 3. 普通文件名 ----
-    text = re.sub(
-        r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
+    text = re.sub(                                                        # 13. 普通文件名
+        r'\b[\w][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip|tar\.gz|tgz|AppImage|snap|apk|7z|xz|bz2)\b',
         protect, text, flags=re.IGNORECASE
     )
-    # ---- 4. SHA256SUMS ----
-    text = re.sub(r'\bSHA256SUMS\b', protect, text)
-    # ---- 5. owner/repo ----
-    text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)
-    # ---- 6. 版本号 ----
-    text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)
-    # ---- 7. commit hash ----
-    text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
-    # ---- 8. 6 个会被翻译破坏的字符：; _ ' \ $ | ----
-    text = re.sub(r"[;_'\\$|]", protect, text)
+    text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)                  # 14. 版本号
+    text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)   # 15. commit hash
 
-    # ✅ 合并多余空格
+    # ===== 翻译破坏字符 =====
+    text = re.sub(r"[;_'\\$|]", protect, text)                          # 16. 6 个符号
+
+    # 合并多余空格
     text = re.sub(r' {2,}', ' ', text).strip()
 
     return text, placeholders
