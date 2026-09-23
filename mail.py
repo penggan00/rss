@@ -241,7 +241,8 @@ class TelegramHTMLCleaner:
         for tag in soup.find_all(True):
             if tag.name == 'a' and 'href' in tag.attrs:
                 href = tag['href']
-                # 转义 href 里的 &，避免 Telegram 截断链接
+                # 先把已有的 &amp; 还原成 &，再统一转义，避免双重转义
+                href = href.replace('&amp;', '&')
                 href = href.replace('&', '&amp;')
                 tag.attrs = {'href': href}
             else:
@@ -395,7 +396,7 @@ class EmailToTelegram:
                 html
             ):
                 ctx.append(m.group(0))
-            logger.error(f"[{stage}] ⚠️ 发现 {len(bare_amp)} 个裸 & ：{ctx[:5]}")
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_amp)} 个裸 & ：{ctx[:5]}")
 
         # 2. 统计可疑的 < （后面不是合法标签名）
         bare_lt = re.findall(
@@ -403,27 +404,27 @@ class EmailToTelegram:
             html
         )
         if bare_lt:
-            logger.error(f"[{stage}] ⚠️ 发现 {len(bare_lt)} 个可疑 < ：{bare_lt[:5]}")
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_lt)} 个可疑 < ：{bare_lt[:5]}")
 
         # 3. 统计双重转义
         dbl = re.findall(r'&amp;(?:amp|lt|gt|quot);', html)
         if dbl:
-            logger.error(f"[{stage}] ⚠️ 发现 {len(dbl)} 个双重转义：{dbl[:5]}")
+            logger.warning(f"[{stage}] ⚠️ 发现 {len(dbl)} 个双重转义：{dbl[:5]}")
 
         # 4. 检查 href
         hrefs = re.findall(r'href="([^"]*)"', html)
         for h in hrefs:
             if re.search(r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', h):
-                logger.error(f"[{stage}] ⚠️ href 里有裸 & ：{h[:100]}")
+                logger.warning(f"[{stage}] ⚠️ href 里有裸 & ：{h[:100]}")
             if '&amp;amp;' in h:
-                logger.error(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
+                logger.warning(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
 
         # 5. 检查未闭合标签
         for tag in ['a', 'b', 'i', 'u', 's', 'code', 'pre']:
             opens = len(re.findall(rf'<{tag}(?:\s|>)', html))
             closes = len(re.findall(rf'</{tag}>', html))
             if opens != closes:
-                logger.error(
+                logger.warning(
                     f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}"
                 )
 
@@ -1135,6 +1136,12 @@ class EmailToTelegram:
         for key, val in placeholders.items():
             translated = translated.replace(f"<code>{key}</code>", val)
             translated = translated.replace(key, val)
+            # 兜底：翻译引擎可能把 <code>ZXQPH0ZXQ</code> 改成 <code="">ZXQPH0ZXQ</code>
+            translated = re.sub(
+                rf'<\s*code\s*[^>]*>\s*{re.escape(key)}\s*<\s*/\s*code\s*>',
+                lambda _m: val,
+                translated
+            )
 
         # 还原换行
         translated = translated.replace('<code>ZXQNL2ZXQ</code>', '\n\n')
@@ -1180,7 +1187,13 @@ class EmailToTelegram:
             soup = BeautifulSoup(html, 'html5lib')
             for a in soup.find_all('a', href=True):
                 href = a['href']
-                href = href.replace('&amp;', '&').replace('&', '&amp;')
+                                # 先把所有 &amp; 还原成 &，再把 & 转义成 &amp;
+                # 循环处理，避免双重转义残留
+                prev = None
+                while prev != href:
+                    prev = href
+                    href = href.replace('&amp;', '&')
+                href = href.replace('&', '&amp;')
                 a['href'] = href
             # 只取 body 内容
             if soup.body:
@@ -1316,7 +1329,12 @@ class EmailToTelegram:
         vprint(part[:500])
         vprint("=" * 60)
 
-        # 发送前也检查一遍（可选，建议加）
+        # 兜底：清掉残留的 HTML 注释、空属性标签等 Telegram 不支持的标签
+        part = re.sub(r'<!--.*?-->', '', part, flags=re.DOTALL)      # 删注释
+        part = re.sub(r'<\s*code\s+[^>]*>', '<code>', part)          # <code ...> → <code>
+        part = re.sub(r'<\s*code\s*>\s*<\s*/\s*code\s*>', '', part)  # 删空 <code></code>
+
+        # 清理后再检查（日志反映真实发送内容）
         self._debug_escape(part, f"发送前 {idx}/{total}")
 
         try:
