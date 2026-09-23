@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from telegram import Bot
 from telegram.constants import ParseMode
 import pdfplumber
+from logging.handlers import RotatingFileHandler
 
 # ============ 路径 ============
 BASE_DIR = Path(__file__).parent.absolute()
@@ -36,17 +37,38 @@ LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY')
 DEEPL_API_URL = os.getenv('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')
 
-VERBOSE_LOG = os.getenv('VERBOSE_LOG', 'false').lower() == 'true'
+VERBOSE_LOG = True   # ★ 默认开启，不再从 .env 读
+#VERBOSE_LOG = False   # 默认关闭调试输出
 
 # ============ 日志 ============
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+# ---- 终端 handler：所有级别都显示 ----
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(message)s'
+))
+
+# ---- 文件 handler：只记录 ERROR 及以上（发送失败等），10MB 轮转 ----
+# backupCount=0 表示不保留历史文件，只有当前这一个文件
+# 超 10MB 时，旧文件直接丢弃，新文件从空开始写
+file_handler = RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=10 * 1024 * 1024,   # 10MB
+    backupCount=0,               # ★ 不保留历史文件，只有一个文件
+    encoding='utf-8'
 )
+file_handler.setLevel(logging.ERROR)   # ★ 只记录 ERROR
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(message)s'
+))
+
+# ---- root logger ----
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+root_logger.addHandler(console_handler)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger(__name__)
 
 
@@ -345,6 +367,7 @@ class EmailToTelegram:
         if len(body) > max_len:
             body = body[:max_len] + f"\n... [已截断，共 {len(content)} 字符]"
         logger.info("\n%s\n%s\n%s\n%s\n%s", sep, header, sep, body, sep)
+
     def _debug_escape(self, html, stage, force=False):
         """调试：检查 HTML 里的转义问题
 
@@ -372,7 +395,7 @@ class EmailToTelegram:
                 html
             ):
                 ctx.append(m.group(0))
-            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_amp)} 个裸 & ：{ctx[:5]}")
+            logger.error(f"[{stage}] ⚠️ 发现 {len(bare_amp)} 个裸 & ：{ctx[:5]}")
 
         # 2. 统计可疑的 < （后面不是合法标签名）
         bare_lt = re.findall(
@@ -380,27 +403,27 @@ class EmailToTelegram:
             html
         )
         if bare_lt:
-            logger.warning(f"[{stage}] ⚠️ 发现 {len(bare_lt)} 个可疑 < ：{bare_lt[:5]}")
+            logger.error(f"[{stage}] ⚠️ 发现 {len(bare_lt)} 个可疑 < ：{bare_lt[:5]}")
 
         # 3. 统计双重转义
         dbl = re.findall(r'&amp;(?:amp|lt|gt|quot);', html)
         if dbl:
-            logger.warning(f"[{stage}] ⚠️ 发现 {len(dbl)} 个双重转义：{dbl[:5]}")
+            logger.error(f"[{stage}] ⚠️ 发现 {len(dbl)} 个双重转义：{dbl[:5]}")
 
         # 4. 检查 href
         hrefs = re.findall(r'href="([^"]*)"', html)
         for h in hrefs:
             if re.search(r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', h):
-                logger.warning(f"[{stage}] ⚠️ href 里有裸 & ：{h[:100]}")
+                logger.error(f"[{stage}] ⚠️ href 里有裸 & ：{h[:100]}")
             if '&amp;amp;' in h:
-                logger.warning(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
+                logger.error(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
 
         # 5. 检查未闭合标签
         for tag in ['a', 'b', 'i', 'u', 's', 'code', 'pre']:
             opens = len(re.findall(rf'<{tag}(?:\s|>)', html))
             closes = len(re.findall(rf'</{tag}>', html))
             if opens != closes:
-                logger.warning(
+                logger.error(
                     f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}"
                 )
 
@@ -1306,8 +1329,8 @@ class EmailToTelegram:
             logger.info(f"✅ 发送成功 (HTML) {idx}/{total}")
             return True
         except Exception as e:
-            logger.warning(f"❌ HTML 发送失败: {e}")
-            logger.warning(f"❌ 失败段落全文（{len(part)} 字符）：\n{part}")
+            logger.error(f"❌ HTML 发送失败: {e}")
+            logger.error(f"❌ 失败段落全文（{len(part)} 字符）：\n{part}")
             self._debug_escape(part, f"发送失败 {idx}/{total}", force=True)
 
             # ---- 回退到纯文本 ----
@@ -1351,7 +1374,7 @@ class EmailToTelegram:
                     logger.info(f"📧 处理邮件 {eid}")
                     status, data = mail.fetch(eid, '(RFC822)')
                     if status != 'OK':
-                        logger.warning(f"获取邮件 {eid} 失败")
+                        logger.error(f"❌ 获取邮件 {eid} 失败")
                         continue
 
                     msg = email.message_from_bytes(data[0][1])
@@ -1368,7 +1391,10 @@ class EmailToTelegram:
                         ok += 1
                         logger.info(f"✅ 邮件 {eid} 已发送并标记已读")
                     else:
-                        logger.error(f"❌ 邮件 {eid} 发送失败")
+                        logger.error(
+                            f"❌ 邮件 {eid} 发送失败 | "
+                            f"主题: {info['subject']} | 发件人: {info['from']}"
+                        )
                 except Exception as e:
                     logger.error(f"❌ 处理邮件 {eid} 出错: {e}")
                 await asyncio.sleep(2)
