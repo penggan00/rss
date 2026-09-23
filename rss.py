@@ -468,12 +468,12 @@ class RSSDatabase:
     async def cleanup_history(self, feed_group, shared_dedup=False, keep_count=100):
         """清理历史数据：保留最近 keep_count 条"""
         now = time.time()
-        
+
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 # 检查上次清理时间，24小时内不重复清理
                 row = await conn.fetchrow(
-                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1", 
+                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1",
                     feed_group
                 )
                 last_cleanup = row['last_cleanup_time'] if row else 0
@@ -517,17 +517,39 @@ class RSSDatabase:
                     feed_group
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送
-                await conn.execute(
+                # 3. 未发送超过3天，强制标记为已发送（含日志）
+                expired_rows = await conn.fetch(
                     """
-                    UPDATE pending_messages 
-                    SET sent = 1 
+                    SELECT entry_id, feed_url, title
+                    FROM pending_messages 
                     WHERE feed_group = $1 
                     AND sent = 0 
                     AND entry_timestamp < $2
                     """,
                     feed_group, now - 3 * 86400
                 )
+
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [超期未发送] group={feed_group} 共 {len(expired_rows)} 条被强制标记为已发送"
+                    )
+                    for r in expired_rows[:5]:  # 只打印前5条
+                        logger.warning(
+                            f"   - entry_id={r['entry_id'][:12]} | "
+                            f"feed={r['feed_url']} | "
+                            f"title={(r['title'] or '')[:60]}"
+                        )
+
+                    await conn.execute(
+                        """
+                        UPDATE pending_messages 
+                        SET sent = 1 
+                        WHERE feed_group = $1 
+                        AND sent = 0 
+                        AND entry_timestamp < $2
+                        """,
+                        feed_group, now - 3 * 86400
+                    )
 
                 # 更新清理时间戳
                 await conn.execute("""
@@ -583,17 +605,40 @@ class RSSDatabase:
                     (feed_group,)
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送
+                # 3. 未发送超过3天，强制标记为已发送（含日志）
                 await c.execute(
                     """
-                    UPDATE pending_messages 
-                    SET sent = 1 
+                    SELECT entry_id, feed_url, title
+                    FROM pending_messages 
                     WHERE feed_group = ? 
                     AND sent = 0 
                     AND entry_timestamp < ?
                     """,
                     (feed_group, now - 3 * 86400)
                 )
+                expired_rows = await c.fetchall()
+
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [超期未发送] group={feed_group} 共 {len(expired_rows)} 条被强制标记为已发送"
+                    )
+                    for entry_id, feed_url, title in expired_rows[:5]:  # 只打印前5条
+                        logger.warning(
+                            f"   - entry_id={entry_id[:12]} | "
+                            f"feed={feed_url} | "
+                            f"title={(title or '')[:60]}"
+                        )
+
+                    await c.execute(
+                        """
+                        UPDATE pending_messages 
+                        SET sent = 1 
+                        WHERE feed_group = ? 
+                        AND sent = 0 
+                        AND entry_timestamp < ?
+                        """,
+                        (feed_group, now - 3 * 86400)
+                    )
 
                 # 更新清理时间戳
                 await c.execute(
