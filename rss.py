@@ -468,12 +468,12 @@ class RSSDatabase:
     async def cleanup_history(self, feed_group, shared_dedup=False, keep_count=100):
         """清理历史数据：保留最近 keep_count 条"""
         now = time.time()
-
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 # 检查上次清理时间，24小时内不重复清理
                 row = await conn.fetchrow(
-                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1",
+                    "SELECT last_cleanup_time FROM cleanup_timestamps WHERE feed_group=$1", 
                     feed_group
                 )
                 last_cleanup = row['last_cleanup_time'] if row else 0
@@ -517,39 +517,17 @@ class RSSDatabase:
                     feed_group
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送（含日志）
-                expired_rows = await conn.fetch(
+                # 3. 未发送超过3天，强制标记为已发送
+                await conn.execute(
                     """
-                    SELECT entry_id, feed_url, title
-                    FROM pending_messages 
+                    UPDATE pending_messages 
+                    SET sent = 1 
                     WHERE feed_group = $1 
                     AND sent = 0 
                     AND entry_timestamp < $2
                     """,
                     feed_group, now - 3 * 86400
                 )
-
-                if expired_rows:
-                    logger.warning(
-                        f"🗑️ [超期未发送] group={feed_group} 共 {len(expired_rows)} 条被强制标记为已发送"
-                    )
-                    for r in expired_rows[:5]:  # 只打印前5条
-                        logger.warning(
-                            f"   - entry_id={r['entry_id'][:12]} | "
-                            f"feed={r['feed_url']} | "
-                            f"title={(r['title'] or '')[:60]}"
-                        )
-
-                    await conn.execute(
-                        """
-                        UPDATE pending_messages 
-                        SET sent = 1 
-                        WHERE feed_group = $1 
-                        AND sent = 0 
-                        AND entry_timestamp < $2
-                        """,
-                        feed_group, now - 3 * 86400
-                    )
 
                 # 更新清理时间戳
                 await conn.execute("""
@@ -605,40 +583,17 @@ class RSSDatabase:
                     (feed_group,)
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送（含日志）
+                # 3. 未发送超过3天，强制标记为已发送
                 await c.execute(
                     """
-                    SELECT entry_id, feed_url, title
-                    FROM pending_messages 
+                    UPDATE pending_messages 
+                    SET sent = 1 
                     WHERE feed_group = ? 
                     AND sent = 0 
                     AND entry_timestamp < ?
                     """,
                     (feed_group, now - 3 * 86400)
                 )
-                expired_rows = await c.fetchall()
-
-                if expired_rows:
-                    logger.warning(
-                        f"🗑️ [超期未发送] group={feed_group} 共 {len(expired_rows)} 条被强制标记为已发送"
-                    )
-                    for entry_id, feed_url, title in expired_rows[:5]:  # 只打印前5条
-                        logger.warning(
-                            f"   - entry_id={entry_id[:12]} | "
-                            f"feed={feed_url} | "
-                            f"title={(title or '')[:60]}"
-                        )
-
-                    await c.execute(
-                        """
-                        UPDATE pending_messages 
-                        SET sent = 1 
-                        WHERE feed_group = ? 
-                        AND sent = 0 
-                        AND entry_timestamp < ?
-                        """,
-                        (feed_group, now - 3 * 86400)
-                    )
 
                 # 更新清理时间戳
                 await c.execute(
@@ -667,36 +622,30 @@ def protect_special_content(text):
         counter[0] += 1
         return f" {key} "                  # 前后加空格，避免与单词粘连
 
-    # ===== 绝对可靠 =====
-    text = re.sub(r'https?://[^\s<>"\']+', protect, text)              # 1. URL
-    text = re.sub(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b', protect, text)      # 2. 邮箱
-    text = re.sub(r'\bCVE-\d{4}-\d{4,}\b', protect, text, flags=re.IGNORECASE)  # 3. CVE
-    text = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b', protect, text)       # 4. IP
-    text = re.sub(r'\b[a-f0-9]{64}\b', protect, text)                  # 5. SHA256
-    text = re.sub(r'\b[a-f0-9]{40}\b', protect, text)                  # 6. SHA1
-    text = re.sub(r'\b[a-f0-9]{32}\b', protect, text)                  # 7. MD5
-    text = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', protect, text)  # 8. UUID
-    text = re.sub(r'\bSHA256SUMS\b', protect, text)                    # 9. SHA256SUMS
-    text = re.sub(r'\b0x[0-9a-fA-F]+\b', protect, text)                # 10. 0x
-
-    # ===== 高可靠 =====
-    # ⚠️ 调整：owner/repo 提前到文件名之前
-    text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)  # 11. owner/repo
-    text = re.sub(                                                        # 12. 带空格文件名
+    # ---- 1. URL ----
+    text = re.sub(r'https?://[^\s<>"\']+', protect, text)
+    # ---- 2. 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe） ----
+    text = re.sub(
         r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
         protect, text, flags=re.IGNORECASE
     )
-    text = re.sub(                                                        # 13. 普通文件名
-        r'\b[\w][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip|tar\.gz|tgz|AppImage|snap|apk|7z|xz|bz2)\b',
+    # ---- 3. 普通文件名 ----
+    text = re.sub(
+        r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
         protect, text, flags=re.IGNORECASE
     )
-    text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)                  # 14. 版本号
-    text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)   # 15. commit hash
+    # ---- 4. SHA256SUMS ----
+    text = re.sub(r'\bSHA256SUMS\b', protect, text)
+    # ---- 5. owner/repo ----
+    text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)
+    # ---- 6. 版本号 ----
+    text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)
+    # ---- 7. commit hash ----
+    text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
+    # ---- 8. 6 个会被翻译破坏的字符：; _ ' \ $ | ----
+    text = re.sub(r"[;_'\\$|]", protect, text)
 
-    # ===== 翻译破坏字符 =====
-    text = re.sub(r"[;_'\\$|]", protect, text)                          # 16. 6 个符号
-
-    # 合并多余空格
+    # ✅ 合并多余空格
     text = re.sub(r' {2,}', ' ', text).strip()
 
     return text, placeholders
