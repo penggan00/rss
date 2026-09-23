@@ -1005,28 +1005,88 @@ class EmailToTelegram:
             counter[0] += 1
             return f"<code>{key}</code>"
 
-        # URL
-        html = re.sub(r'https?://[^\s<>"\']+', protect, html)
-        # 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe）
-        html = re.sub(
-            r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
-            protect, html, flags=re.IGNORECASE
-        )
-        # 普通文件名
-        html = re.sub(
-            r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
-            protect, html, flags=re.IGNORECASE
-        )
-        # SHA256SUMS
-        html = re.sub(r'\bSHA256SUMS\b', protect, html)
-        # owner/repo
+        # ===== 1.0 HTML 实体（放最前） =====
+        html = re.sub(r'&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);', protect, html)
+
+        # ===== 1.1 绝对可靠：URL / 邮箱 / ID =====
+        html = re.sub(r'(?<!["\'=])https?://[^\s<>"\']+', protect, html)
+        html = re.sub(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b', protect, html)
+        html = re.sub(r'\bCVE-\d{4}-\d{4,}\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\bGHSA-[\w-]+\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b', protect, html)
+        html = re.sub(r'\b[a-f0-9]{64}\b', protect, html)
+        html = re.sub(r'\b[a-f0-9]{40}\b', protect, html)
+        html = re.sub(r'\b[a-f0-9]{32}\b', protect, html)
+        html = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',
+                      protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\b0x[0-9a-fA-F]+\b', protect, html)
+
+        # ===== 1.2 包坐标（先于 owner/repo） =====
+        html = re.sub(r'@[\w.-]+/[\w.-]+', protect, html)
+        html = re.sub(r'\b[\w-]+:[\w.-]+:[\w.-]+\b', protect, html)
+        html = re.sub(r'\b[\w.-]+\.[\w-]+::[\w.-]+', protect, html)
+
+        # ===== 1.3 常见"高可靠"文件名 =====
+        html = re.sub(r'\bSHA256SUMS(?:\.asc)?\b', protect, html)
+        html = re.sub(r'\bCHECKSUMS?\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\bCHANGELOG(?:\.md)?\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\bREADME(?:\.md)?\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\bLICENSE\b', protect, html)
+        html = re.sub(r'\bDockerfile\b', protect, html)
+        html = re.sub(r'\bdocker-compose\.ya?ml\b', protect, html, flags=re.IGNORECASE)
+        html = re.sub(r'\bMakefile\b', protect, html)
+        html = re.sub(r'\bpackage\.json\b', protect, html)
+        html = re.sub(r'\brequirements\.txt\b', protect, html)
+        html = re.sub(r'\bpyproject\.toml\b', protect, html)
+        html = re.sub(r'\bCargo\.toml\b', protect, html)
+        html = re.sub(r'\bgo\.mod\b', protect, html)
+        html = re.sub(r'\bpom\.xml\b', protect, html)
+        html = re.sub(r'\bbuild\.gradle(?:\.kts)?\b', protect, html)
+
+        # ===== 1.4 owner/repo =====
         html = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, html)
-        # 版本号
-        html = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, html)
-        # commit hash
+
+        # ===== 1.5 文件名（带空格 → 普通） =====
+        html = re.sub(
+            r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip|tar\.gz|tgz|AppImage|snap|apk|7z|xz|bz2)\b',
+            protect, html, flags=re.IGNORECASE
+        )
+        html = re.sub(
+            r'\b[\w][\w.-]*\.(?:'
+            r'exe|msi|dmg|pkg|rpm|deb|zip|tar\.gz|tgz|tar|AppImage|snap|apk|7z|xz|bz2|gz|zst'
+            r'|txt|json|ya?ml|toml|ini|cfg|conf|log|md|rst'
+            r'|py|pyi|js|mjs|cjs|ts|tsx|jsx|vue|svelte'
+            r'|go|rs|rb|php|java|kt|kts|scala|swift|c|cc|cpp|cxx|h|hpp|hxx|cs'
+            r'|sh|bash|zsh|fish|ps1|bat|cmd'
+            r'|sql|db|sqlite|sqlite3'
+            r'|png|jpe?g|gif|webp|svg|ico|bmp|tiff?'
+            r'|mp3|mp4|mov|avi|mkv|wav|flac|ogg|webm'
+            r'|pdf|docx?|xlsx?|pptx?'
+            r'|pem|crt|cer|key|pub|asc|sig|gpg'
+            r')\b',
+            protect, html, flags=re.IGNORECASE
+        )
+
+        # ===== 1.6 版本号 =====
+        html = re.sub(r'\bv\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b', protect, html)
+        html = re.sub(r'\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b', protect, html)
+
+        # ===== 1.7 commit hash =====
         html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)
-        # 其他符号保护（避免翻译器乱加空格）
-        html = re.sub(r'[;_\\$|]', protect, html)
+
+        # ===== 1.8 环境变量（必须含下划线，避免误伤 OK/AI/API） =====
+        html = re.sub(r'\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b', protect, html)
+
+        # ===== 1.9 路径 =====
+        html = re.sub(r'(?<![\w:/])/(?:[\w.-]+/)+[\w.-]*', protect, html)
+        html = re.sub(r'\b[a-zA-Z]:\\[^\s<>"\']+', protect, html)
+        html = re.sub(r'\b(?:\.\.?/)(?:[\w.-]+/)*[\w.-]+', protect, html)
+
+        # ===== 1.10 命令行片段（★ 已修复，只匹配命令风格） =====
+        html = re.sub(r'\$ [a-zA-Z][\w./-]*(?:\s+-{1,2}[\w-]+)*', protect, html)
+
+        # ===== 1.11 翻译破坏字符（★ 已去掉 < > 和反引号） =====
+        html = re.sub(r"[;_'\\$|@#%&*+=~^]", protect, html)
 
         # ============ 2. 保护换行 ============
         html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
@@ -1034,8 +1094,7 @@ class EmailToTelegram:
 
         # ============ 3. 简化 clean_text ============
         def clean_text(t):
-            t = re.sub(r'-{2,}', '-', t)
-            return t
+            return re.sub(r'-{2,}', '-', t)
 
         segments = self.split_html_segments(html)
         result = []
@@ -1049,7 +1108,7 @@ class EmailToTelegram:
         # ============ 4. 翻译 ============
         translated = self.translate(html)
 
-        # ============ 5. 还原占位符 ============
+        # ============ 5. 还原占位符（保持原样） ============
         for key, val in placeholders.items():
             translated = translated.replace(f"<code>{key}</code>", val)
             translated = translated.replace(key, val)
