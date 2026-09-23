@@ -31,6 +31,9 @@ crontab -e
 
 (crontab -l 2>/dev/null | grep -v "usd.sh"; echo "10 06 * * * /bin/bash /root/rss/usd.sh > /dev/null 2>&1"; echo "10 16,23 * * 1-5 /bin/bash /root/rss/usd.sh > /dev/null 2>&1") | crontab -
 
+
+5,15,25,35,45,55 * * * * /root/rss.sh >> /root/rss_cron.log 2>&1
+
 (crontab -l 2>/dev/null; echo "5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/10 * * * * /bin/bash ~/rss/rss.sh") | crontab -
 (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash ~/rss/mail.sh") | crontab -

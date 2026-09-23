@@ -990,7 +990,7 @@ class EmailToTelegram:
 
     def is_url(self, text):
         return bool(re.search(r'https?://\S+', text))
-    
+
     def translate_html(self, html):
         if not html or not ENABLE_TRANSLATION:
             return html
@@ -1000,47 +1000,37 @@ class EmailToTelegram:
         counter = [0]
 
         def protect(m):
-            num = f"99{counter[0] + 10}"
-            key = f"\uE000{num}\uE001"
+            key = f"ZXQPH{counter[0]}ZXQ"
             placeholders[key] = m.group(0)
             counter[0] += 1
-            return f" {key} "
+            return f"<code>{key}</code>"
 
-        # ⚠️ 新增：先保护 HTML 实体（避免 &amp; 里的 ; 被误伤）
-        html = re.sub(r'&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);', protect, html)
-
-        # ===== 绝对可靠 =====
-        # ⚠️ 改：URL 只保护裸 URL（不在 href/src 属性里）
-        html = re.sub(r'(?<!["\'=])https?://[^\s<>"\']+', protect, html)
-        html = re.sub(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b', protect, html)      # 邮箱
-        html = re.sub(r'\bCVE-\d{4}-\d{4,}\b', protect, html, flags=re.IGNORECASE)  # CVE
-        html = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b', protect, html)       # IP
-        html = re.sub(r'\b[a-f0-9]{64}\b', protect, html)                  # SHA256
-        html = re.sub(r'\b[a-f0-9]{40}\b', protect, html)                  # SHA1
-        html = re.sub(r'\b[a-f0-9]{32}\b', protect, html)                  # MD5
-        html = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', protect, html)  # UUID
-        html = re.sub(r'\bSHA256SUMS\b', protect, html)                    # SHA256SUMS
-        html = re.sub(r'\b0x[0-9a-fA-F]+\b', protect, html)                # 0x
-
-        # ===== 高可靠 =====
-        html = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, html)  # owner/repo
+        # URL
+        html = re.sub(r'https?://[^\s<>"\']+', protect, html)
+        # 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe）
         html = re.sub(
             r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
             protect, html, flags=re.IGNORECASE
         )
+        # 普通文件名
         html = re.sub(
-            r'\b[\w][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip|tar\.gz|tgz|AppImage|snap|apk|7z|xz|bz2)\b',
+            r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
             protect, html, flags=re.IGNORECASE
         )
-        html = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, html)                  # 版本号
-        html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)   # commit hash
-
-        # ===== 翻译破坏字符 =====
-        html = re.sub(r"[;_'\\$|]", protect, html)                           # 6 个符号
+        # SHA256SUMS
+        html = re.sub(r'\bSHA256SUMS\b', protect, html)
+        # owner/repo
+        html = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, html)
+        # 版本号
+        html = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, html)
+        # commit hash
+        html = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, html)
+        # 其他符号保护（避免翻译器乱加空格）
+        html = re.sub(r'[;_\\$|]', protect, html)
 
         # ============ 2. 保护换行 ============
-        html = html.replace('\n\n', '\uE002')
-        html = html.replace('\n', '\uE003')
+        html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
+        html = html.replace('\n', '<code>ZXQNL1ZXQ</code>')
 
         # ============ 3. 简化 clean_text ============
         def clean_text(t):
@@ -1061,17 +1051,14 @@ class EmailToTelegram:
 
         # ============ 5. 还原占位符 ============
         for key, val in placeholders.items():
-            translated = translated.replace(f" {key} ", val)
+            translated = translated.replace(f"<code>{key}</code>", val)
             translated = translated.replace(key, val)
-            m = re.search(r'\d+', key)
-            if m:
-                num = m.group(1)
-                pattern = rf'\s*\uE000?\s*{num}\s*\uE001?\s*'
-                translated = re.sub(pattern, val, translated)
 
         # 还原换行
-        translated = translated.replace('\uE002', '\n\n')
-        translated = translated.replace('\uE003', '\n')
+        translated = translated.replace('<code>ZXQNL2ZXQ</code>', '\n\n')
+        translated = translated.replace('ZXQNL2ZXQ', '\n\n')
+        translated = translated.replace('<code>ZXQNL1ZXQ</code>', '\n')
+        translated = translated.replace('ZXQNL1ZXQ', '\n')
 
         return translated
     
