@@ -17,11 +17,22 @@ from collections import OrderedDict
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
+import logging
 
 # ============================================================
-# 基础配置
+# 基础配置（必须最先初始化）
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+logging.getLogger('telegram').setLevel(logging.WARNING)
+logging.getLogger('aiohttp').setLevel(logging.WARNING)
 
 # 加载环境变量
 load_dotenv()
@@ -40,6 +51,7 @@ class Config:
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
         if not value:
+            logger.error(f"Missing required environment variable: {var_name}")
             raise ValueError(f"Missing required environment variable: {var_name}")
         return value
 
@@ -53,10 +65,17 @@ class Config:
         try:
             return [int(id_str.strip()) for id_str in ids_str.split(',')]
         except ValueError:
+            logger.error(f"Invalid {var_name} format")
             raise ValueError(f"Invalid {var_name} format")
 
 # 初始化全局配置
-config = Config()
+try:
+    config = Config()
+    logger.info("Configuration loaded successfully")
+    logger.info(f"Authorized chat IDs: {config.AUTHORIZED_CHAT_IDS}")
+except Exception as e:
+    logger.critical(f"Failed to load configuration: {e}")
+    raise
 
 # ============================================================
 # 内存缓存（LRU，上限 2000 条）
@@ -175,15 +194,28 @@ class LibreTranslator:
                     result = await response.json()
                     translated = result.get("translatedText")
                     if translated and translated != text:
+                        logger.info("✅ LibreTranslate 翻译成功")
                         return translated
+                    else:
+                        logger.warning("⚠️ LibreTranslate 返回空或相同文本")
+                        return None
+                else:
+                    logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
                     return None
-                return None
-        except Exception:
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ LibreTranslate 请求超时")
+            return None
+        except aiohttp.ClientError as e:
+            logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
             return None
 
     async def translate_with_deepl(self, text: str, target_lang: str) -> Optional[str]:
         """使用 DeepL 翻译（备用）"""
         if not self.deepl_api_key:
+            logger.warning("⚠️ DeepL API Key 未配置")
             return None
 
         lang_map = {
@@ -208,10 +240,23 @@ class LibreTranslator:
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
+                        logger.info("✅ DeepL 翻译成功")
                         return translated
+                    else:
+                        logger.warning("⚠️ DeepL 返回空或相同文本")
+                        return None
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status}, 响应: {error_text}")
                     return None
-                return None
-        except Exception:
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ DeepL 请求超时")
+            return None
+        except aiohttp.ClientError as e:
+            logger.warning(f"⚠️ DeepL 网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ DeepL 翻译失败: {e}")
             return None
 
     async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
@@ -226,10 +271,12 @@ class LibreTranslator:
         if result is not None:
             return result
 
+        logger.info("🔄 尝试 DeepL 翻译（备用）...")
         result = await self.translate_with_deepl(text, target_lang)
         if result is not None:
             return result
 
+        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
         return text
 
 translator = LibreTranslator()
@@ -241,6 +288,7 @@ def require_auth(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         if update.effective_chat.id not in config.AUTHORIZED_CHAT_IDS:
+            logger.warning(f"Unauthorized access: {update.effective_chat.id}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -256,11 +304,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     source_lang, target_lang = get_translation_direction(text)
+    logger.info(f"Chat {update.effective_chat.id}: [{source_lang}->{target_lang}] '{text[:80]}...'")
 
     # 第一步：检查内存缓存
     cached = await cache.get(text, source_lang, target_lang)
     if cached:
         await send_long_message(update, cached)
+        logger.info(f"Cache hit for: '{text[:50]}...'")
         return
 
     # 第二步：翻译
@@ -273,11 +323,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await send_long_message(update, translated)
 
     except Exception as e:
+        logger.error(f"Translation error: {e}")
         await update.message.reply_text(f"❌ 翻译出错: {str(e)}")
 
 async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
     """分片发送长消息，分片之间加延时避免触发 Telegram 限流"""
     idx, length = 0, len(text)
+    first_chunk = True
     while idx < length:
         end_idx = min(idx + chunk_size, length)
         if end_idx < length:
@@ -289,7 +341,8 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
         chunk = text[idx:end_idx]
         try:
             await update.message.reply_text(chunk)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Send message error: {e}")
             break
 
         idx = end_idx
@@ -366,45 +419,57 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(message, parse_mode='Markdown')
 
     except Exception as e:
+        logger.error(f"Htop command error: {e}")
         await update.message.reply_text(f"❌ 获取系统信息出错: {str(e)}")
 
 # ============================================================
 # 应用生命周期管理
 # ============================================================
 async def startup(application):
-    pass
+    logger.info("Bot started")
 
 async def shutdown(application):
+    logger.info("Shutting down bot...")
     try:
         await translator.close()
-    except Exception:
-        pass
+        logger.info("HTTP session closed")
+    except Exception as e:
+        logger.error(f"Close session failed: {e}")
+    logger.info("Bot shutdown complete")
 
 # ============================================================
 # 主函数
 # ============================================================
 def main():
     """启动机器人"""
-    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    try:
+        application = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(CommandHandler("htop", htop_command))
-    application.add_handler(CommandHandler("cmd", cmd_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        application.add_handler(CommandHandler("htop", htop_command))
+        application.add_handler(CommandHandler("cmd", cmd_command))
 
-    application.post_init = startup
-    application.post_shutdown = shutdown
+        application.post_init = startup
+        application.post_shutdown = shutdown
 
-    # ---- 优雅退出：注册 SIGINT / SIGTERM 信号处理 ----
-    def _signal_handler(signum, frame):
-        if application.updater and application.updater.running:
-            application.updater.stop()
-        if application.running:
-            application.stop_running()
+        # ---- 优雅退出：注册 SIGINT / SIGTERM 信号处理 ----
+        def _signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, shutting down gracefully...")
+            # stop_running() 会让 run_polling 退出循环，随后触发 post_shutdown
+            if application.updater and application.updater.running:
+                application.updater.stop()
+            if application.running:
+                application.stop_running()
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
 
-    application.run_polling()
+        logger.info("Bot is starting...")
+        application.run_polling()
+
+    except Exception as e:
+        logger.critical(f"Failed to start bot: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
