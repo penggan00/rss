@@ -664,11 +664,14 @@ def restore_special_content(text, placeholders):
         text = text.replace(key, val)
 
         # 2. 模糊匹配：提取数字，忽略私用区字符和空格
-        m = re.search(r'\d+', key)
-        if m:
-            num = m.group(1)
-            pattern = rf'\s*\uE000?\s*{num}\s*\uE001?\s*'
-            text = re.sub(pattern, val, text)
+        try:
+            m = re.search(r'\d+', key)
+            if m:
+                num = m.group(0)
+                pattern = rf'\s*\uE000?\s*{num}\s*\uE001?\s*'
+                text = re.sub(pattern, val, text)
+        except IndexError:
+            pass  # 忽略无法解析的占位符
 
     return text
 
@@ -681,7 +684,6 @@ def remove_html_tags(text):
     text = re.sub(r'(?<!\S)#(?!\S)', '', text)
     text = re.sub(r'(?<!\S)：(?!\S)', '', text)
     text = re.sub(r'(^|\s)[,?!；：。]', '', text)
- #   text = text.replace('.', '.\u200c')
     return text
 
 def get_entry_identifier(entry):
