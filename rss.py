@@ -1043,18 +1043,15 @@ async def auto_translate_text(text):
     restored = restore_special_content(translated, placeholders)
 
     return restored
-
-async def generate_group_message(feed_data, entries, processor):
+    
+async def generate_single_messages(feed_data, entries, processor):
+    """为每个条目生成单独的消息"""
     try:
         source_name = feed_data.feed.get('title', "未知来源")
         safe_source = escape(source_name)
-        header = ""
-        if "header_template" in processor:
-            header = processor["header_template"].format(source=safe_source) + "\n"
         
         messages = []
         
-        # 获取模板配置
         if "templates" in processor:
             templates = processor["templates"]
             normal_template = templates.get("normal", "{subject}\n[more]({url})")
@@ -1062,12 +1059,10 @@ async def generate_group_message(feed_data, entries, processor):
             if highlight_enabled:
                 highlight_template = templates.get(processor["highlight"].get("use_template", "highlight"), normal_template)
         else:
-            # 向后兼容：如果只有单个template
             normal_template = processor.get("template", "{subject}\n[more]({url})")
             highlight_template = normal_template
             highlight_enabled = False
         
-        # 获取高亮配置
         highlight_config = processor.get("highlight", {})
         highlight_scope = highlight_config.get("scope", "title")
         highlight_keywords = highlight_config.get("keywords", [])
@@ -1075,32 +1070,31 @@ async def generate_group_message(feed_data, entries, processor):
         for entry in entries:
             raw_subject = remove_html_tags(entry.title or "无标题")
             
-            # 检查是否需要翻译
             if processor.get("translate", False):
                 translated_subject = await auto_translate_text(raw_subject)
             else:
                 translated_subject = raw_subject
             
-            # 决定使用哪个模板
+            header = ""
+            if "header_template" in processor:
+                header = processor["header_template"].format(source=safe_source) + "\n"
+            
             selected_template = normal_template
             if highlight_enabled and highlight_keywords:
-                # 检查标题中是否包含关键词
                 subject_lower = translated_subject.lower()
                 has_keyword_in_subject = any(keyword.lower() in subject_lower for keyword in highlight_keywords)
                 
-                # 根据scope配置检查摘要
                 has_keyword_in_summary = False
                 if highlight_scope == "all":
                     raw_summary = getattr(entry, "summary", "") or ""
                     summary_text = remove_html_tags(raw_summary).lower()
                     has_keyword_in_summary = any(keyword.lower() in summary_text for keyword in highlight_keywords)
                 
-                # 如果标题或摘要（根据scope）包含关键词，使用加粗模板
                 if has_keyword_in_subject or has_keyword_in_summary:
                     selected_template = highlight_template
             
-            # 在转义之前添加零宽字符处理
             translated_subject = translated_subject.replace('.', '.\u200c')
+            logger.warning(f"[DEBUG] escape 前: {repr(translated_subject[:80])}")
             safe_subject = escape(translated_subject)
             
             raw_url = entry.link
@@ -1112,7 +1106,6 @@ async def generate_group_message(feed_data, entries, processor):
                 "url": safe_url
             }
             
-            # 检查模板是否需要summary字段
             if "{summary}" in selected_template:
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
@@ -1120,15 +1113,19 @@ async def generate_group_message(feed_data, entries, processor):
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
-            # 使用选择的模板生成消息
-            message = selected_template.format(**format_kwargs)
-            messages.append(message)
+            message_content = selected_template.format(**format_kwargs)
+            full_message = header + message_content
+            
+            messages.append({
+                "content": full_message,
+                "entry": entry
+            })
         
-        full_message = await _format_batch_message(header, messages, processor)
-        return full_message
+        return messages
     except Exception as e:
-        logger.error(f"生成消息失败: {str(e)}")
-        return ""
+        import traceback
+        logger.error(f"生成单条消息失败: {e}\n{traceback.format_exc()}")
+        return []
     
 async def generate_single_messages(feed_data, entries, processor):
     """为每个条目生成单独的消息"""
