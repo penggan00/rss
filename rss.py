@@ -682,10 +682,10 @@ def protect_special_content(text):
     counter = [0]
 
     def protect(m):
-        key = f"ZXQPH{counter[0]}ZXQ"
+        key = f"\uE000{counter[0]}\uE001"
         placeholders[key] = m.group(0)
         counter[0] += 1
-        return f"<code>{key}</code>"
+        return key
 
     # ---- 1. URL ----
     text = re.sub(r'https?://[^\s<>"\']+', protect, text)
@@ -721,15 +721,10 @@ def protect_special_content(text):
 
 
 def restore_special_content(text, placeholders):
-    """翻译后：还原占位符"""
     if not text:
         return text
-
-    # 还原占位符（双保险：带 <code> 和不带 <code>）
     for key, val in placeholders.items():
-        text = text.replace(f"<code>{key}</code>", val)
         text = text.replace(key, val)
-
     return text
 
 def remove_html_tags(text):
@@ -946,7 +941,7 @@ async def should_send_entry(entry, processor):
     
 # ========== LibreTranslate 翻译 ==========
 async def translate_with_libretranslate(text):
-    """使用 LibreTranslate 翻译（首选）"""
+    """使用 LibreTranslate 翻译（备用）"""
     if not text or len(text.strip()) < 3:
         return text
     
@@ -978,7 +973,7 @@ async def translate_with_libretranslate(text):
 
 # ========== DeepL 翻译 ==========
 async def translate_with_deepl(text):
-    """使用 DeepL 翻译（备用）"""
+    """使用 DeepL 翻译（首选）"""
     if not text or len(text.strip()) < 3:
         return None
     
@@ -1061,15 +1056,7 @@ async def _translate_raw(text):
     if not cleaned_text:
         return cleaned_text
 
-    # 第一优先级：LibreTranslate
-    try:
-        translated = await translate_with_libretranslate(cleaned_text)
-        if translated is not None:
-            return translated
-    except Exception as e:
-        logger.warning(f"LibreTranslate 失败: {e}")
-
-    # 第二优先级：DeepL
+    # 第一优先级：DeepL（质量好）
     try:
         translated = await translate_with_deepl(cleaned_text)
         if translated is not None:
@@ -1077,10 +1064,18 @@ async def _translate_raw(text):
     except Exception as e:
         logger.warning(f"DeepL 失败: {e}")
 
+    # 第二优先级：LibreTranslate（备用）
+    try:
+        translated = await translate_with_libretranslate(cleaned_text)
+        if translated is not None:
+            return translated
+    except Exception as e:
+        logger.warning(f"LibreTranslate 失败: {e}")
+
     logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
 
-# ========== 翻译主函数（LibreTranslate → DeepL → 原文） ==========
+# ========== 翻译主函数（DeepL → LibreTranslate → 原文） ==========
 async def auto_translate_text(text):
     """翻译前保护 → 翻译 → 还原"""
     if not text or not text.strip():
