@@ -517,7 +517,39 @@ class RSSDatabase:
                     feed_group
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送
+                # 3. 未发送超过3天，强制标记为已发送（记录日志）
+                expired_rows = await conn.fetch(
+                    """
+                    SELECT entry_id, feed_url, title, translated_title, link, 
+                           entry_timestamp, feed_title
+                    FROM pending_messages 
+                    WHERE feed_group = $1 
+                    AND sent = 0 
+                    AND entry_timestamp < $2
+                    """,
+                    feed_group, now - 3 * 86400
+                )
+                
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [清理过期未发送] 组={feed_group} | "
+                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
+                    )
+                    for row in expired_rows:
+                        age_days = (now - row['entry_timestamp']) / 86400
+                        expired_dt = datetime.fromtimestamp(
+                            row['entry_timestamp'], tz=pytz.utc
+                        ).strftime('%Y-%m-%d %H:%M:%S')
+                        logger.warning(
+                            f"   ❌ 发送失败 | 组={feed_group} | "
+                            f"源={row['feed_title'] or row['feed_url']} | "
+                            f"标题={row['translated_title'] or row['title']} | "
+                            f"链接={row['link']} | "
+                            f"发布时间={expired_dt} (UTC) | "
+                            f"滞留={age_days:.1f}天 | "
+                            f"entry_id={row['entry_id'][:12]}"
+                        )
+                
                 await conn.execute(
                     """
                     UPDATE pending_messages 
@@ -583,7 +615,42 @@ class RSSDatabase:
                     (feed_group,)
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送
+                # 3. 未发送超过3天，强制标记为已发送（记录日志）
+                await c.execute(
+                    """
+                    SELECT entry_id, feed_url, title, translated_title, link, 
+                           entry_timestamp, feed_title
+                    FROM pending_messages 
+                    WHERE feed_group = ? 
+                    AND sent = 0 
+                    AND entry_timestamp < ?
+                    """,
+                    (feed_group, now - 3 * 86400)
+                )
+                expired_rows = await c.fetchall()
+                
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [清理过期未发送] 组={feed_group} | "
+                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
+                    )
+                    for row in expired_rows:
+                        (entry_id, feed_url, title, translated_title, 
+                         link, entry_timestamp, feed_title) = row
+                        age_days = (now - entry_timestamp) / 86400
+                        expired_dt = datetime.fromtimestamp(
+                            entry_timestamp, tz=pytz.utc
+                        ).strftime('%Y-%m-%d %H:%M:%S')
+                        logger.warning(
+                            f"   ❌ 发送失败 | 组={feed_group} | "
+                            f"源={feed_title or feed_url} | "
+                            f"标题={translated_title or title} | "
+                            f"链接={link} | "
+                            f"发布时间={expired_dt} (UTC) | "
+                            f"滞留={age_days:.1f}天 | "
+                            f"entry_id={entry_id[:12]}"
+                        )
+                
                 await c.execute(
                     """
                     UPDATE pending_messages 
@@ -1382,9 +1449,18 @@ async def process_batch_send(group, db: RSSDatabase):
             for row in msgs:
                 if row["entry_timestamp"] < timeout_cutoff:
                     force_sent_entry_ids.append(row["entry_id"])
+                    age_hours = (now - row["entry_timestamp"]) / 3600
+                    pub_dt = datetime.fromtimestamp(
+                        row["entry_timestamp"], tz=pytz.utc
+                    ).strftime('%Y-%m-%d %H:%M:%S')
                     logger.warning(
-                        f"⚠️ 消息 {row['entry_id']} 已存在 {timeout_seconds/3600:.1f} 小时 "
-                        f"({MAX_RETRY_COUNT} 轮批量发送失败)，强制标记为已发送"
+                        f"   ❌ 发送失败(批量) | 组={group_key} | "
+                        f"源={row.get('feed_title') or feed_url} | "
+                        f"标题={row.get('translated_title') or row.get('title')} | "
+                        f"链接={row.get('link')} | "
+                        f"发布时间={pub_dt} (UTC) | "
+                        f"滞留={age_hours:.1f}小时 | "
+                        f"entry_id={row['entry_id'][:12]}"
                     )
     
     # 标记成功发送的
