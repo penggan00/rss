@@ -682,7 +682,7 @@ def protect_special_content(text):
     counter = [0]
 
     def protect(m):
-        key = f"\uE000{counter[0]}\uE001"
+        key = f"⟦{counter[0]}⟧"
         placeholders[key] = m.group(0)
         counter[0] += 1
         return key
@@ -1088,13 +1088,13 @@ async def auto_translate_text(text):
 
     # 1. 占位符保护
     protected, placeholders = protect_special_content(cleaned)
+    logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
 
-    # 2. 调底层翻译（不是调自己！）
     translated = await _translate_raw(protected)
+   # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
 
-    # 3. 还原占位符
     restored = restore_special_content(translated, placeholders)
-
+    logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
     return restored
 
 async def generate_group_message(feed_data, entries, processor):
