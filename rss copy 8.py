@@ -24,7 +24,6 @@ from md2tgmd import escape
 from collections import defaultdict
 from langdetect import detect, LangDetectException
 from rss_config import RSS_GROUPS
-from logging.handlers import RotatingFileHandler
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -34,15 +33,17 @@ BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
 DATABASE_FILE = BASE_DIR / "rss.db"
 
-LOG_FILE = BASE_DIR / "rss.log"
-
-# cron 每次都是新进程：启动时检查一次，超过 10MB 直接删除重建
-if LOG_FILE.exists() and LOG_FILE.stat().st_size > 10 * 1024 * 1024:
-    LOG_FILE.unlink()
+def clean_old_log():
+    """日志文件超过10MB就删除"""
+    log_file = BASE_DIR / "rss.log"
+    if log_file.exists():
+        size_mb = log_file.stat().st_size / 1024 / 1024
+        if size_mb > 10:  # 超过10MB
+            log_file.unlink()  # 直接删除
 
 logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.ERROR,
+    filename=BASE_DIR / "rss.log",
+    level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
 )
@@ -955,7 +956,7 @@ async def translate_with_libretranslate(text):
                     result = await response.json()
                     translated = result.get("translatedText")
                     if translated and translated != text:
-                    #    logger.info("✅ LibreTranslate 翻译成功")
+                        logger.info("✅ LibreTranslate 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ LibreTranslate 返回空或相同文本")
@@ -1026,7 +1027,7 @@ async def translate_with_deepl(text):
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
-                    #    logger.info("✅ DeepL 翻译成功")
+                        logger.info("✅ DeepL 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ DeepL 返回空或相同文本")
@@ -1087,13 +1088,13 @@ async def auto_translate_text(text):
 
     # 1. 占位符保护
     protected, placeholders = protect_special_content(cleaned)
-   # logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
+    logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
 
     translated = await _translate_raw(protected)
    # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
 
     restored = restore_special_content(translated, placeholders)
-    # logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
+    logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
     return restored
 
 async def generate_group_message(feed_data, entries, processor):
@@ -1616,6 +1617,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         raise
 
 async def main():
+    clean_old_log() 
     logger.info("🚀 RSS Bot 开始执行")
     
     start_time = time.time()
