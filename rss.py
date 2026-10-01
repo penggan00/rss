@@ -615,60 +615,53 @@ def protect_special_content(text):
     counter = [0]
 
     def protect(m):
-        # ✅ 可靠占位符：私用区字符 U+E000 / U+E001 + 数字 99xx
-        num = f"99{counter[0] + 10}"
-        key = f"\uE000{num}\uE001"
+        key = f"ZXQPH{counter[0]}ZXQ"
         placeholders[key] = m.group(0)
         counter[0] += 1
-        return f" {key} "                  # 前后加空格，避免与单词粘连
+        return f"<code>{key}</code>"
 
     # ---- 1. URL ----
     text = re.sub(r'https?://[^\s<>"\']+', protect, text)
+
     # ---- 2. 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe） ----
     text = re.sub(
         r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
         protect, text, flags=re.IGNORECASE
     )
+
     # ---- 3. 普通文件名 ----
     text = re.sub(
         r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
         protect, text, flags=re.IGNORECASE
     )
+
     # ---- 4. SHA256SUMS ----
     text = re.sub(r'\bSHA256SUMS\b', protect, text)
+
     # ---- 5. owner/repo ----
     text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)
+
     # ---- 6. 版本号 ----
     text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)
+
     # ---- 7. commit hash ----
     text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
-    # ---- 8. 6 个会被翻译破坏的字符：; _ ' \ $ | ----
-    text = re.sub(r"[;_'\\$|]", protect, text)
 
-    # ✅ 合并多余空格
-    text = re.sub(r' {2,}', ' ', text).strip()
+    # ---- 8. 翻译会破坏的字符：; _ \ $ | ----
+    text = re.sub(r"[;_\\$|]", protect, text)
 
     return text, placeholders
 
 
 def restore_special_content(text, placeholders):
-    """翻译后：还原占位符
-    容错：私用区字符可能丢失，前后可能有空格
-    """
+    """翻译后：还原占位符"""
     if not text:
         return text
 
+    # 还原占位符（双保险：带 <code> 和不带 <code>）
     for key, val in placeholders.items():
-        # 1. 精确匹配
-        text = text.replace(f" {key} ", val)
+        text = text.replace(f"<code>{key}</code>", val)
         text = text.replace(key, val)
-
-        # 2. 模糊匹配：提取数字，忽略私用区字符和空格
-        m = re.search(r'\d+', key)
-        if m:
-            num = m.group(1)
-            pattern = rf'\s*\uE000?\s*{num}\s*\uE001?\s*'
-            text = re.sub(pattern, val, text)
 
     return text
 
