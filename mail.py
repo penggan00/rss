@@ -419,22 +419,14 @@ class EmailToTelegram:
             if '&amp;amp;' in h:
                 logger.warning(f"[{stage}] ⚠️ href 双重转义：{h[:100]}")
 
-        # 5. 未闭合标签
+        # 5. 检查未闭合标签
         for tag in ['a', 'b', 'i', 'u', 's', 'code', 'pre']:
             opens = len(re.findall(rf'<{tag}(?:\s|>)', html))
             closes = len(re.findall(rf'</{tag}>', html))
             if opens != closes:
-                logger.warning(f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}")
-
-        # ★ 6. 非 ASCII 标签名（如 <代码>、</代码>）
-        non_ascii_tags = re.findall(r'</?[^\x00-\x7f][^>]*>', html)
-        if non_ascii_tags:
-            logger.warning(f"[{stage}] ⚠️ 发现非 ASCII 标签：{non_ascii_tags[:5]}")
-
-        # ★ 7. 残留占位符
-        leftover = re.findall(r'[⟦【\[（(]\s*(?:NL\s*[12]|\d+)\s*[⟧】\]）)]', html)
-        if leftover:
-            logger.warning(f"[{stage}] ⚠️ 发现残留占位符：{leftover[:5]}")
+                logger.warning(
+                    f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}"
+                )
 
     def remove_long_urls(self, html, max_url_length=500):
         """
@@ -1032,10 +1024,10 @@ class EmailToTelegram:
         counter = [0]
 
         def protect(m):
-            key = f"⟦{counter[0]}⟧"          # ★ 用数学括号占位符
+            key = f"⟦{counter[0]}⟧"
             placeholders[key] = m.group(0)
             counter[0] += 1
-            return key                       # ★ 不再包 <code>
+            return key
 
         # ===== 1.0 HTML 实体（放最前） =====
         html = re.sub(r'&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);', protect, html)
@@ -1050,7 +1042,7 @@ class EmailToTelegram:
         html = re.sub(r'\b[a-f0-9]{40}\b', protect, html)
         html = re.sub(r'\b[a-f0-9]{32}\b', protect, html)
         html = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',
-                    protect, html, flags=re.IGNORECASE)
+                      protect, html, flags=re.IGNORECASE)
         html = re.sub(r'\b0x[0-9a-fA-F]+\b', protect, html)
 
         # ===== 1.2 包坐标（先于 owner/repo） =====
@@ -1114,10 +1106,10 @@ class EmailToTelegram:
         html = re.sub(r'\b[a-zA-Z]:\\[^\s<>"\']+', protect, html)
         html = re.sub(r'\b(?:\.\.?/)(?:[\w.-]+/)*[\w.-]+', protect, html)
 
-        # ===== 1.10 命令行片段 =====
+        # ===== 1.10 命令行片段（★ 已修复，只匹配命令风格） =====
         html = re.sub(r'\$ [a-zA-Z][\w./-]*(?:\s+-{1,2}[\w-]+)*', protect, html)
 
-        # ===== 1.11 翻译破坏字符 =====
+        # ===== 1.11 翻译破坏字符（★ 已去掉 < > 和反引号） =====
         html = re.sub(r"[;_'\\$|@#%&*+=~^]", protect, html)
 
         # ============ 2. 保护换行 ============
@@ -1140,25 +1132,27 @@ class EmailToTelegram:
         # ============ 4. 翻译 ============
         translated = self.translate(html)
 
-        # ============ 5. 还原占位符 ============
+        # ============ 5. 还原占位符（保持原样） ============
         for key, val in placeholders.items():
             translated = translated.replace(key, val)
 
-        # 还原换行
         translated = translated.replace('⟦NL2⟧', '\n\n')
         translated = translated.replace('⟦NL1⟧', '\n')
 
         return translated
-        
+    
     def _clean_translate_artifacts(self, text):
-        """清理翻译后产生的语言标注括号和 ASS 样式串"""
+        """清理翻译后产生的语言标注括号和 ASS 样式串
+
+        只在翻译成功后调用，不翻译时不会触发。
+        """
         if not text:
             return text
 
-        # 1. ASS/SSA 样式串
+        # 1. ASS/SSA 样式串：{\fn黑体\fs22\bord1...}
         text = re.sub(r'\{[^{}]*\\[^{}]*\}', '', text)
 
-        # 2. 语言标注括号
+        # 2. 语言标注括号：(英语) (韩语) (中文(简体)) 等
         lang_names = (
             r'中文(?:\([^)]*\))?|繁体中文|简体中文'
             r'|英语|英文'
@@ -1174,13 +1168,7 @@ class EmailToTelegram:
         )
         text = re.sub(rf'[（(]\s*(?:{lang_names})\s*[）)]', '', text)
 
-        # ★ 3. 清理未被还原的占位符残留
-        # _clean_translate_artifacts 里
-        text = re.sub(r'⟦\s*NL\s*[12]\s*⟧', '\n', text)
-        text = re.sub(r'⟦\s*\d+\s*⟧', '', text)
-
         return text
-
     def _resanitize_href(self, html):
         """翻译后修复 href 里的转义"""
         if 'href=' not in html:
@@ -1332,18 +1320,9 @@ class EmailToTelegram:
         vprint("=" * 60)
 
         # 兜底：清掉残留的 HTML 注释、空属性标签等 Telegram 不支持的标签
-        part = re.sub(r'<!--.*?-->', '', part, flags=re.DOTALL)
-        part = re.sub(r'<\s*code\s+[^>]*>', '<code>', part)
-        part = re.sub(r'<\s*code\s*>\s*<\s*/\s*code\s*>', '', part)
-
-        # ★ 新增：删掉非 ASCII 标签名（如 </代码>、<代码>）
-        part = re.sub(r'</?[^\x00-\x7f][^>]*>', '', part)
-        # ★ 新增：统一 code 闭合（防止翻译引擎把 </code> 改写）
-        part = re.sub(r'</\s*code\s*[^>]*>', '</code>', part, flags=re.IGNORECASE)
-
-        # ★ 新增：删残留占位符
-        part = re.sub(r'⟦\s*NL\s*[12]\s*⟧', '\n', part)
-        part = re.sub(r'⟦\s*\d+\s*⟧', '', part)
+        part = re.sub(r'<!--.*?-->', '', part, flags=re.DOTALL)      # 删注释
+        part = re.sub(r'<\s*code\s+[^>]*>', '<code>', part)          # <code ...> → <code>
+        part = re.sub(r'<\s*code\s*>\s*<\s*/\s*code\s*>', '', part)  # 删空 <code></code>
 
         # 清理后再检查（日志反映真实发送内容）
         self._debug_escape(part, f"发送前 {idx}/{total}")

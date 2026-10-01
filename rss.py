@@ -24,7 +24,6 @@ from md2tgmd import escape
 from collections import defaultdict
 from langdetect import detect, LangDetectException
 from rss_config import RSS_GROUPS
-from logging.handlers import RotatingFileHandler
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -32,17 +31,16 @@ SHOULD_EXIT = False
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
-DATABASE_FILE = BASE_DIR / "rss.db"
-
 LOG_FILE = BASE_DIR / "rss.log"
 
-# cron 每次都是新进程：启动时检查一次，超过 10MB 直接删除重建
+# cron 每次新进程：启动时检查一次，超过 10MB 就删除重建
+# 必须在 logging.basicConfig 之前，否则 handler 持有句柄会导致空间不释放
 if LOG_FILE.exists() and LOG_FILE.stat().st_size > 10 * 1024 * 1024:
     LOG_FILE.unlink()
 
 logging.basicConfig(
     filename=LOG_FILE,
-    level=logging.ERROR,
+    level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
 )
@@ -955,7 +953,7 @@ async def translate_with_libretranslate(text):
                     result = await response.json()
                     translated = result.get("translatedText")
                     if translated and translated != text:
-                    #    logger.info("✅ LibreTranslate 翻译成功")
+                 #       logger.info("✅ LibreTranslate 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ LibreTranslate 返回空或相同文本")
@@ -1026,7 +1024,7 @@ async def translate_with_deepl(text):
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
-                    #    logger.info("✅ DeepL 翻译成功")
+                  #      logger.info("✅ DeepL 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ DeepL 返回空或相同文本")
@@ -1090,10 +1088,10 @@ async def auto_translate_text(text):
    # logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
 
     translated = await _translate_raw(protected)
-   # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
+  # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
 
     restored = restore_special_content(translated, placeholders)
-    # logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
+  #  logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
     return restored
 
 async def generate_group_message(feed_data, entries, processor):
