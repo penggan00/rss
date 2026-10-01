@@ -1024,10 +1024,10 @@ class EmailToTelegram:
         counter = [0]
 
         def protect(m):
-            key = f"⟦{counter[0]}⟧"
+            key = f"ZXQPH{counter[0]}ZXQ"
             placeholders[key] = m.group(0)
             counter[0] += 1
-            return key
+            return f"<code>{key}</code>"
 
         # ===== 1.0 HTML 实体（放最前） =====
         html = re.sub(r'&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);', protect, html)
@@ -1109,12 +1109,12 @@ class EmailToTelegram:
         # ===== 1.10 命令行片段（★ 已修复，只匹配命令风格） =====
         html = re.sub(r'\$ [a-zA-Z][\w./-]*(?:\s+-{1,2}[\w-]+)*', protect, html)
 
-        # ===== 1.11 翻译破坏字符（★ 去掉撇号，避免 can't / don't 这类词被拆散） =====
-        html = re.sub(r"[;_\\$|@#%&*+=~^]", protect, html)
+        # ===== 1.11 翻译破坏字符（★ 已去掉 < > 和反引号） =====
+        html = re.sub(r"[;_\\$|]", protect, html)
 
-        # ============ 2. 保护换行（纯数字占位符，避免 NL2 被翻译器当词处理） ============
-        html = html.replace('\n\n', '⟦9001⟧')
-        html = html.replace('\n', '⟦9002⟧')
+        # ============ 2. 保护换行 ============
+        html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
+        html = html.replace('\n', '<code>ZXQNL1ZXQ</code>')
 
         # ============ 3. 简化 clean_text ============
         def clean_text(t):
@@ -1134,15 +1134,28 @@ class EmailToTelegram:
 
         # ============ 5. 还原占位符（保持原样） ============
         for key, val in placeholders.items():
+            translated = translated.replace(f"<code>{key}</code>", val)
             translated = translated.replace(key, val)
+            # 兜底：翻译引擎可能把 <code>ZXQPH0ZXQ</code> 改成 <code="">ZXQPH0ZXQ</code>
+            translated = re.sub(
+                rf'<\s*code\s*[^>]*>\s*{re.escape(key)}\s*<\s*/\s*code\s*>',
+                lambda _m: val,
+                translated
+            )
 
-        translated = translated.replace('⟦9001⟧', '\n\n')
-        translated = translated.replace('⟦9002⟧', '\n')
+        # 还原换行
+        translated = translated.replace('<code>ZXQNL2ZXQ</code>', '\n\n')
+        translated = translated.replace('ZXQNL2ZXQ', '\n\n')
+        translated = translated.replace('<code>ZXQNL1ZXQ</code>', '\n')
+        translated = translated.replace('ZXQNL1ZXQ', '\n')
 
         return translated
     
     def _clean_translate_artifacts(self, text):
-        """清理翻译后产生的语言标注括号和 ASS 样式串"""
+        """清理翻译后产生的语言标注括号和 ASS 样式串
+
+        只在翻译成功后调用，不翻译时不会触发。
+        """
         if not text:
             return text
 
@@ -1165,14 +1178,7 @@ class EmailToTelegram:
         )
         text = re.sub(rf'[（(]\s*(?:{lang_names})\s*[）)]', '', text)
 
-        # 3. 兜底：清理被翻译器拆散的占位符碎片
-        text = re.sub(r'[⟦⟧]', '', text)          # 残留的括号
-        text = re.sub(r'(?<![A-Za-z])NL[12](?![A-Za-z0-9])', '', text)  # 残留的 NL1/NL2
-        text = re.sub(r'\^+', ' ', text)          # 残留的 ^ 连串
-        text = re.sub(r'Q{2,}', '', text)         # 残留的 QQ
-
         return text
-    
     def _resanitize_href(self, html):
         """翻译后修复 href 里的转义"""
         if 'href=' not in html:
