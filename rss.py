@@ -31,15 +31,18 @@ SHOULD_EXIT = False
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
-LOG_FILE = BASE_DIR / "rss.log"
+DATABASE_FILE = BASE_DIR / "rss.db"
 
-# cron 每次新进程：启动时检查一次，超过 10MB 就删除重建
-# 必须在 logging.basicConfig 之前，否则 handler 持有句柄会导致空间不释放
-if LOG_FILE.exists() and LOG_FILE.stat().st_size > 10 * 1024 * 1024:
-    LOG_FILE.unlink()
+def clean_old_log():
+    """日志文件超过10MB就删除"""
+    log_file = BASE_DIR / "rss.log"
+    if log_file.exists():
+        size_mb = log_file.stat().st_size / 1024 / 1024
+        if size_mb > 10:  # 超过10MB
+            log_file.unlink()  # 直接删除
 
 logging.basicConfig(
-    filename=LOG_FILE,
+    filename=BASE_DIR / "rss.log",
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8"
@@ -514,39 +517,7 @@ class RSSDatabase:
                     feed_group
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送（记录日志）
-                expired_rows = await conn.fetch(
-                    """
-                    SELECT entry_id, feed_url, title, translated_title, link, 
-                           entry_timestamp, feed_title
-                    FROM pending_messages 
-                    WHERE feed_group = $1 
-                    AND sent = 0 
-                    AND entry_timestamp < $2
-                    """,
-                    feed_group, now - 3 * 86400
-                )
-                
-                if expired_rows:
-                    logger.warning(
-                        f"🗑️ [清理过期未发送] 组={feed_group} | "
-                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
-                    )
-                    for row in expired_rows:
-                        age_days = (now - row['entry_timestamp']) / 86400
-                        expired_dt = datetime.fromtimestamp(
-                            row['entry_timestamp'], tz=pytz.utc
-                        ).strftime('%Y-%m-%d %H:%M:%S')
-                        logger.warning(
-                            f"   ❌ 发送失败 | 组={feed_group} | "
-                            f"源={row['feed_title'] or row['feed_url']} | "
-                            f"标题={row['translated_title'] or row['title']} | "
-                            f"链接={row['link']} | "
-                            f"发布时间={expired_dt} (UTC) | "
-                            f"滞留={age_days:.1f}天 | "
-                            f"entry_id={row['entry_id'][:12]}"
-                        )
-                
+                # 3. 未发送超过3天，强制标记为已发送
                 await conn.execute(
                     """
                     UPDATE pending_messages 
@@ -612,42 +583,7 @@ class RSSDatabase:
                     (feed_group,)
                 )
 
-                # 3. 未发送超过3天，强制标记为已发送（记录日志）
-                await c.execute(
-                    """
-                    SELECT entry_id, feed_url, title, translated_title, link, 
-                           entry_timestamp, feed_title
-                    FROM pending_messages 
-                    WHERE feed_group = ? 
-                    AND sent = 0 
-                    AND entry_timestamp < ?
-                    """,
-                    (feed_group, now - 3 * 86400)
-                )
-                expired_rows = await c.fetchall()
-                
-                if expired_rows:
-                    logger.warning(
-                        f"🗑️ [清理过期未发送] 组={feed_group} | "
-                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
-                    )
-                    for row in expired_rows:
-                        (entry_id, feed_url, title, translated_title, 
-                         link, entry_timestamp, feed_title) = row
-                        age_days = (now - entry_timestamp) / 86400
-                        expired_dt = datetime.fromtimestamp(
-                            entry_timestamp, tz=pytz.utc
-                        ).strftime('%Y-%m-%d %H:%M:%S')
-                        logger.warning(
-                            f"   ❌ 发送失败 | 组={feed_group} | "
-                            f"源={feed_title or feed_url} | "
-                            f"标题={translated_title or title} | "
-                            f"链接={link} | "
-                            f"发布时间={expired_dt} (UTC) | "
-                            f"滞留={age_days:.1f}天 | "
-                            f"entry_id={entry_id[:12]}"
-                        )
-                
+                # 3. 未发送超过3天，强制标记为已发送
                 await c.execute(
                     """
                     UPDATE pending_messages 
@@ -679,49 +615,61 @@ def protect_special_content(text):
     counter = [0]
 
     def protect(m):
-        key = f"⟦{counter[0]}⟧"
+        # ✅ 可靠占位符：私用区字符 U+E000 / U+E001 + 数字 99xx
+        num = f"99{counter[0] + 10}"
+        key = f"\uE000{num}\uE001"
         placeholders[key] = m.group(0)
         counter[0] += 1
-        return key
+        return f" {key} "                  # 前后加空格，避免与单词粘连
 
     # ---- 1. URL ----
     text = re.sub(r'https?://[^\s<>"\']+', protect, text)
-
     # ---- 2. 带空格文件名（如 balenaEtcher-2.1.7 Setup.exe） ----
     text = re.sub(
         r'\b[\w][\w.-]*\s+[A-Z][\w.-]*\.(?:exe|msi|dmg|pkg|rpm|deb|zip)\b',
         protect, text, flags=re.IGNORECASE
     )
-
     # ---- 3. 普通文件名 ----
     text = re.sub(
         r'\b[\w][\w.-]*\.(?:rpm|deb|dmg|exe|zip|tar\.gz|tgz|txt|json|AppImage|snap|msi|pkg|apk|7z|gz|bz2|xz)\b',
         protect, text, flags=re.IGNORECASE
     )
-
     # ---- 4. SHA256SUMS ----
     text = re.sub(r'\bSHA256SUMS\b', protect, text)
-
     # ---- 5. owner/repo ----
     text = re.sub(r'(?<=[\s>])[\w.-]+/[\w.-]+(?=[\s<])', protect, text)
-
     # ---- 6. 版本号 ----
     text = re.sub(r'\bv\d+\.\d+\.\d+\b', protect, text)
-
     # ---- 7. commit hash ----
     text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
+    # ---- 8. 6 个会被翻译破坏的字符：; _ ' \ $ | ----
+    text = re.sub(r"[;_'\\$|]", protect, text)
 
-    # ---- 8. 翻译会破坏的字符：; _ \ $ | ----
-    text = re.sub(r"[;_\\$|]", protect, text)
+    # ✅ 合并多余空格
+    text = re.sub(r' {2,}', ' ', text).strip()
 
     return text, placeholders
 
 
 def restore_special_content(text, placeholders):
+    """翻译后：还原占位符
+    容错：私用区字符可能丢失，前后可能有空格
+    """
     if not text:
         return text
+
     for key, val in placeholders.items():
+        # 1. 精确匹配
+        text = text.replace(f" {key} ", val)
         text = text.replace(key, val)
+
+        # 2. 模糊匹配：提取数字，忽略私用区字符和空格
+        m = re.search(r'\d+', key)
+        if m:
+            num = m.group(1)
+            pattern = rf'\s*\uE000?\s*{num}\s*\uE001?\s*'
+            text = re.sub(pattern, val, text)
+
     return text
 
 def remove_html_tags(text):
@@ -938,7 +886,7 @@ async def should_send_entry(entry, processor):
     
 # ========== LibreTranslate 翻译 ==========
 async def translate_with_libretranslate(text):
-    """使用 LibreTranslate 翻译（备用）"""
+    """使用 LibreTranslate 翻译（首选）"""
     if not text or len(text.strip()) < 3:
         return text
     
@@ -953,7 +901,7 @@ async def translate_with_libretranslate(text):
                     result = await response.json()
                     translated = result.get("translatedText")
                     if translated and translated != text:
-                 #       logger.info("✅ LibreTranslate 翻译成功")
+                        logger.info("✅ LibreTranslate 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ LibreTranslate 返回空或相同文本")
@@ -970,7 +918,7 @@ async def translate_with_libretranslate(text):
 
 # ========== DeepL 翻译 ==========
 async def translate_with_deepl(text):
-    """使用 DeepL 翻译（首选）"""
+    """使用 DeepL 翻译（备用）"""
     if not text or len(text.strip()) < 3:
         return None
     
@@ -1024,7 +972,7 @@ async def translate_with_deepl(text):
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
-                  #      logger.info("✅ DeepL 翻译成功")
+                        logger.info("✅ DeepL 翻译成功")
                         return translated
                     else:
                         logger.warning("⚠️ DeepL 返回空或相同文本")
@@ -1053,15 +1001,7 @@ async def _translate_raw(text):
     if not cleaned_text:
         return cleaned_text
 
-    # 第一优先级：DeepL（质量好）
-    try:
-        translated = await translate_with_deepl(cleaned_text)
-        if translated is not None:
-            return translated
-    except Exception as e:
-        logger.warning(f"DeepL 失败: {e}")
-
-    # 第二优先级：LibreTranslate（备用）
+    # 第一优先级：LibreTranslate
     try:
         translated = await translate_with_libretranslate(cleaned_text)
         if translated is not None:
@@ -1069,10 +1009,18 @@ async def _translate_raw(text):
     except Exception as e:
         logger.warning(f"LibreTranslate 失败: {e}")
 
+    # 第二优先级：DeepL
+    try:
+        translated = await translate_with_deepl(cleaned_text)
+        if translated is not None:
+            return translated
+    except Exception as e:
+        logger.warning(f"DeepL 失败: {e}")
+
     logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
 
-# ========== 翻译主函数（DeepL → LibreTranslate → 原文） ==========
+# ========== 翻译主函数（LibreTranslate → DeepL → 原文） ==========
 async def auto_translate_text(text):
     """翻译前保护 → 翻译 → 还原"""
     if not text or not text.strip():
@@ -1085,13 +1033,13 @@ async def auto_translate_text(text):
 
     # 1. 占位符保护
     protected, placeholders = protect_special_content(cleaned)
-   # logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
 
+    # 2. 调底层翻译（不是调自己！）
     translated = await _translate_raw(protected)
-  # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
 
+    # 3. 还原占位符
     restored = restore_special_content(translated, placeholders)
-  #  logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
+
     return restored
 
 async def generate_group_message(feed_data, entries, processor):
@@ -1441,18 +1389,9 @@ async def process_batch_send(group, db: RSSDatabase):
             for row in msgs:
                 if row["entry_timestamp"] < timeout_cutoff:
                     force_sent_entry_ids.append(row["entry_id"])
-                    age_hours = (now - row["entry_timestamp"]) / 3600
-                    pub_dt = datetime.fromtimestamp(
-                        row["entry_timestamp"], tz=pytz.utc
-                    ).strftime('%Y-%m-%d %H:%M:%S')
                     logger.warning(
-                        f"   ❌ 发送失败(批量) | 组={group_key} | "
-                        f"源={row.get('feed_title') or feed_url} | "
-                        f"标题={row.get('translated_title') or row.get('title')} | "
-                        f"链接={row.get('link')} | "
-                        f"发布时间={pub_dt} (UTC) | "
-                        f"滞留={age_hours:.1f}小时 | "
-                        f"entry_id={row['entry_id'][:12]}"
+                        f"⚠️ 消息 {row['entry_id']} 已存在 {timeout_seconds/3600:.1f} 小时 "
+                        f"({MAX_RETRY_COUNT} 轮批量发送失败)，强制标记为已发送"
                     )
     
     # 标记成功发送的
@@ -1614,6 +1553,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         raise
 
 async def main():
+    clean_old_log() 
     logger.info("🚀 RSS Bot 开始执行")
     
     start_time = time.time()
