@@ -1109,12 +1109,12 @@ class EmailToTelegram:
         # ===== 1.10 命令行片段（★ 已修复，只匹配命令风格） =====
         html = re.sub(r'\$ [a-zA-Z][\w./-]*(?:\s+-{1,2}[\w-]+)*', protect, html)
 
-        # ===== 1.11 翻译破坏字符（★ 已去掉 < > 和反引号） =====
-        html = re.sub(r"[;_'\\$|@#%&*+=~^]", protect, html)
+        # ===== 1.11 翻译破坏字符（★ 去掉撇号，避免 can't / don't 这类词被拆散） =====
+        html = re.sub(r"[;_\\$|@#%&*+=~^]", protect, html)
 
-        # ============ 2. 保护换行 ============
-        html = html.replace('\n\n', '⟦NL2⟧')
-        html = html.replace('\n', '⟦NL1⟧')
+        # ============ 2. 保护换行（纯数字占位符，避免 NL2 被翻译器当词处理） ============
+        html = html.replace('\n\n', '⟦9001⟧')
+        html = html.replace('\n', '⟦9002⟧')
 
         # ============ 3. 简化 clean_text ============
         def clean_text(t):
@@ -1136,16 +1136,13 @@ class EmailToTelegram:
         for key, val in placeholders.items():
             translated = translated.replace(key, val)
 
-        translated = translated.replace('⟦NL2⟧', '\n\n')
-        translated = translated.replace('⟦NL1⟧', '\n')
+        translated = translated.replace('⟦9001⟧', '\n\n')
+        translated = translated.replace('⟦9002⟧', '\n')
 
         return translated
     
     def _clean_translate_artifacts(self, text):
-        """清理翻译后产生的语言标注括号和 ASS 样式串
-
-        只在翻译成功后调用，不翻译时不会触发。
-        """
+        """清理翻译后产生的语言标注括号和 ASS 样式串"""
         if not text:
             return text
 
@@ -1168,7 +1165,14 @@ class EmailToTelegram:
         )
         text = re.sub(rf'[（(]\s*(?:{lang_names})\s*[）)]', '', text)
 
+        # 3. 兜底：清理被翻译器拆散的占位符碎片
+        text = re.sub(r'[⟦⟧]', '', text)          # 残留的括号
+        text = re.sub(r'(?<![A-Za-z])NL[12](?![A-Za-z0-9])', '', text)  # 残留的 NL1/NL2
+        text = re.sub(r'\^+', ' ', text)          # 残留的 ^ 连串
+        text = re.sub(r'Q{2,}', '', text)         # 残留的 QQ
+
         return text
+    
     def _resanitize_href(self, html):
         """翻译后修复 href 里的转义"""
         if 'href=' not in html:
