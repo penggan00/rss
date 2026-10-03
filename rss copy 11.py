@@ -725,18 +725,6 @@ def protect_special_content(text):
 
     return text, placeholders
 
-def wrap_placeholders_as_html(text):
-    """把 ⟦0⟧ 占位符包成 <span translate='no'>⟦0⟧</span>
-    两个翻译服务共用，靠 translate='no' 保护不被翻译。
-    """
-    return re.sub(r'(⟦\d+⟧)', r'<span translate="no">\1</span>', text)
-
-
-def strip_html_protection(text):
-    """翻译后去掉保护用的 span 标签，保留里面的占位符"""
-    if not text:
-        return text
-    return re.sub(r'</?span[^>]*>', '', text)
 
 def restore_special_content(text, placeholders):
     if not text:
@@ -957,33 +945,27 @@ async def should_send_entry(entry, processor):
     else:
         return True
     
-# ========== LibreTranslate 翻译（首选） ==========
+# ========== LibreTranslate 翻译 ==========
 async def translate_with_libretranslate(text):
-    """使用 LibreTranslate 翻译（首选）"""
+    """使用 LibreTranslate 翻译（备用）"""
     if not text or len(text.strip()) < 3:
-        return None
-    if not LIBRETRANSLATE_URL:
-        logger.warning("⚠️ LIBRETRANSLATE_URL 未配置")
-        return None
-
+        return text
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 LIBRETRANSLATE_URL,
-                json={
-                    "q": text,
-                    "source": "auto",
-                    "target": "zh",
-                    "format": "html",          # ✅ 共用 HTML 保护
-                },
+                json={"q": text, "source": "auto", "target": "zh"},
                 timeout=10
             ) as response:
                 if response.status == 200:
                     result = await response.json()
                     translated = result.get("translatedText")
                     if translated and translated != text:
+                        logger.info("✅ LibreTranslate 翻译成功")
                         return translated
-                    logger.warning("⚠️ LibreTranslate 返回空或相同文本")
+                    else:
+                        logger.warning("⚠️ LibreTranslate 返回空或相同文本")
                 else:
                     logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
     except asyncio.TimeoutError:
@@ -992,47 +974,52 @@ async def translate_with_libretranslate(text):
         logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
     except Exception as e:
         logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+    
+    return None  # 返回 None 表示失败，让调用方尝试备用
 
-    return None
-
-
-# ========== DeepL 翻译（备用） ==========
+# ========== DeepL 翻译 ==========
 async def translate_with_deepl(text):
-    """使用 DeepL 翻译（备用）"""
+    """使用 DeepL 翻译（首选）"""
     if not text or len(text.strip()) < 3:
         return None
-
+    
     DEEPL_API_KEY = os.getenv("DEEPL_API_KEY")
     if not DEEPL_API_KEY:
         logger.warning("⚠️ DeepL API Key 未配置")
         return None
-
+    
+    # DeepL 语言代码映射
     lang_map = {
-        'zh': 'ZH', 'en': 'EN', 'ja': 'JA', 'ko': 'KO',
-        'ru': 'RU', 'fr': 'FR', 'de': 'DE', 'es': 'ES',
-        'it': 'IT', 'pt': 'PT', 'nl': 'NL', 'pl': 'PL',
+        'zh': 'ZH',
+        'en': 'EN',
+        'ja': 'JA',
+        'ko': 'KO',
+        'ru': 'RU',
+        'fr': 'FR',
+        'de': 'DE',
+        'es': 'ES',
+        'it': 'IT',
+        'pt': 'PT',
+        'nl': 'NL',
+        'pl': 'PL',
     }
-
-    source_lang = None
+    
+    # 检测源语言（用于提高准确率）
     try:
         detected_lang = detect(text)
-        source_lang = lang_map.get(detected_lang)
-    except LangDetectException:
+        source_lang = lang_map.get(detected_lang, None)
+    except:
         source_lang = None
-    except Exception:
-        source_lang = None
-
+    
     try:
         async with aiohttp.ClientSession() as session:
             payload = {
                 "text": [text],
-                "target_lang": "ZH",
-                "tag_handling": "html",           # ✅ 共用 HTML 保护
-                "tag_handling_version": "v2",     # ✅ 改进标签处理
+                "target_lang": "ZH"
             }
             if source_lang:
                 payload["source_lang"] = source_lang
-
+            
             async with session.post(
                 os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2/translate"),
                 json=payload,
@@ -1046,12 +1033,13 @@ async def translate_with_deepl(text):
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
+                        logger.info("✅ DeepL 翻译成功")
                         return translated
-                    logger.warning("⚠️ DeepL 返回空或相同文本")
-                    return None
+                    else:
+                        logger.warning("⚠️ DeepL 返回空或相同文本")
+                        return None
                 else:
-                    body = await response.text()
-                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status} | {body[:200]}")
+                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status}")
                     return None
     except asyncio.TimeoutError:
         logger.warning("⚠️ DeepL 请求超时")
@@ -1063,34 +1051,33 @@ async def translate_with_deepl(text):
         logger.warning(f"⚠️ DeepL 翻译失败: {e}")
         return None
 
-
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+)
 async def _translate_raw(text):
-    """底层翻译：LibreTranslate 优先，失败降级 DeepL，最后回退原文"""
+    """底层翻译：文本已由外层清理和保护，这里只负责调翻译服务"""
     cleaned_text = text.strip()
+
     if not cleaned_text:
         return cleaned_text
 
-    # ✅ 共用：把 ⟦0⟧ 包成 HTML 保护标签
-    protected_html = wrap_placeholders_as_html(cleaned_text)
-
-    # 1. 首选 LibreTranslate
+    # 第一优先级：DeepL（质量好）
     try:
-        translated = await translate_with_libretranslate(protected_html)
+        translated = await translate_with_deepl(cleaned_text)
         if translated is not None:
-            return strip_html_protection(translated)
-        logger.info("ℹ️ LibreTranslate 不可用，降级到 DeepL")
+            return translated
     except Exception as e:
-        logger.warning(f"LibreTranslate 异常，降级到 DeepL: {e}")
+        logger.warning(f"DeepL 失败: {e}")
 
-    # 2. 备用 DeepL
+    # 第二优先级：LibreTranslate（备用）
     try:
-        translated = await translate_with_deepl(protected_html)
+        translated = await translate_with_libretranslate(cleaned_text)
         if translated is not None:
-            return strip_html_protection(translated)
+            return translated
     except Exception as e:
-        logger.warning(f"DeepL 异常: {e}")
+        logger.warning(f"LibreTranslate 失败: {e}")
 
-    # 3. 都失败，返回原文（占位符原样返回，由上层 restore 还原）
     logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
 
@@ -1107,12 +1094,13 @@ async def auto_translate_text(text):
 
     # 1. 占位符保护
     protected, placeholders = protect_special_content(cleaned)
+    logger.warning(f"🔍 翻译前: {repr(protected)}")       # 👈 加
 
-    # 2. 翻译（内部已包 HTML 保护）
     translated = await _translate_raw(protected)
+   # logger.warning(f"🔍 翻译后: {repr(translated)}")      # 👈 加
 
-    # 3. 还原占位符
     restored = restore_special_content(translated, placeholders)
+    logger.warning(f"🔍 还原后: {repr(restored)}")        # 👈 加
     return restored
 
 async def generate_group_message(feed_data, entries, processor):
