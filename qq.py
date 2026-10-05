@@ -55,7 +55,6 @@ class Config:
             'VOLC_MT_API_URL',
             'https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate'
         )
-        self.VOLC_MONTHLY_LIMIT = int(self._get_env_optional('VOLC_MONTHLY_LIMIT', '2000000'))
 
         # DeepL（备用）
         self.DEEPL_API_KEY = self._get_env('DEEPL_API_KEY')
@@ -142,74 +141,6 @@ cache = InMemoryCache(max_size=2000)
 
 
 # ============================================================
-# 火山额度本地统计（持久化到文件）
-# ============================================================
-class VolcUsageTracker:
-    """
-    火山的用量没有公开查询接口，这里做本地字符数统计。
-    每月 1 号自动重置。文件格式：
-    {"month": "2026-10", "used": 12345}
-    """
-
-    def __init__(self, path: str, monthly_limit: int):
-        self.path = path
-        self.monthly_limit = monthly_limit
-        self._lock = asyncio.Lock()
-        self._data = self._load()
-
-    def _current_month(self) -> str:
-        return datetime.now().strftime('%Y-%m')
-
-    def _load(self) -> dict:
-        if os.path.exists(self.path):
-            try:
-                with open(self.path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if data.get('month') != self._current_month():
-                    return {'month': self._current_month(), 'used': 0}
-                return data
-            except Exception as e:
-                logger.warning(f"读取火山用量文件失败: {e}")
-        return {'month': self._current_month(), 'used': 0}
-
-    def _save(self):
-        try:
-            with open(self.path, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f)
-        except Exception as e:
-            logger.warning(f"保存火山用量文件失败: {e}")
-
-    async def add(self, chars: int):
-        async with self._lock:
-            if self._data.get('month') != self._current_month():
-                self._data = {'month': self._current_month(), 'used': 0}
-            self._data['used'] += chars
-            self._save()
-
-    async def get_usage(self) -> dict:
-        async with self._lock:
-            if self._data.get('month') != self._current_month():
-                self._data = {'month': self._current_month(), 'used': 0}
-                self._save()
-            used = self._data['used']
-            limit = self.monthly_limit
-            return {
-                'month': self._data['month'],
-                'used': used,
-                'limit': limit,
-                'remaining': max(limit - used, 0),
-                'percent': (used / limit * 100) if limit > 0 else 0,
-                'exhausted': used >= limit,
-            }
-
-
-volc_usage = VolcUsageTracker(
-    path=os.path.join(PROJECT_ROOT, 'volc_usage.json'),
-    monthly_limit=config.VOLC_MONTHLY_LIMIT
-)
-
-
-# ============================================================
 # 语言检测
 # ============================================================
 def detect_language(text: str) -> str:
@@ -285,12 +216,6 @@ class VolcTranslator:
         if not text or not text.strip():
             return text
 
-        # 检查本地额度
-        usage = await volc_usage.get_usage()
-        if usage['exhausted']:
-            logger.warning("⚠️ 火山额度已用完（本地统计），切换到 DeepL")
-            return None
-
         src = self.LANG_MAP.get(source_lang, source_lang)
         tgt = self.LANG_MAP.get(target_lang, target_lang)
 
@@ -334,9 +259,6 @@ class VolcTranslator:
                 if not translated:
                     logger.warning("⚠️ 火山返回空译文")
                     return None
-
-                # 本地累计用量（按源文本字符数，粗略）
-                await volc_usage.add(len(text))
 
                 logger.info("✅ 火山翻译成功")
                 return translated
@@ -574,6 +496,7 @@ async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ============================================================
 @require_auth
 async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """显示系统状态"""
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -590,7 +513,6 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         cache_stats = await cache.get_stats()
         deepl_usage = await get_deepl_usage()
-        volc_stats = await volc_usage.get_usage()
 
         if deepl_usage:
             deepl_line = (
@@ -600,14 +522,6 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         else:
             deepl_line = "*额度:* 获取失败\n"
-
-        volc_line = (
-            f"*月份:* {volc_stats['month']}\n"
-            f"*已用:* {volc_stats['used']:,} / {volc_stats['limit']:,} 字符\n"
-            f"*剩余:* {volc_stats['remaining']:,} 字符 "
-            f"({volc_stats['percent']:.1f}%)\n"
-            f"*状态:* {'❌ 已用完，切 DeepL' if volc_stats['exhausted'] else '✅ 可用'}\n"
-        )
 
         message = (
             "🖥️ *系统状态*\n\n"
@@ -622,8 +536,6 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"*命中次数:* {cache_stats['hits']}次\n"
             f"*未命中:* {cache_stats['misses']}次\n"
             f"*命中率:* {cache_stats['hit_rate']}\n\n"
-            f"🌋 *火山翻译（主，本地统计）*\n"
-            f"{volc_line}\n"
             f"🔤 *DeepL（备用）*\n"
             f"{deepl_line}\n"
             f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
