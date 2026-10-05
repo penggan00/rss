@@ -16,6 +16,9 @@ from telegram import Bot
 from telegram.constants import ParseMode
 import pdfplumber
 from logging.handlers import RotatingFileHandler
+import uuid
+import json
+import requests
 
 # PDF 解析白名单：主题含以下任一关键词才解析 PDF
 PDF_SUBJECT_KEYWORDS = ['账单', '信用卡']
@@ -35,7 +38,16 @@ TELEGRAM_API_KEY = os.getenv('TELEGRAM_API_KEY')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 ENABLE_TRANSLATION = os.getenv('ENABLE_TRANSLATION', 'false').lower() == 'true'
-LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL')
+
+# 火山翻译（主）
+VOLC_MT_API_KEY = os.getenv('VOLC_MT_API_KEY')
+VOLC_MT_RESOURCE_ID = os.getenv('VOLC_MT_RESOURCE_ID', 'volc.speech.mt')
+VOLC_MT_API_URL = os.getenv(
+    'VOLC_MT_API_URL',
+    'https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate'
+)
+
+# DeepL（备用）
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY')
 DEEPL_API_URL = os.getenv('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')
 
@@ -921,7 +933,7 @@ class EmailToTelegram:
             return text
         if len(text.encode('utf-8')) > 8000:
             return self._translate_long(text)
-        r = self._libre(text)
+        r = self._volc(text)          # ← 改这里
         if r is not None:
             return r
         r = self._deepl(text)
@@ -956,26 +968,76 @@ class EmailToTelegram:
         if cur:
             out.append(self.translate(cur))
         return "\n\n".join(out)
+    def _detect_src_lang(self, text):
+        """简易语言检测，零依赖。"""
+        if not text:
+            return "en"
+        clean = re.sub(r'[^\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff]',
+                       '', text, flags=re.UNICODE)
+        if not clean:
+            return "en"
+        total = len(clean)
+        zh = len(re.findall(r'[\u4e00-\u9fff]', clean))
+        ja = len(re.findall(r'[\u3040-\u30ff]', clean))
+        ko = len(re.findall(r'[\uac00-\ud7af]', clean))
+        ru = len(re.findall(r'[\u0400-\u04ff]', clean))
+        if zh / total > 0.3:
+            return "zh"
+        if ja / total > 0.3:
+            return "ja"
+        if ko / total > 0.3:
+            return "ko"
+        if ru / total > 0.3:
+            return "ru"
+        return "en"
 
-    def _libre(self, text):
-        if not LIBRETRANSLATE_URL:
+    def _volc(self, text):
+        """火山机器翻译（首选），失败返回 None 由 _deepl 兜底"""
+        if not VOLC_MT_API_KEY:
+            logger.warning("⚠️ 火山 API Key 未配置")
             return None
+
         try:
-            import requests
+            request_id = uuid.uuid4().hex + uuid.uuid4().hex[:16]
+            src_lang = self._detect_src_lang(text)
             r = requests.post(
-                LIBRETRANSLATE_URL,
-                json={"q": text, "source": "auto", "target": "zh", "format": "html"},
-                timeout=15)
-            if r.status_code == 200:
-                t = r.json().get("translatedText")
-                if t and t != text:
-                    logger.info("✅ LibreTranslate 翻译成功")
-                    return t
-            else:
-                logger.warning(f"LibreTranslate 状态码: {r.status_code}")
+                VOLC_MT_API_URL,
+                json={
+                    "source_language": src_lang,
+                    "target_language": "zh",
+                    "text_list": [text],
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": VOLC_MT_API_KEY,
+                    "X-Api-Resource-Id": VOLC_MT_RESOURCE_ID,
+                    "X-Api-Request-Id": request_id,
+                },
+                timeout=15
+            )
+            if r.status_code != 200:
+                logger.warning(f"⚠️ 火山 HTTP {r.status_code} | {r.text[:200]}")
+                return None
+
+            result = r.json()
+            if result.get("code") != 20000000:
+                logger.warning(f"⚠️ 火山业务错误: {result}")
+                return None
+
+            translated = (
+                result.get("data", {})
+                      .get("translation_list", [{}])[0]
+                      .get("translation")
+            )
+            if translated and translated != text:
+                logger.info("✅ 火山翻译成功")
+                return translated
+            logger.warning("⚠️ 火山返回空或相同文本")
+            return None
+
         except Exception as e:
-            logger.warning(f"LibreTranslate 失败: {e}")
-        return None
+            logger.warning(f"⚠️ 火山翻译失败: {e}")
+            return None
 
     def _deepl(self, text):
         if not DEEPL_API_KEY:

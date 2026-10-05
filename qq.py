@@ -2,6 +2,8 @@
 # pip install psutil python-dotenv python-telegram-bot aiohttp
 import os
 import re
+import json
+import uuid
 import asyncio
 import signal
 import hashlib
@@ -20,7 +22,7 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes, Com
 import logging
 
 # ============================================================
-# 基础配置（必须最先初始化）
+# 基础配置
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -34,18 +36,32 @@ logger = logging.getLogger(__name__)
 logging.getLogger('telegram').setLevel(logging.WARNING)
 logging.getLogger('aiohttp').setLevel(logging.WARNING)
 
-# 加载环境变量
 load_dotenv()
+
 
 # ============================================================
 # 配置类
 # ============================================================
 class Config:
     def __init__(self):
+        # Telegram
         self.TELEGRAM_TOKEN = self._get_env('TELEGRAM_API_KEY')
         self.AUTHORIZED_CHAT_IDS = self._parse_chat_ids('TELEGRAM_CHAT_ID')
+
+        # 火山翻译（主）
+        self.VOLC_MT_API_KEY = self._get_env('VOLC_MT_API_KEY')
+        self.VOLC_MT_RESOURCE_ID = self._get_env_optional('VOLC_MT_RESOURCE_ID', 'volc.speech.mt')
+        self.VOLC_MT_API_URL = self._get_env_optional(
+            'VOLC_MT_API_URL',
+            'https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate'
+        )
+        self.VOLC_MONTHLY_LIMIT = int(self._get_env_optional('VOLC_MONTHLY_LIMIT', '2000000'))
+
+        # DeepL（备用）
         self.DEEPL_API_KEY = self._get_env('DEEPL_API_KEY')
-        self.DEEPL_API_URL = self._get_env_optional('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')
+        self.DEEPL_API_URL = self._get_env_optional(
+            'DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate'
+        )
 
     def _get_env(self, var_name: str) -> str:
         value = os.getenv(var_name)
@@ -55,7 +71,6 @@ class Config:
         return value
 
     def _get_env_optional(self, var_name: str, default: str = None) -> str:
-        """获取可选环境变量，不存在时返回默认值"""
         value = os.getenv(var_name)
         return value if value else default
 
@@ -67,7 +82,7 @@ class Config:
             logger.error(f"Invalid {var_name} format")
             raise ValueError(f"Invalid {var_name} format")
 
-# 初始化全局配置
+
 try:
     config = Config()
     logger.info("Configuration loaded successfully")
@@ -76,12 +91,11 @@ except Exception as e:
     logger.critical(f"Failed to load configuration: {e}")
     raise
 
+
 # ============================================================
 # 内存缓存（LRU，上限 2000 条）
 # ============================================================
 class InMemoryCache:
-    """基于 OrderedDict 的 LRU 内存缓存，超过上限自动淘汰最久未使用的条目"""
-
     def __init__(self, max_size: int = 2000):
         self._data: OrderedDict = OrderedDict()
         self._max = max_size
@@ -123,13 +137,82 @@ class InMemoryCache:
                 'hit_rate': f"{self._hits / total * 100:.1f}%" if total > 0 else "N/A"
             }
 
+
 cache = InMemoryCache(max_size=2000)
+
+
+# ============================================================
+# 火山额度本地统计（持久化到文件）
+# ============================================================
+class VolcUsageTracker:
+    """
+    火山的用量没有公开查询接口，这里做本地字符数统计。
+    每月 1 号自动重置。文件格式：
+    {"month": "2026-10", "used": 12345}
+    """
+
+    def __init__(self, path: str, monthly_limit: int):
+        self.path = path
+        self.monthly_limit = monthly_limit
+        self._lock = asyncio.Lock()
+        self._data = self._load()
+
+    def _current_month(self) -> str:
+        return datetime.now().strftime('%Y-%m')
+
+    def _load(self) -> dict:
+        if os.path.exists(self.path):
+            try:
+                with open(self.path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get('month') != self._current_month():
+                    return {'month': self._current_month(), 'used': 0}
+                return data
+            except Exception as e:
+                logger.warning(f"读取火山用量文件失败: {e}")
+        return {'month': self._current_month(), 'used': 0}
+
+    def _save(self):
+        try:
+            with open(self.path, 'w', encoding='utf-8') as f:
+                json.dump(self._data, f)
+        except Exception as e:
+            logger.warning(f"保存火山用量文件失败: {e}")
+
+    async def add(self, chars: int):
+        async with self._lock:
+            if self._data.get('month') != self._current_month():
+                self._data = {'month': self._current_month(), 'used': 0}
+            self._data['used'] += chars
+            self._save()
+
+    async def get_usage(self) -> dict:
+        async with self._lock:
+            if self._data.get('month') != self._current_month():
+                self._data = {'month': self._current_month(), 'used': 0}
+                self._save()
+            used = self._data['used']
+            limit = self.monthly_limit
+            return {
+                'month': self._data['month'],
+                'used': used,
+                'limit': limit,
+                'remaining': max(limit - used, 0),
+                'percent': (used / limit * 100) if limit > 0 else 0,
+                'exhausted': used >= limit,
+            }
+
+
+volc_usage = VolcUsageTracker(
+    path=os.path.join(PROJECT_ROOT, 'volc_usage.json'),
+    monthly_limit=config.VOLC_MONTHLY_LIMIT
+)
+
 
 # ============================================================
 # 语言检测
 # ============================================================
 def detect_language(text: str) -> str:
-    """检测文本语言"""
     if not text or not isinstance(text, str):
         return 'unknown'
     clean_text = re.sub(r'[^\w\u4e00-\u9fff]', '', text, flags=re.UNICODE)
@@ -148,8 +231,8 @@ def detect_language(text: str) -> str:
     )
     return dominant_lang if dominant_ratio > 0.4 else 'other'
 
+
 def get_translation_direction(text: str) -> Tuple[str, str]:
-    """获取翻译方向"""
     lang = detect_language(text)
     if lang in ('zh', 'ja', 'ko', 'ru', 'en'):
         target = 'en' if lang == 'zh' else 'zh'
@@ -157,17 +240,29 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
     else:
         return ('en', 'zh')
 
+
 # ============================================================
-# 翻译器（仅 DeepL）
+# 火山翻译（主）
 # ============================================================
-class DeepLTranslator:
+class VolcTranslator:
+    """火山机器翻译，作为主力引擎"""
+
+    # 火山支持的语言代码
+    LANG_MAP = {
+        'zh': 'zh', 'en': 'en', 'ja': 'ja', 'ko': 'ko',
+        'ru': 'ru', 'fr': 'fr', 'de': 'de', 'es': 'es',
+        'it': 'it', 'pt': 'pt', 'nl': 'nl', 'pl': 'pl',
+        'ar': 'ar', 'th': 'th', 'vi': 'vi', 'id': 'id',
+        'tr': 'tr', 'hi': 'hi',
+    }
+
     def __init__(self):
-        self.api_key = config.DEEPL_API_KEY
-        self.api_url = config.DEEPL_API_URL
+        self.api_key = config.VOLC_MT_API_KEY
+        self.api_url = config.VOLC_MT_API_URL
+        self.resource_id = config.VOLC_MT_RESOURCE_ID
         self._session: Optional[aiohttp.ClientSession] = None
-        
+
     async def _get_session(self) -> aiohttp.ClientSession:
-        """复用全局 aiohttp session"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -177,17 +272,117 @@ class DeepLTranslator:
             await self._session.close()
         self._session = None
 
-    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        """使用 DeepL 翻译，失败时返回原文"""
+    @staticmethod
+    def _gen_request_id() -> str:
+        """生成符合火山要求的 Request-Id"""
+        return uuid.uuid4().hex + uuid.uuid4().hex[:16]
+
+    async def translate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
+        """
+        返回译文；失败（超时/网络/非200/额度超限）返回 None，
+        让上层切到 DeepL。
+        """
         if not text or not text.strip():
             return text
 
-        lang_map = {
-            'zh': 'ZH', 'en': 'EN', 'ja': 'JA', 'ko': 'KO', 'ru': 'RU',
-            'fr': 'FR', 'de': 'DE', 'es': 'ES', 'it': 'IT',
-            'pt': 'PT', 'nl': 'NL', 'pl': 'PL',
-        }
-        target = lang_map.get(target_lang, target_lang.upper())
+        # 检查本地额度
+        usage = await volc_usage.get_usage()
+        if usage['exhausted']:
+            logger.warning("⚠️ 火山额度已用完（本地统计），切换到 DeepL")
+            return None
+
+        src = self.LANG_MAP.get(source_lang, source_lang)
+        tgt = self.LANG_MAP.get(target_lang, target_lang)
+
+        try:
+            session = await self._get_session()
+            async with session.post(
+                self.api_url,
+                json={
+                    "source_language": src,
+                    "target_language": tgt,
+                    "text_list": [text],
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": self.api_key,
+                    "X-Api-Resource-Id": self.resource_id,
+                    "X-Api-Request-Id": self._gen_request_id(),
+                },
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                raw = await response.text()
+                if response.status != 200:
+                    logger.warning(f"⚠️ 火山 HTTP {response.status}: {raw[:200]}")
+                    return None
+
+                try:
+                    result = json.loads(raw)
+                except Exception:
+                    logger.warning(f"⚠️ 火山返回非 JSON: {raw[:200]}")
+                    return None
+
+                if result.get('code') != 20000000:
+                    logger.warning(f"⚠️ 火山业务错误: {result}")
+                    return None
+
+                translated = (
+                    result.get('data', {})
+                          .get('translation_list', [{}])[0]
+                          .get('translation')
+                )
+                if not translated:
+                    logger.warning("⚠️ 火山返回空译文")
+                    return None
+
+                # 本地累计用量（按源文本字符数，粗略）
+                await volc_usage.add(len(text))
+
+                logger.info("✅ 火山翻译成功")
+                return translated
+
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ 火山请求超时，切换到 DeepL")
+            return None
+        except aiohttp.ClientError as e:
+            logger.warning(f"⚠️ 火山网络错误: {e}，切换到 DeepL")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ 火山翻译失败: {e}，切换到 DeepL")
+            return None
+
+
+# ============================================================
+# DeepL 翻译（备用）
+# ============================================================
+class DeepLTranslator:
+    LANG_MAP = {
+        'zh': 'ZH', 'en': 'EN', 'ja': 'JA', 'ko': 'KO', 'ru': 'RU',
+        'fr': 'FR', 'de': 'DE', 'es': 'ES', 'it': 'IT',
+        'pt': 'PT', 'nl': 'NL', 'pl': 'PL',
+    }
+
+    def __init__(self):
+        self.api_key = config.DEEPL_API_KEY
+        self.api_url = config.DEEPL_API_URL
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    async def translate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
+        """返回译文；失败返回 None"""
+        if not text or not text.strip():
+            return text
+
+        target = self.LANG_MAP.get(target_lang, target_lang.upper())
 
         try:
             session = await self._get_session()
@@ -204,31 +399,56 @@ class DeepLTranslator:
                     result = await response.json()
                     translated = result.get("translations", [{}])[0].get("text")
                     if translated and translated != text:
-                        logger.info("✅ DeepL 翻译成功")
+                        logger.info("✅ DeepL 翻译成功（备用）")
                         return translated
-                    else:
-                        logger.warning("⚠️ DeepL 返回空或相同文本")
-                        return text
+                    logger.warning("⚠️ DeepL 返回空或相同文本")
+                    return None
                 else:
                     error_text = await response.text()
-                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status}, 响应: {error_text}")
-                    return text
+                    logger.warning(f"⚠️ DeepL HTTP {response.status}: {error_text[:200]}")
+                    return None
         except asyncio.TimeoutError:
             logger.warning("⚠️ DeepL 请求超时")
-            return text
+            return None
         except aiohttp.ClientError as e:
             logger.warning(f"⚠️ DeepL 网络错误: {e}")
-            return text
+            return None
         except Exception as e:
             logger.warning(f"⚠️ DeepL 翻译失败: {e}")
-            return text
+            return None
 
-translator = DeepLTranslator()
+
+# ============================================================
+# 统一翻译入口：火山 → DeepL → 原文
+# ============================================================
+volc_translator = VolcTranslator()
+deepl_translator = DeepLTranslator()
+
+
+async def translate_with_fallback(text: str, source_lang: str, target_lang: str) -> Tuple[str, str]:
+    """
+    返回 (译文, 使用的引擎)
+    引擎: 'volc' / 'deepl' / 'raw'
+    """
+    # 1) 火山
+    result = await volc_translator.translate(text, source_lang, target_lang)
+    if result:
+        return result, 'volc'
+
+    # 2) DeepL
+    result = await deepl_translator.translate(text, source_lang, target_lang)
+    if result:
+        return result, 'deepl'
+
+    # 3) 原文兜底
+    logger.warning("⚠️ 火山和 DeepL 都失败，返回原文")
+    return text, 'raw'
+
 
 async def get_deepl_usage() -> Optional[dict]:
-    """获取 DeepL 账号额度信息（模块级函数）"""
+    """获取 DeepL 账号额度信息"""
     try:
-        session = await translator._get_session()
+        session = await deepl_translator._get_session()
         async with session.get(
             config.DEEPL_API_URL.replace('/translate', '/usage'),
             headers={"Authorization": f"DeepL-Auth-Key {config.DEEPL_API_KEY}"},
@@ -243,12 +463,13 @@ async def get_deepl_usage() -> Optional[dict]:
                     'limit': limit,
                     'percent': (used / limit * 100) if limit > 0 else 0
                 }
-            else:
-                logger.warning(f"DeepL usage API 返回状态码: {response.status}")
-                return None
+            logger.warning(f"DeepL usage API 返回状态码: {response.status}")
+            return None
     except Exception as e:
         logger.warning(f"获取 DeepL 额度失败: {e}")
         return None
+
+
 # ============================================================
 # 权限装饰器
 # ============================================================
@@ -261,12 +482,12 @@ def require_auth(func):
         return await func(update, context, *args, **kwargs)
     return wrapper
 
+
 # ============================================================
 # 消息处理器
 # ============================================================
 @require_auth
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """处理文本消息"""
     text = update.message.text
     if not text or len(text) > 5000:
         return
@@ -274,28 +495,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     source_lang, target_lang = get_translation_direction(text)
     logger.info(f"Chat {update.effective_chat.id}: [{source_lang}->{target_lang}] '{text[:80]}...'")
 
-    # 第一步：检查内存缓存
+    # 缓存
     cached = await cache.get(text, source_lang, target_lang)
     if cached:
         await send_long_message(update, cached)
         logger.info(f"Cache hit for: '{text[:50]}...'")
         return
 
-    # 第二步：翻译
     try:
-        translated = await translator.translate(text, source_lang, target_lang)
+        translated, engine = await translate_with_fallback(text, source_lang, target_lang)
 
-        if translated != text:
+        if engine != 'raw':
             await cache.set(text, source_lang, target_lang, translated)
 
-        await send_long_message(update, translated)
+        # 若引擎是 raw，加个提示前缀方便识别
+        if engine == 'raw':
+            await send_long_message(update, f"⚠️ 翻译失败，返回原文：\n\n{translated}")
+        else:
+            await send_long_message(update, translated)
 
     except Exception as e:
         logger.error(f"Translation error: {e}")
         await update.message.reply_text(f"❌ 翻译出错: {str(e)}")
 
+
 async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
-    """分片发送长消息，分片之间加延时避免触发 Telegram 限流"""
     idx, length = 0, len(text)
     while idx < length:
         end_idx = min(idx + chunk_size, length)
@@ -316,12 +540,12 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
         if idx < length:
             await asyncio.sleep(0.5)
 
+
 # ============================================================
-# 系统命令执行
+# 系统命令
 # ============================================================
 @require_auth
 async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """执行系统命令"""
     command = ' '.join(context.args) if context.args else None
 
     if not command:
@@ -344,12 +568,12 @@ async def cmd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
+
 # ============================================================
 # 系统状态命令
 # ============================================================
 @require_auth
 async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """显示系统状态"""
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -366,16 +590,24 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         cache_stats = await cache.get_stats()
         deepl_usage = await get_deepl_usage()
+        volc_stats = await volc_usage.get_usage()
 
         if deepl_usage:
             deepl_line = (
-                f"\n🔤 *DeepL 额度*\n"
                 f"*已用:* {deepl_usage['used']:,} / {deepl_usage['limit']:,} 字符\n"
                 f"*剩余:* {deepl_usage['limit'] - deepl_usage['used']:,} 字符 "
                 f"({deepl_usage['percent']:.1f}%)\n"
             )
         else:
-            deepl_line = "\n🔤 *DeepL 额度:* 获取失败\n"
+            deepl_line = "*额度:* 获取失败\n"
+
+        volc_line = (
+            f"*月份:* {volc_stats['month']}\n"
+            f"*已用:* {volc_stats['used']:,} / {volc_stats['limit']:,} 字符\n"
+            f"*剩余:* {volc_stats['remaining']:,} 字符 "
+            f"({volc_stats['percent']:.1f}%)\n"
+            f"*状态:* {'❌ 已用完，切 DeepL' if volc_stats['exhausted'] else '✅ 可用'}\n"
+        )
 
         message = (
             "🖥️ *系统状态*\n\n"
@@ -389,9 +621,12 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"*当前条目:* {cache_stats['total_entries']}/{cache_stats['max_entries']}条\n"
             f"*命中次数:* {cache_stats['hits']}次\n"
             f"*未命中:* {cache_stats['misses']}次\n"
-            f"*命中率:* {cache_stats['hit_rate']}\n"
-            f"{deepl_line}"
-            f"\n*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"*命中率:* {cache_stats['hit_rate']}\n\n"
+            f"🌋 *火山翻译（主，本地统计）*\n"
+            f"{volc_line}\n"
+            f"🔤 *DeepL（备用）*\n"
+            f"{deepl_line}\n"
+            f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         await update.message.reply_text(message, parse_mode='Markdown')
@@ -400,8 +635,9 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Htop command error: {e}")
         await update.message.reply_text(f"❌ 获取系统信息出错: {str(e)}")
 
+
 # ============================================================
-# 应用生命周期管理
+# 生命周期
 # ============================================================
 async def startup(application):
     logger.info("Bot started")
@@ -409,17 +645,18 @@ async def startup(application):
 async def shutdown(application):
     logger.info("Shutting down bot...")
     try:
-        await translator.close()
-        logger.info("HTTP session closed")
+        await volc_translator.close()
+        await deepl_translator.close()
+        logger.info("HTTP sessions closed")
     except Exception as e:
         logger.error(f"Close session failed: {e}")
     logger.info("Bot shutdown complete")
+
 
 # ============================================================
 # 主函数
 # ============================================================
 def main():
-    """启动机器人"""
     try:
         application = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
@@ -446,6 +683,7 @@ def main():
     except Exception as e:
         logger.critical(f"Failed to start bot: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()

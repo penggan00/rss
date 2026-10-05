@@ -24,6 +24,8 @@ from md2tgmd import escape
 from collections import defaultdict
 from langdetect import detect, LangDetectException
 from rss_config import RSS_GROUPS
+import json
+import uuid
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -32,6 +34,21 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 LOCK_FILE = BASE_DIR / "rss.lock"
 DATABASE_FILE = BASE_DIR / "rss.db"
+
+# ========== 全局 aiohttp session（复用连接，避免每次翻译都重新握手） ==========
+_http_session = None
+
+async def get_http_session():
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+    return _http_session
+
+async def close_http_session():
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+    _http_session = None
 
 def clean_old_log():
     """日志文件超过10MB就删除"""
@@ -54,7 +71,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
 semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
-LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL")
+# 火山翻译（主）
+VOLC_MT_API_KEY = os.getenv("VOLC_MT_API_KEY")
+VOLC_MT_RESOURCE_ID = os.getenv("VOLC_MT_RESOURCE_ID", "volc.speech.mt")
+VOLC_MT_API_URL = os.getenv(
+    "VOLC_MT_API_URL",
+    "https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate"
+)
 # RSS_GROUPS = []  # 将在main函数中从配置文件加载
 
 # ========== 数据库配置 ==========
@@ -956,45 +979,89 @@ async def should_send_entry(entry, processor):
         return not has_keyword
     else:
         return True
-    
-# ========== LibreTranslate 翻译（首选） ==========
-async def translate_with_libretranslate(text):
-    """使用 LibreTranslate 翻译（首选）"""
+
+# ========== 火山翻译（首选） ==========
+async def translate_with_volc(text):
+    """使用火山机器翻译（首选）
+    返回译文；任何失败返回 None（由上层降级到 DeepL）
+    """
     if not text or len(text.strip()) < 3:
         return None
-    if not LIBRETRANSLATE_URL:
-        logger.debug("ℹ️ LIBRETRANSLATE_URL 未配置，跳过 LibreTranslate")
+    if not VOLC_MT_API_KEY:
+        logger.warning("⚠️ 火山 API Key 未配置")
+        return None
+
+    volc_lang_map = {
+        'zh-cn': 'zh', 'zh-tw': 'zh', 'zh': 'zh', 'yue': 'zh',
+        'en': 'en', 'ja': 'ja', 'ko': 'ko', 'ru': 'ru',
+        'fr': 'fr', 'de': 'de', 'es': 'es', 'it': 'it',
+        'pt': 'pt', 'nl': 'nl', 'pl': 'pl',
+        'ar': 'ar', 'th': 'th', 'vi': 'vi', 'id': 'id',
+        'tr': 'tr', 'hi': 'hi',
+    }
+
+    try:
+        detected = detect(text)
+    except LangDetectException:
+        detected = None
+    except Exception:
+        detected = None
+
+    source_lang = volc_lang_map.get(detected) if detected else None
+    if not source_lang:
+        # 检测失败，默认按英文处理（大多数 RSS 是英文）
+        source_lang = 'en'
+
+    # 若源就是中文，不需要翻译
+    if source_lang == 'zh':
         return None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                LIBRETRANSLATE_URL,
-                json={
-                    "q": text,
-                    "source": "auto",
-                    "target": "zh",
-                    "format": "html",          # ✅ 共用 HTML 保护
-                },
-                timeout=10
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    translated = result.get("translatedText")
-                    if translated and translated != text:
-                        return translated
-                    logger.warning("⚠️ LibreTranslate 返回空或相同文本")
-                else:
-                    logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
+        request_id = uuid.uuid4().hex + uuid.uuid4().hex[:16]
+        session = await get_http_session()
+        async with session.post(
+            VOLC_MT_API_URL,
+            json={
+                "source_language": source_lang,
+                "target_language": "zh",
+                "text_list": [text],
+            },
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": VOLC_MT_API_KEY,
+                "X-Api-Resource-Id": VOLC_MT_RESOURCE_ID,
+                "X-Api-Request-Id": request_id,
+            },
+            timeout=10
+        ) as response:
+            if response.status != 200:
+                body = await response.text()
+                logger.warning(f"⚠️ 火山 HTTP {response.status} | {body[:200]}")
+                return None
+
+            result = await response.json()
+            if result.get("code") != 20000000:
+                logger.warning(f"⚠️ 火山业务错误: {result}")
+                return None
+
+            translated = (
+                result.get("data", {})
+                      .get("translation_list", [{}])[0]
+                      .get("translation")
+            )
+            if translated and translated != text:
+                return translated
+            logger.warning("⚠️ 火山返回空或相同文本")
+            return None
+
     except asyncio.TimeoutError:
-        logger.warning("⚠️ LibreTranslate 请求超时")
+        logger.warning("⚠️ 火山请求超时")
     except aiohttp.ClientError as e:
-        logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
+        logger.warning(f"⚠️ 火山网络错误: {e}")
     except Exception as e:
-        logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
+        logger.warning(f"⚠️ 火山翻译失败: {e}")
 
     return None
-
 
 # ========== DeepL 翻译（备用） ==========
 async def translate_with_deepl(text):
@@ -1023,36 +1090,36 @@ async def translate_with_deepl(text):
         source_lang = None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            payload = {
-                "text": [text],
-                "target_lang": "ZH",
-                "tag_handling": "html",           # ✅ 共用 HTML 保护
-                "tag_handling_version": "v2",     # ✅ 改进标签处理
-            }
-            if source_lang:
-                payload["source_lang"] = source_lang
+        session = await get_http_session()
+        payload = {
+            "text": [text],
+            "target_lang": "ZH",
+            "tag_handling": "html",           # ✅ 共用 HTML 保护
+            "tag_handling_version": "v2",     # ✅ 改进标签处理
+        }
+        if source_lang:
+            payload["source_lang"] = source_lang
 
-            async with session.post(
-                os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2/translate"),
-                json=payload,
-                headers={
-                    "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                timeout=10
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    translated = result.get("translations", [{}])[0].get("text")
-                    if translated and translated != text:
-                        return translated
-                    logger.warning("⚠️ DeepL 返回空或相同文本")
-                    return None
-                else:
-                    body = await response.text()
-                    logger.warning(f"⚠️ DeepL 返回状态码: {response.status} | {body[:200]}")
-                    return None
+        async with session.post(
+            os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2/translate"),
+            json=payload,
+            headers={
+                "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            timeout=10
+        ) as response:
+            if response.status == 200:
+                result = await response.json()
+                translated = result.get("translations", [{}])[0].get("text")
+                if translated and translated != text:
+                    return translated
+                logger.warning("⚠️ DeepL 返回空或相同文本")
+                return None
+            else:
+                body = await response.text()
+                logger.warning(f"⚠️ DeepL 返回状态码: {response.status} | {body[:200]}")
+                return None
     except asyncio.TimeoutError:
         logger.warning("⚠️ DeepL 请求超时")
         return None
@@ -1063,26 +1130,22 @@ async def translate_with_deepl(text):
         logger.warning(f"⚠️ DeepL 翻译失败: {e}")
         return None
 
-
 async def _translate_raw(text):
-    """底层翻译：LibreTranslate 优先，失败降级 DeepL，最后回退原文"""
     cleaned_text = text.strip()
     if not cleaned_text:
         return cleaned_text
 
-    # ✅ 共用：把 ⟦0⟧ 包成 HTML 保护标签
-    protected_html = wrap_placeholders_as_html(cleaned_text)
-
-    # 1. 首选 LibreTranslate
+    # 1. 首选 火山（不包 HTML，直接发纯占位符）
     try:
-        translated = await translate_with_libretranslate(protected_html)
+        translated = await translate_with_volc(cleaned_text)   # ← 注意这里传 cleaned_text
         if translated is not None:
-            return strip_html_protection(translated)
-        logger.info("ℹ️ LibreTranslate 不可用，降级到 DeepL")
+            return translated
+        logger.info("ℹ️ 火山不可用，降级到 DeepL")
     except Exception as e:
-        logger.warning(f"LibreTranslate 异常，降级到 DeepL: {e}")
+        logger.warning(f"火山异常，降级到 DeepL: {e}")
 
-    # 2. 备用 DeepL
+    # 2. 备用 DeepL（仍需 HTML 保护）
+    protected_html = wrap_placeholders_as_html(cleaned_text)
     try:
         translated = await translate_with_deepl(protected_html)
         if translated is not None:
@@ -1090,7 +1153,7 @@ async def _translate_raw(text):
     except Exception as e:
         logger.warning(f"DeepL 异常: {e}")
 
-    # 3. 都失败，返回原文（占位符原样返回，由上层 restore 还原）
+    # 3. 都失败
     logger.info("ℹ️ 所有翻译服务均失败，返回原文")
     return cleaned_text
 
@@ -1726,7 +1789,12 @@ async def run_main_logic():
                 logger.debug("数据库连接已关闭")
         except Exception as e:
             logger.error(f"关闭数据库失败: {e}")
-        
+
+        try:
+            await close_http_session()
+        except Exception as e:
+            logger.error(f"关闭 HTTP session 失败: {e}")
+
         try:
             if lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
