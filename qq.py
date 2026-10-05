@@ -165,7 +165,7 @@ class DeepLTranslator:
         self.api_key = config.DEEPL_API_KEY
         self.api_url = config.DEEPL_API_URL
         self._session: Optional[aiohttp.ClientSession] = None
-
+        
     async def _get_session(self) -> aiohttp.ClientSession:
         """复用全局 aiohttp session"""
         if self._session is None or self._session.closed:
@@ -225,6 +225,30 @@ class DeepLTranslator:
 
 translator = DeepLTranslator()
 
+async def get_deepl_usage() -> Optional[dict]:
+    """获取 DeepL 账号额度信息（模块级函数）"""
+    try:
+        session = await translator._get_session()
+        async with session.get(
+            config.DEEPL_API_URL.replace('/translate', '/usage'),
+            headers={"Authorization": f"DeepL-Auth-Key {config.DEEPL_API_KEY}"},
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                used = data.get('character_count', 0)
+                limit = data.get('character_limit', 0)
+                return {
+                    'used': used,
+                    'limit': limit,
+                    'percent': (used / limit * 100) if limit > 0 else 0
+                }
+            else:
+                logger.warning(f"DeepL usage API 返回状态码: {response.status}")
+                return None
+    except Exception as e:
+        logger.warning(f"获取 DeepL 额度失败: {e}")
+        return None
 # ============================================================
 # 权限装饰器
 # ============================================================
@@ -341,6 +365,17 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         net_io = psutil.net_io_counters()
 
         cache_stats = await cache.get_stats()
+        deepl_usage = await get_deepl_usage()
+
+        if deepl_usage:
+            deepl_line = (
+                f"\n🔤 *DeepL 额度*\n"
+                f"*已用:* {deepl_usage['used']:,} / {deepl_usage['limit']:,} 字符\n"
+                f"*剩余:* {deepl_usage['limit'] - deepl_usage['used']:,} 字符 "
+                f"({deepl_usage['percent']:.1f}%)\n"
+            )
+        else:
+            deepl_line = "\n🔤 *DeepL 额度:* 获取失败\n"
 
         message = (
             "🖥️ *系统状态*\n\n"
@@ -354,8 +389,9 @@ async def htop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"*当前条目:* {cache_stats['total_entries']}/{cache_stats['max_entries']}条\n"
             f"*命中次数:* {cache_stats['hits']}次\n"
             f"*未命中:* {cache_stats['misses']}次\n"
-            f"*命中率:* {cache_stats['hit_rate']}\n\n"
-            f"*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"*命中率:* {cache_stats['hit_rate']}\n"
+            f"{deepl_line}"
+            f"\n*更新时间:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         await update.message.reply_text(message, parse_mode='Markdown')
