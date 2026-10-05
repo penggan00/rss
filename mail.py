@@ -919,6 +919,7 @@ class EmailToTelegram:
             except Exception as e:
                 logger.warning(f"PDF 解析失败 {filename}: {e}")
         return "\n".join(texts)
+    
     # ---------- 中文检测 ----------
     def is_chinese(self, text):
         if not text:
@@ -931,9 +932,9 @@ class EmailToTelegram:
     def translate(self, text):
         if not text or not ENABLE_TRANSLATION:
             return text
-        if len(text.encode('utf-8')) > 8000:
+        if len(text) > 1000:
             return self._translate_long(text)
-        r = self._volc(text)          # ← 改这里
+        r = self._volc(text)
         if r is not None:
             return r
         r = self._deepl(text)
@@ -942,32 +943,70 @@ class EmailToTelegram:
         return text
 
     def _translate_long(self, text):
-        MAX = 8000
+        """把长文本切成 <=700 字符的小段，逐段翻译再拼回"""
+        MAX = 700
+
+        def hard_split(seg: str) -> list:
+            """单段超过 MAX 时，按句子/标点硬切"""
+            if len(seg) <= MAX:
+                return [seg]
+            sentences = re.split(r'(?<=[.!?。！？；;])\s+', seg)
+            out, cur = [], ""
+            for s in sentences:
+                while len(s) > MAX:
+                    if cur:
+                        out.append(cur)
+                        cur = ""
+                    out.append(s[:MAX])
+                    s = s[MAX:]
+                if len(cur) + len(s) + 1 > MAX:
+                    out.append(cur)
+                    cur = s
+                else:
+                    cur = (cur + " " + s) if cur else s
+            if cur:
+                out.append(cur)
+            return out
+
         out = []
         cur = ""
-        for p in text.split('\n\n'):
-            if not p.strip():
+
+        for para in text.split('\n\n'):
+            if not para.strip():
                 continue
-            # 如果单段就超限，按句子再切
-            if len(p.encode('utf-8')) > MAX:
-                sentences = re.split(r'(?<=[.!?。！？])\s+', p)
-                for s in sentences:
-                    if len((cur + " " + s).encode('utf-8')) > MAX:
-                        if cur:
-                            out.append(self.translate(cur))
-                        cur = s
-                    else:
-                        cur = cur + " " + s if cur else s
+
+            if len(para) > MAX:
+                if cur:
+                    out.append(self._translate_piece(cur))
+                    cur = ""
+                for piece in hard_split(para):
+                    out.append(self._translate_piece(piece))
+                continue
+
+            if len(cur) + len(para) + 2 > MAX:
+                if cur:
+                    out.append(self._translate_piece(cur))
+                cur = para
             else:
-                if len((cur + "\n\n" + p).encode('utf-8')) > MAX:
-                    if cur:
-                        out.append(self.translate(cur))
-                    cur = p
-                else:
-                    cur = cur + "\n\n" + p if cur else p
+                cur = (cur + "\n\n" + para) if cur else para
+
         if cur:
-            out.append(self.translate(cur))
+            out.append(self._translate_piece(cur))
+
         return "\n\n".join(out)
+
+    def _translate_piece(self, piece: str) -> str:
+        """单段翻译：火山 → DeepL → 原文（不再递归回 translate）"""
+        if not piece.strip():
+            return piece
+        r = self._volc(piece)
+        if r is not None:
+            return r
+        r = self._deepl(piece)
+        if r is not None:
+            return r
+        return piece
+    
     def _detect_src_lang(self, text):
         """简易语言检测，零依赖。"""
         if not text:
