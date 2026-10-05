@@ -721,7 +721,7 @@ def protect_special_content(text):
     text = re.sub(r'\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b', protect, text)
 
     # ---- 8. 翻译会破坏的字符：; _ \ $ | ----
-    text = re.sub(r"[;_\\$|]", protect, text)
+  #  text = re.sub(r"[;_\\$|]", protect, text)
 
     return text, placeholders
 
@@ -963,7 +963,7 @@ async def translate_with_libretranslate(text):
     if not text or len(text.strip()) < 3:
         return None
     if not LIBRETRANSLATE_URL:
-        logger.warning("⚠️ LIBRETRANSLATE_URL 未配置")
+        logger.debug("ℹ️ LIBRETRANSLATE_URL 未配置，跳过 LibreTranslate")
         return None
 
     try:

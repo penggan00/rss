@@ -1110,7 +1110,7 @@ class EmailToTelegram:
         html = re.sub(r'\$ [a-zA-Z][\w./-]*(?:\s+-{1,2}[\w-]+)*', protect, html)
 
         # ===== 1.11 翻译破坏字符（★ 已去掉 < > 和反引号） =====
-        html = re.sub(r"[;_\\$|]", protect, html)
+     #   html = re.sub(r"[;_\\$|]", protect, html)
 
         # ============ 2. 保护换行 ============
         html = html.replace('\n\n', '<code>ZXQNL2ZXQ</code>')
