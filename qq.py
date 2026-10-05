@@ -44,8 +44,7 @@ class Config:
     def __init__(self):
         self.TELEGRAM_TOKEN = self._get_env('TELEGRAM_API_KEY')
         self.AUTHORIZED_CHAT_IDS = self._parse_chat_ids('TELEGRAM_CHAT_ID')
-        self.LIBRETRANSLATE_URL = self._get_env('LIBRETRANSLATE_URL')
-        self.DEEPL_API_KEY = self._get_env_optional('DEEPL_API_KEY')
+        self.DEEPL_API_KEY = self._get_env('DEEPL_API_KEY')
         self.DEEPL_API_URL = self._get_env_optional('DEEPL_API_URL', 'https://api-free.deepl.com/v2/translate')
 
     def _get_env(self, var_name: str) -> str:
@@ -91,7 +90,6 @@ class InMemoryCache:
         self._lock = asyncio.Lock()
 
     def _make_key(self, source_text: str, source_lang: str, target_lang: str) -> str:
-        # 用 MD5 摘要作为 key，避免长文本把 key 本身撑大
         raw = f"{source_lang}|{target_lang}|{source_text}"
         return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
@@ -99,7 +97,7 @@ class InMemoryCache:
         key = self._make_key(source_text, source_lang, target_lang)
         async with self._lock:
             if key in self._data:
-                self._data.move_to_end(key)   # 标记为最近使用
+                self._data.move_to_end(key)
                 self._hits += 1
                 return self._data[key]
             self._misses += 1
@@ -111,7 +109,7 @@ class InMemoryCache:
             self._data[key] = translated_text
             self._data.move_to_end(key)
             if len(self._data) > self._max:
-                self._data.popitem(last=False)  # 淘汰最久未使用的
+                self._data.popitem(last=False)
         return True
 
     async def get_stats(self) -> dict:
@@ -160,63 +158,29 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
         return ('en', 'zh')
 
 # ============================================================
-# 翻译器（LibreTranslate + DeepL 降级）
+# 翻译器（仅 DeepL）
 # ============================================================
-class LibreTranslator:
+class DeepLTranslator:
     def __init__(self):
-        self.libretranslate_url = config.LIBRETRANSLATE_URL
-        self.deepl_api_key = config.DEEPL_API_KEY
-        self.deepl_api_url = config.DEEPL_API_URL
+        self.api_key = config.DEEPL_API_KEY
+        self.api_url = config.DEEPL_API_URL
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """复用全局 aiohttp session，避免每次翻译重新建连"""
+        """复用全局 aiohttp session"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self):
-        """关闭全局 session（在 bot shutdown 时调用）"""
         if self._session and not self._session.closed:
             await self._session.close()
         self._session = None
 
-    async def translate_with_libretranslate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
-        """使用 LibreTranslate 翻译"""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                self.libretranslate_url,
-                json={"q": text, "source": source_lang, "target": target_lang},
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    translated = result.get("translatedText")
-                    if translated and translated != text:
-                        logger.info("✅ LibreTranslate 翻译成功")
-                        return translated
-                    else:
-                        logger.warning("⚠️ LibreTranslate 返回空或相同文本")
-                        return None
-                else:
-                    logger.warning(f"⚠️ LibreTranslate 返回状态码: {response.status}")
-                    return None
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ LibreTranslate 请求超时")
-            return None
-        except aiohttp.ClientError as e:
-            logger.warning(f"⚠️ LibreTranslate 网络错误: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"⚠️ LibreTranslate 翻译失败: {e}")
-            return None
-
-    async def translate_with_deepl(self, text: str, target_lang: str) -> Optional[str]:
-        """使用 DeepL 翻译（备用）"""
-        if not self.deepl_api_key:
-            logger.warning("⚠️ DeepL API Key 未配置")
-            return None
+    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+        """使用 DeepL 翻译，失败时返回原文"""
+        if not text or not text.strip():
+            return text
 
         lang_map = {
             'zh': 'ZH', 'en': 'EN', 'ja': 'JA', 'ko': 'KO', 'ru': 'RU',
@@ -228,10 +192,10 @@ class LibreTranslator:
         try:
             session = await self._get_session()
             async with session.post(
-                self.deepl_api_url,
+                self.api_url,
                 json={"text": [text], "target_lang": target},
                 headers={
-                    "Authorization": f"DeepL-Auth-Key {self.deepl_api_key}",
+                    "Authorization": f"DeepL-Auth-Key {self.api_key}",
                     "Content-Type": "application/json"
                 },
                 timeout=aiohttp.ClientTimeout(total=15)
@@ -244,42 +208,22 @@ class LibreTranslator:
                         return translated
                     else:
                         logger.warning("⚠️ DeepL 返回空或相同文本")
-                        return None
+                        return text
                 else:
                     error_text = await response.text()
                     logger.warning(f"⚠️ DeepL 返回状态码: {response.status}, 响应: {error_text}")
-                    return None
+                    return text
         except asyncio.TimeoutError:
             logger.warning("⚠️ DeepL 请求超时")
-            return None
+            return text
         except aiohttp.ClientError as e:
             logger.warning(f"⚠️ DeepL 网络错误: {e}")
-            return None
+            return text
         except Exception as e:
             logger.warning(f"⚠️ DeepL 翻译失败: {e}")
-            return None
-
-    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        """
-        翻译主方法
-        优先级：LibreTranslate -> DeepL -> 原文
-        """
-        if not text or not text.strip():
             return text
 
-        result = await self.translate_with_libretranslate(text, source_lang, target_lang)
-        if result is not None:
-            return result
-
-        logger.info("🔄 尝试 DeepL 翻译（备用）...")
-        result = await self.translate_with_deepl(text, target_lang)
-        if result is not None:
-            return result
-
-        logger.info("ℹ️ 所有翻译服务均失败，返回原文")
-        return text
-
-translator = LibreTranslator()
+translator = DeepLTranslator()
 
 # ============================================================
 # 权限装饰器
@@ -329,7 +273,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
     """分片发送长消息，分片之间加延时避免触发 Telegram 限流"""
     idx, length = 0, len(text)
-    first_chunk = True
     while idx < length:
         end_idx = min(idx + chunk_size, length)
         if end_idx < length:
@@ -346,7 +289,6 @@ async def send_long_message(update: Update, text: str, chunk_size: int = 3900):
             break
 
         idx = end_idx
-        # 分片之间加延时，避免 Telegram 每秒 1 条的软限制
         if idx < length:
             await asyncio.sleep(0.5)
 
@@ -452,10 +394,8 @@ def main():
         application.post_init = startup
         application.post_shutdown = shutdown
 
-        # ---- 优雅退出：注册 SIGINT / SIGTERM 信号处理 ----
         def _signal_handler(signum, frame):
             logger.info(f"Received signal {signum}, shutting down gracefully...")
-            # stop_running() 会让 run_polling 退出循环，随后触发 post_shutdown
             if application.updater and application.updater.running:
                 application.updater.stop()
             if application.running:
