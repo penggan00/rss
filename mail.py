@@ -17,6 +17,8 @@ from telegram.constants import ParseMode
 import pdfplumber
 from logging.handlers import RotatingFileHandler
 
+# PDF 解析白名单：主题含以下任一关键词才解析 PDF
+PDF_SUBJECT_KEYWORDS = ['账单', '信用卡']
 # ============ 路径 ============
 BASE_DIR = Path(__file__).parent.absolute()
 LOG_FILE = BASE_DIR / "mail.log"
@@ -67,7 +69,7 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.handlers.clear()
 root_logger.addHandler(console_handler)
-root_logger.addHandler(file_handler)
+#root_logger.addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
 
@@ -544,6 +546,11 @@ class EmailToTelegram:
         )
 
         return html
+    
+    def should_parse_pdf(self, data):
+        """主题含关键词才解析 PDF，避免无谓翻译消耗额度"""
+        subject = (data.get('subject') or '').lower()
+        return any(kw.lower() in subject for kw in PDF_SUBJECT_KEYWORDS)
 
     def is_boc_mail(self, data):
         from_ = (data.get('from') or '').lower()
@@ -1228,8 +1235,8 @@ class EmailToTelegram:
         else:
             content = "【此邮件无正文内容】"
 
-        # 2. PDF
-        if msg is not None:
+        # 2. PDF（仅主题命中关键词时才解析）
+        if msg is not None and self.should_parse_pdf(data):
             pdf_text = self.extract_pdf_text(msg)
             if pdf_text:
                 # ★ 中行 PDF 格式化
