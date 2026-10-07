@@ -12,6 +12,8 @@ import time
 import signal
 import aiosqlite
 import sys
+import json
+import uuid
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -23,9 +25,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from md2tgmd import escape
 from collections import defaultdict
 from langdetect import detect, LangDetectException
+from alibabacloud_alimt20181012.client import Client as AlimtClient
+from alibabacloud_alimt20181012 import models as alimt_models
+from alibabacloud_tea_openapi import models as open_api_models
 from rss_config import RSS_GROUPS
-import json
-import uuid
 
 # ========== 全局退出标志 ==========
 SHOULD_EXIT = False
@@ -71,13 +74,27 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
 semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
-# 火山翻译（主）
-VOLC_MT_API_KEY = os.getenv("VOLC_MT_API_KEY")
-VOLC_MT_RESOURCE_ID = os.getenv("VOLC_MT_RESOURCE_ID", "volc.speech.mt")
-VOLC_MT_API_URL = os.getenv(
-    "VOLC_MT_API_URL",
-    "https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate"
-)
+# 阿里云机器翻译（主）
+ALIYUN_AK_ID = os.getenv("ALIYUN_AK_ID")
+ALIYUN_AK_SECRET = os.getenv("ALIYUN_AK_SECRET")
+ALIYUN_MT_REGION = os.getenv("ALIYUN_MT_REGION", "cn-hangzhou")
+
+# 阿里云 client（延迟初始化）
+_alimt_client = None
+
+def get_alimt_client():
+    global _alimt_client
+    if _alimt_client is None and ALIYUN_AK_ID and ALIYUN_AK_SECRET:
+        try:
+            cfg = open_api_models.Config(
+                access_key_id=ALIYUN_AK_ID,
+                access_key_secret=ALIYUN_AK_SECRET,
+            )
+            cfg.endpoint = f"mt.{ALIYUN_MT_REGION}.aliyuncs.com"
+            _alimt_client = AlimtClient(cfg)
+        except Exception as e:
+            logger.warning(f"⚠️ 阿里云机器翻译初始化失败: {e}")
+    return _alimt_client
 # RSS_GROUPS = []  # 将在main函数中从配置文件加载
 
 # ========== 数据库配置 ==========
@@ -980,18 +997,20 @@ async def should_send_entry(entry, processor):
     else:
         return True
 
-# ========== 火山翻译（首选） ==========
-async def translate_with_volc(text):
-    """使用火山机器翻译（首选）
+# ========== 阿里云机器翻译（首选） ==========
+async def translate_with_aliyun(text):
+    """使用阿里云机器翻译（首选）
     返回译文；任何失败返回 None（由上层降级到 DeepL）
     """
     if not text or len(text.strip()) < 3:
         return None
-    if not VOLC_MT_API_KEY:
-        logger.warning("⚠️ 火山 API Key 未配置")
+
+    client = get_alimt_client()
+    if not client:
+        logger.warning("⚠️ 阿里云机器翻译未配置")
         return None
 
-    volc_lang_map = {
+    aliyun_lang_map = {
         'zh-cn': 'zh', 'zh-tw': 'zh', 'zh': 'zh', 'yue': 'zh',
         'en': 'en', 'ja': 'ja', 'ko': 'ko', 'ru': 'ru',
         'fr': 'fr', 'de': 'de', 'es': 'es', 'it': 'it',
@@ -1007,9 +1026,8 @@ async def translate_with_volc(text):
     except Exception:
         detected = None
 
-    source_lang = volc_lang_map.get(detected) if detected else None
+    source_lang = aliyun_lang_map.get(detected) if detected else None
     if not source_lang:
-        # 检测失败，默认按英文处理（大多数 RSS 是英文）
         source_lang = 'en'
 
     # 若源就是中文，不需要翻译
@@ -1017,49 +1035,30 @@ async def translate_with_volc(text):
         return None
 
     try:
-        request_id = uuid.uuid4().hex + uuid.uuid4().hex[:16]
-        session = await get_http_session()
-        async with session.post(
-            VOLC_MT_API_URL,
-            json={
-                "source_language": source_lang,
-                "target_language": "zh",
-                "text_list": [text],
-            },
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": VOLC_MT_API_KEY,
-                "X-Api-Resource-Id": VOLC_MT_RESOURCE_ID,
-                "X-Api-Request-Id": request_id,
-            },
-            timeout=10
-        ) as response:
-            if response.status != 200:
-                body = await response.text()
-                logger.warning(f"⚠️ 火山 HTTP {response.status} | {body[:200]}")
-                return None
+        request = alimt_models.TranslateGeneralRequest(
+            format_type='text',
+            source_language=source_lang,
+            target_language='zh',
+            source_text=text,
+            scene='general',
+        )
+        # 阿里云 SDK 是同步的，放到线程池里跑，避免阻塞事件循环
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, client.translate_general, request
+        )
 
-            result = await response.json()
-            if result.get("code") != 20000000:
-                logger.warning(f"⚠️ 火山业务错误: {result}")
-                return None
+        translated = None
+        if response and response.body and response.body.data:
+            translated = response.body.data.translated
 
-            translated = (
-                result.get("data", {})
-                      .get("translation_list", [{}])[0]
-                      .get("translation")
-            )
-            if translated and translated != text:
-                return translated
-            logger.warning("⚠️ 火山返回空或相同文本")
-            return None
+        if translated and translated != text:
+            return translated
+        logger.warning("⚠️ 阿里云返回空或相同文本")
+        return None
 
-    except asyncio.TimeoutError:
-        logger.warning("⚠️ 火山请求超时")
-    except aiohttp.ClientError as e:
-        logger.warning(f"⚠️ 火山网络错误: {e}")
     except Exception as e:
-        logger.warning(f"⚠️ 火山翻译失败: {e}")
+        logger.warning(f"⚠️ 阿里云翻译失败: {e}")
 
     return None
 
@@ -1135,14 +1134,14 @@ async def _translate_raw(text):
     if not cleaned_text:
         return cleaned_text
 
-    # 1. 首选 火山（不包 HTML，直接发纯占位符）
+    # 1. 首选 阿里云（不包 HTML，直接发纯占位符）
     try:
-        translated = await translate_with_volc(cleaned_text)   # ← 注意这里传 cleaned_text
+        translated = await translate_with_aliyun(cleaned_text)
         if translated is not None:
             return translated
-        logger.info("ℹ️ 火山不可用，降级到 DeepL")
+        logger.info("ℹ️ 阿里云不可用，降级到 DeepL")
     except Exception as e:
-        logger.warning(f"火山异常，降级到 DeepL: {e}")
+        logger.warning(f"阿里云异常，降级到 DeepL: {e}")
 
     # 2. 备用 DeepL（仍需 HTML 保护）
     protected_html = wrap_placeholders_as_html(cleaned_text)
