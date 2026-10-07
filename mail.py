@@ -19,6 +19,9 @@ from logging.handlers import RotatingFileHandler
 import uuid
 import json
 import requests
+from alibabacloud_alimt20181012.client import Client as AlimtClient
+from alibabacloud_alimt20181012 import models as alimt_models
+from alibabacloud_tea_openapi import models as open_api_models
 
 # PDF 解析白名单：主题含以下任一关键词才解析 PDF
 PDF_SUBJECT_KEYWORDS = ['账单', '信用卡']
@@ -39,13 +42,10 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 ENABLE_TRANSLATION = os.getenv('ENABLE_TRANSLATION', 'false').lower() == 'true'
 
-# 火山翻译（主）
-VOLC_MT_API_KEY = os.getenv('VOLC_MT_API_KEY')
-VOLC_MT_RESOURCE_ID = os.getenv('VOLC_MT_RESOURCE_ID', 'volc.speech.mt')
-VOLC_MT_API_URL = os.getenv(
-    'VOLC_MT_API_URL',
-    'https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate'
-)
+# 阿里云机器翻译（主）
+ALIYUN_AK_ID = os.getenv('ALIYUN_AK_ID')
+ALIYUN_AK_SECRET = os.getenv('ALIYUN_AK_SECRET')
+ALIYUN_MT_REGION = os.getenv('ALIYUN_MT_REGION', 'cn-hangzhou')
 
 # DeepL（备用）
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY')
@@ -267,10 +267,18 @@ class TelegramHTMLCleaner:
             br.replace_with(soup.new_string('\n'))
 
     def _final_cleanup(self, html):
+        if not html:
+            return html
+        # 全局删除所有不可见/零宽字符
+        html = re.sub(
+            r'[\u00ad\u034f\u200b\u200c\u200d\u2060\ufeff\u00a0\u202f\u205f\u3000]',
+            '',
+            html
+        )
         html = re.sub(r'<!DOCTYPE[^>]*>', '', html, flags=re.IGNORECASE)
         html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
         html = re.sub(r'(\n\s*){3,}', '\n\n', html)
-        html = re.sub(r'>[ \t]+<', '><', html)   # ← 只删空格/制表符，保留 \n
+        html = re.sub(r'>[ \t]+<', '><', html)
         return html
 # ============ 邮件 → Telegram ============
 class EmailToTelegram:
@@ -288,7 +296,18 @@ class EmailToTelegram:
         self.bot = Bot(token=TELEGRAM_API_KEY)
         self.chat_id = TELEGRAM_CHAT_ID.split(',')[0].strip()
         self.cleaner = TelegramHTMLCleaner()
-
+        # 阿里云机器翻译 client
+        self._alimt_client = None
+        if ALIYUN_AK_ID and ALIYUN_AK_SECRET:
+            try:
+                cfg = open_api_models.Config(
+                    access_key_id=ALIYUN_AK_ID,
+                    access_key_secret=ALIYUN_AK_SECRET,
+                )
+                cfg.endpoint = f'mt.{ALIYUN_MT_REGION}.aliyuncs.com'
+                self._alimt_client = AlimtClient(cfg)
+            except Exception as e:
+                logger.warning(f"⚠️ 阿里云机器翻译初始化失败: {e}")
     # ---------- IMAP ----------
     def connect(self):
         try:
@@ -442,7 +461,7 @@ class EmailToTelegram:
                     f"[{stage}] ⚠️ <{tag}> 不配对: 开={opens} 闭={closes}"
                 )
 
-    def remove_long_urls(self, html, max_url_length=500):
+    def remove_long_urls(self, html, max_url_length=300):
         """
         移除 HTML 里的超长 URL：
         - <a href="超长URL">文本</a> → 只保留文本
@@ -934,7 +953,7 @@ class EmailToTelegram:
             return text
         if len(text) > 1000:
             return self._translate_long(text)
-        r = self._volc(text)
+        r = self._aliyun(text)
         if r is not None:
             return r
         r = self._deepl(text)
@@ -944,7 +963,7 @@ class EmailToTelegram:
 
     def _translate_long(self, text):
         """把长文本切成 <=700 字符的小段，逐段翻译再拼回"""
-        MAX = 700
+        MAX = 8000
 
         def hard_split(seg: str) -> list:
             """单段超过 MAX 时，按句子/标点硬切"""
@@ -999,7 +1018,7 @@ class EmailToTelegram:
         """单段翻译：火山 → DeepL → 原文（不再递归回 translate）"""
         if not piece.strip():
             return piece
-        r = self._volc(piece)
+        r = self._aliyun(piece)
         if r is not None:
             return r
         r = self._deepl(piece)
@@ -1030,54 +1049,43 @@ class EmailToTelegram:
             return "ru"
         return "en"
 
-    def _volc(self, text):
-        """火山机器翻译（首选），失败返回 None 由 _deepl 兜底"""
-        if not VOLC_MT_API_KEY:
-            logger.warning("⚠️ 火山 API Key 未配置")
+    def _aliyun(self, text):
+        """阿里云机器翻译（首选），失败返回 None 由 _deepl 兜底"""
+        if not self._alimt_client:
+            logger.warning("⚠️ 阿里云机器翻译未配置")
             return None
 
         try:
-            request_id = uuid.uuid4().hex + uuid.uuid4().hex[:16]
             src_lang = self._detect_src_lang(text)
-            r = requests.post(
-                VOLC_MT_API_URL,
-                json={
-                    "source_language": src_lang,
-                    "target_language": "zh",
-                    "text_list": [text],
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": VOLC_MT_API_KEY,
-                    "X-Api-Resource-Id": VOLC_MT_RESOURCE_ID,
-                    "X-Api-Request-Id": request_id,
-                },
-                timeout=15
-            )
-            if r.status_code != 200:
-                logger.warning(f"⚠️ 火山 HTTP {r.status_code} | {r.text[:200]}")
+            # 阿里云语言代码：zh / en / ja / ko / ru / auto
+            # _detect_src_lang 返回的代码刚好兼容（zh/en/ja/ko/ru）
+            if src_lang == "zh":
+                # 中文邮件不需要翻译，理论上不会走到这里
                 return None
 
-            result = r.json()
-            if result.get("code") != 20000000:
-                logger.warning(f"⚠️ 火山业务错误: {result}")
-                return None
-
-            translated = (
-                result.get("data", {})
-                      .get("translation_list", [{}])[0]
-                      .get("translation")
+            request = alimt_models.TranslateGeneralRequest(
+                format_type='text',
+                source_language=src_lang,
+                target_language='zh',
+                source_text=text,
+                scene='general',
             )
+            response = self._alimt_client.translate_general(request)
+
+            translated = None
+            if response and response.body and response.body.data:
+                translated = response.body.data.translated
+
             if translated and translated != text:
-                logger.info("✅ 火山翻译成功")
+                logger.info("✅ 阿里云翻译成功")
                 return translated
-            logger.warning("⚠️ 火山返回空或相同文本")
+
+            logger.warning("⚠️ 阿里云返回空或相同文本")
             return None
 
         except Exception as e:
-            logger.warning(f"⚠️ 火山翻译失败: {e}")
+            logger.warning(f"⚠️ 阿里云翻译失败: {e}")
             return None
-
     def _deepl(self, text):
         if not DEEPL_API_KEY:
             return None

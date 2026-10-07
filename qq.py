@@ -12,6 +12,7 @@ import time
 import subprocess
 import shlex
 import aiohttp
+import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import wraps
@@ -19,8 +20,9 @@ from collections import OrderedDict
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-import logging
-
+from alibabacloud_alimt20181012.client import Client as AlimtClient
+from alibabacloud_alimt20181012 import models as alimt_models
+from alibabacloud_tea_openapi import models as open_api_models
 # ============================================================
 # 基础配置
 # ============================================================
@@ -48,13 +50,10 @@ class Config:
         self.TELEGRAM_TOKEN = self._get_env('TELEGRAM_API_KEY')
         self.AUTHORIZED_CHAT_IDS = self._parse_chat_ids('TELEGRAM_CHAT_ID')
 
-        # 火山翻译（主）
-        self.VOLC_MT_API_KEY = self._get_env('VOLC_MT_API_KEY')
-        self.VOLC_MT_RESOURCE_ID = self._get_env_optional('VOLC_MT_RESOURCE_ID', 'volc.speech.mt')
-        self.VOLC_MT_API_URL = self._get_env_optional(
-            'VOLC_MT_API_URL',
-            'https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate'
-        )
+        # 阿里云机器翻译（主）
+        self.ALIYUN_AK_ID = self._get_env('ALIYUN_AK_ID')
+        self.ALIYUN_AK_SECRET = self._get_env('ALIYUN_AK_SECRET')
+        self.ALIYUN_MT_REGION = self._get_env_optional('ALIYUN_MT_REGION', 'cn-hangzhou')
 
         # DeepL（备用）
         self.DEEPL_API_KEY = self._get_env('DEEPL_API_KEY')
@@ -173,12 +172,11 @@ def get_translation_direction(text: str) -> Tuple[str, str]:
 
 
 # ============================================================
-# 火山翻译（主）
+# 阿里云机器翻译（主）
 # ============================================================
-class VolcTranslator:
-    """火山机器翻译，作为主力引擎"""
+class AliyunTranslator:
+    """阿里云机器翻译，作为主力引擎"""
 
-    # 火山支持的语言代码
     LANG_MAP = {
         'zh': 'zh', 'en': 'en', 'ja': 'ja', 'ko': 'ko',
         'ru': 'ru', 'fr': 'fr', 'de': 'de', 'es': 'es',
@@ -188,31 +186,15 @@ class VolcTranslator:
     }
 
     def __init__(self):
-        self.api_key = config.VOLC_MT_API_KEY
-        self.api_url = config.VOLC_MT_API_URL
-        self.resource_id = config.VOLC_MT_RESOURCE_ID
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-        self._session = None
-
-    @staticmethod
-    def _gen_request_id() -> str:
-        """生成符合火山要求的 Request-Id"""
-        return uuid.uuid4().hex + uuid.uuid4().hex[:16]
+        cfg = open_api_models.Config(
+            access_key_id=config.ALIYUN_AK_ID,
+            access_key_secret=config.ALIYUN_AK_SECRET,
+        )
+        cfg.endpoint = f"mt.{config.ALIYUN_MT_REGION}.aliyuncs.com"
+        self.client = AlimtClient(cfg)
 
     async def translate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
-        """
-        返回译文；失败（超时/网络/非200/额度超限）返回 None，
-        让上层切到 DeepL。
-        """
+        """返回译文；失败返回 None，让上层切到 DeepL"""
         if not text or not text.strip():
             return text
 
@@ -220,59 +202,35 @@ class VolcTranslator:
         tgt = self.LANG_MAP.get(target_lang, target_lang)
 
         try:
-            session = await self._get_session()
-            async with session.post(
-                self.api_url,
-                json={
-                    "source_language": src,
-                    "target_language": tgt,
-                    "text_list": [text],
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": self.api_key,
-                    "X-Api-Resource-Id": self.resource_id,
-                    "X-Api-Request-Id": self._gen_request_id(),
-                },
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                raw = await response.text()
-                if response.status != 200:
-                    logger.warning(f"⚠️ 火山 HTTP {response.status}: {raw[:200]}")
-                    return None
+            request = alimt_models.TranslateGeneralRequest(
+                format_type='text',
+                source_language=src,
+                target_language=tgt,
+                source_text=text,
+                scene='general',
+            )
+            # 阿里云 SDK 同步，放线程池避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None, self.client.translate_general, request
+            )
 
-                try:
-                    result = json.loads(raw)
-                except Exception:
-                    logger.warning(f"⚠️ 火山返回非 JSON: {raw[:200]}")
-                    return None
+            translated = None
+            if response and response.body and response.body.data:
+                translated = response.body.data.translated
 
-                if result.get('code') != 20000000:
-                    logger.warning(f"⚠️ 火山业务错误: {result}")
-                    return None
-
-                translated = (
-                    result.get('data', {})
-                          .get('translation_list', [{}])[0]
-                          .get('translation')
-                )
-                if not translated:
-                    logger.warning("⚠️ 火山返回空译文")
-                    return None
-
-                logger.info("✅ 火山翻译成功")
+            if translated and translated != text:
+                logger.info("✅ 阿里云翻译成功")
                 return translated
+            logger.warning("⚠️ 阿里云返回空或相同文本")
+            return None
 
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ 火山请求超时，切换到 DeepL")
-            return None
-        except aiohttp.ClientError as e:
-            logger.warning(f"⚠️ 火山网络错误: {e}，切换到 DeepL")
-            return None
         except Exception as e:
-            logger.warning(f"⚠️ 火山翻译失败: {e}，切换到 DeepL")
+            logger.warning(f"⚠️ 阿里云翻译失败: {e}，切换到 DeepL")
             return None
 
+    async def close(self):
+        pass  # 阿里云 SDK 无需关闭 session
 
 # ============================================================
 # DeepL 翻译（备用）
@@ -343,7 +301,7 @@ class DeepLTranslator:
 # ============================================================
 # 统一翻译入口：火山 → DeepL → 原文
 # ============================================================
-volc_translator = VolcTranslator()
+aliyun_translator = AliyunTranslator()
 deepl_translator = DeepLTranslator()
 
 
@@ -352,10 +310,10 @@ async def translate_with_fallback(text: str, source_lang: str, target_lang: str)
     返回 (译文, 使用的引擎)
     引擎: 'volc' / 'deepl' / 'raw'
     """
-    # 1) 火山
-    result = await volc_translator.translate(text, source_lang, target_lang)
+    # 1) 阿里云
+    result = await aliyun_translator.translate(text, source_lang, target_lang)
     if result:
-        return result, 'volc'
+        return result, 'aliyun'
 
     # 2) DeepL
     result = await deepl_translator.translate(text, source_lang, target_lang)
@@ -363,7 +321,7 @@ async def translate_with_fallback(text: str, source_lang: str, target_lang: str)
         return result, 'deepl'
 
     # 3) 原文兜底
-    logger.warning("⚠️ 火山和 DeepL 都失败，返回原文")
+    logger.warning("⚠️ 阿里云和 DeepL 都失败，返回原文")
     return text, 'raw'
 
 
@@ -557,7 +515,7 @@ async def startup(application):
 async def shutdown(application):
     logger.info("Shutting down bot...")
     try:
-        await volc_translator.close()
+        await aliyun_translator.close()
         await deepl_translator.close()
         logger.info("HTTP sessions closed")
     except Exception as e:
