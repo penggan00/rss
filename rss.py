@@ -162,10 +162,11 @@ class RSSDatabase:
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_link_hash 
                     ON rss_status(feed_group, entry_link_hash);
                 """)
-                # 标题哈希唯一索引
+                # 标题哈希唯一索引（只对非 NULL 生效）
                 await conn.execute("""
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_title_hash 
-                    ON rss_status(feed_group, entry_title_hash);
+                    ON rss_status(feed_group, entry_title_hash)
+                    WHERE entry_title_hash IS NOT NULL;
                 """)
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS timestamps (
@@ -221,7 +222,8 @@ class RSSDatabase:
                 """)
                 await c.execute("""
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_title_hash 
-                    ON rss_status(feed_group, entry_title_hash);
+                    ON rss_status(feed_group, entry_title_hash)
+                    WHERE entry_title_hash IS NOT NULL;
                 """)
                 await c.execute("""
                     CREATE TABLE IF NOT EXISTS timestamps (
@@ -344,10 +346,20 @@ class RSSDatabase:
                 """, (feed_group, ts))
                 await self.conn.commit()
 
-    async def batch_save_status(self, records):
-        """批量写入，失败时降级为单个写入"""
+    async def batch_save_status(self, records, title_dedup=True):
+        """批量写入，失败时降级为单个写入
+        - title_dedup=True：保留 title_hash，受唯一索引保护
+        - title_dedup=False：把 title_hash 置为 None，不受唯一索引约束
+        """
         if not records:
             return
+
+        # ✅ 没开 title_dedup 的组：title_hash 写 NULL，数据库不检查标题唯一性
+        if not title_dedup:
+            records = [
+                (g, u, eid, lh, None, ts)
+                for (g, u, eid, lh, th, ts) in records
+            ]
         
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
@@ -805,7 +817,8 @@ def prevent_telegram_commands(text):
     """
     if not text:
         return text
-    return re.sub(r'(^|\s)/([A-Za-z0-9])', r'\1/\u200b\2', text)
+    ZWSP = '\u200b'  # 真正的零宽空格字符
+    return re.sub(r'(^|\s)/([A-Za-z0-9])', r'\1/' + ZWSP + r'\2', text)
 
 def get_entry_identifier(entry):
     if hasattr(entry, 'guid') and entry.guid:
@@ -1530,7 +1543,8 @@ async def process_batch_send(group, db: RSSDatabase):
                     row["link_hash"], row["title_hash"], time.time())
                     for row in msgs
                 ]
-                await db.batch_save_status(records)
+                # ✅ 从 group 配置读取 title_dedup，传给数据库
+                await db.batch_save_status(records, title_dedup=group.get("title_dedup", False))
                 
         except Exception as e:
             logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
@@ -1669,7 +1683,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                     if i < sent_count:
                                         records.append((group_key, canonical_url, entry_id, link_hash, title_hash, time.time()))
                                 if records:
-                                    await db.batch_save_status(records)
+                                    await db.batch_save_status(records, title_dedup=title_dedup)
                                 
                                 if processor.get("show_count", False):
                                     summary_msg = f"✅ {feed_data.feed.get('title', '未知来源')} 新增 {sent_count} 条内容"
@@ -1691,7 +1705,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                                         (group_key, canonical_url, entry_id, link_hash, title_hash, time.time())
                                         for entry, link_hash, title_hash, entry_id in new_entries
                                     ]
-                                    await db.batch_save_status(records)
+                                    await db.batch_save_status(records, title_dedup=title_dedup)
                                 except Exception as send_error:
                                     logger.error(f"❌ 发送消息失败 [{feed_url}]: {send_error}")
                                     raise

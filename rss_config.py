@@ -12,16 +12,15 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
             'https://feeds.bbci.co.uk/news/world/rss.xml',  # BBC
          #   'https://www3.nhk.or.jp/rss/news/cat6.xml',     # NHK
+       #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
        #     'https://www.cnbc.com/id/100003114/device/rss/rss.html',  # CNBC
-         #   'https://feeds.a.dj.com/rss/RSSWorldNews.xml',  # 华尔街日报
         #    'https://feeds.content.dowjones.io/public/rss/RSSWorldNews',   # 华尔街日报
-        #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed',
+        #    'https://feeds.content.dowjones.io/public/rss/socialeconomyfeed', # 华尔街日报 社会经济
          #  'https://www.aljazeera.com/xml/rss/all.xml',    # 半岛电视台
         #    'https://www.ft.com/?format=rss',                 # 金融时报
-       #     'https://www3.nhk.or.jp/rss/news/cat5.xml',  # NHK 商业
-       #     'http://rss.cnn.com/rss/cnn_topstories.rss',   # cnn
+         #   'http://rss.cnn.com/rss/cnn_world.rss',   # cnn
        #     'https://www.theguardian.com/world/rss',     # 卫报
-      #      'https://www.theverge.com/rss/index.xml',   # The Verge:
+            'https://www.theverge.com/rss/index.xml',   # The Verge: 科技新闻
         ],
         "group_key": "RSS_FEEDS",
         "interval": 1795,      # 60分钟 
