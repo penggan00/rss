@@ -14,6 +14,7 @@ import aiosqlite
 import sys
 import json
 import uuid
+import html
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -798,6 +799,9 @@ def restore_special_content(text, placeholders):
     return text
 
 def remove_html_tags(text):
+    if not text:
+        return text
+    text = html.unescape(text)  # ✅ 新增：先解码 HTML 实体
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'#([^#\s]+)#', r'\1', text)
     text = re.sub(r'#\w+', '', text)
