@@ -797,6 +797,16 @@ def remove_html_tags(text):
  #   text = text.replace('.', '.\u200c')
     return text
 
+def prevent_telegram_commands(text):
+    """
+    防止 Telegram 把 "/mo"、"/3m" 等误识别为 Bot 命令。
+    在斜杠后插入零宽空格 U+200B，视觉上无变化，但会打断命令识别。
+    仅处理：行首或空白后的 / + 字母/数字，避免破坏 URL。
+    """
+    if not text:
+        return text
+    return re.sub(r'(^|\s)/([A-Za-z0-9])', r'\1/\u200b\2', text)
+
 def get_entry_identifier(entry):
     if hasattr(entry, 'guid') and entry.guid:
         return hashlib.sha256(entry.guid.encode()).hexdigest()
@@ -1234,6 +1244,7 @@ async def generate_group_message(feed_data, entries, processor):
             
             # 在转义之前添加零宽字符处理
             translated_subject = translated_subject.replace('.', '.\u200c')
+            translated_subject = prevent_telegram_commands(translated_subject)  # ✅ 新增
             safe_subject = escape(translated_subject)
             
             raw_url = entry.link
@@ -1250,6 +1261,7 @@ async def generate_group_message(feed_data, entries, processor):
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
                 cleaned_summary = cleaned_summary.replace('.', '.\u200c')
+                cleaned_summary = prevent_telegram_commands(cleaned_summary)  # ✅ 新增
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
@@ -1322,6 +1334,7 @@ async def generate_single_messages(feed_data, entries, processor):
             
             # 在转义之前添加零宽字符处理
             translated_subject = translated_subject.replace('.', '.\u200c')
+            translated_subject = prevent_telegram_commands(translated_subject)  # ✅ 新增
             safe_subject = escape(translated_subject)
             
             raw_url = entry.link
@@ -1338,6 +1351,7 @@ async def generate_single_messages(feed_data, entries, processor):
                 raw_summary = getattr(entry, "summary", "") or ""
                 cleaned_summary = remove_html_tags(raw_summary)
                 cleaned_summary = cleaned_summary.replace('.', '.\u200c')
+                cleaned_summary = prevent_telegram_commands(cleaned_summary)  # ✅ 新增
                 safe_summary = escape(cleaned_summary)
                 format_kwargs["summary"] = safe_summary
             
