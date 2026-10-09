@@ -817,12 +817,13 @@ def prevent_telegram_commands(text):
     """
     防止 Telegram 把 "/mo"、"/3m" 等误识别为 Bot 命令。
     在斜杠后插入零宽空格 U+200B，视觉上无变化，但会打断命令识别。
-    仅处理：行首或空白后的 / + 字母/数字，避免破坏 URL。
+    规则：斜杠前面不是字母/数字，且斜杠后面是字母/数字。
+    避免破坏 URL（如 https://）。
     """
     if not text:
         return text
     ZWSP = '\u200b'  # 真正的零宽空格字符
-    return re.sub(r'(^|\s)/([A-Za-z0-9])', r'\1/' + ZWSP + r'\2', text)
+    return re.sub(r'(?<![A-Za-z0-9])/([A-Za-z0-9])', '/' + ZWSP + r'\1', text)
 
 def get_entry_identifier(entry):
     if hasattr(entry, 'guid') and entry.guid:
