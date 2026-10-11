@@ -307,8 +307,12 @@ RSS_GROUPS = [ # RSS 组配置列表
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCCD14H7fJQl3UZNWhYMG3Mg', # 温城鲤
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCQO2T82PiHCYbqmCQ6QO6lw', # 月亮說
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCHW6W9g2TJL2_Lf7GfoI5kg', # 电影放映厅
+        #    'https://rsshub.app/youtube/user/@instituteforplanets', # 电影放映厅
+            
             'https://www.youtube.com/feeds/videos.xml?channel_id=UCi2GvcaxZCN-61a0co8Smnw', # 館長
+        
    # bilibili
+             'https://rsshub.app/bilibili/weekly', #B站周榜
        #     'https://rsshub.app/bilibili/user/video/271034954', #无限海子
         #    'https://rsshub.app/bilibili/user/video/10720688', #乌客wuke
          #   'https://rsshub.app/bilibili/user/video/33683045', #张召忠
@@ -327,7 +331,7 @@ RSS_GROUPS = [ # RSS 组配置列表
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
             "filter": {
-                "enable": True,  # 过滤开关     False: 关闭 / True: 开启
+                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
                 "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
                 "scope": "link",  # 只过滤链接
                 "keywords": ["/shorts/", "/shorts/"]  # 本组关键词列表
