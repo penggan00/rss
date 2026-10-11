@@ -921,7 +921,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
 )
 async def fetch_feed(session, feed_url):
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
     }
@@ -943,6 +943,7 @@ async def fetch_feed(session, feed_url):
                         logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前200字节: {raw[:400]}")
                     if not feed_data.entries:
                         logger.warning(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
+                        continue   # ← 换成 continue，去试下一个备用域名
                     return feed_data, feed_url
         except aiohttp.ClientResponseError as e:
             logger.warning(f"⚠️ ClientResponseError {e.status} | {current_url}")
@@ -1630,14 +1631,16 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     seen_titles = set()
                     for entry, link_hash, title_hash, entry_id in entries_with_hashes:
                         if link_hash in existing_links:
-                  #          logger.warning(f"✅ 命中 link 重复: {link_hash[:12]}")
+                            logger.warning(f"🔁 数据库去重命中 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if title_dedup and title_hash and title_hash in existing_titles:
-                  #          logger.warning(f"✅ 命中 title 重复: {title_hash[:12]}")
+                            logger.warning(f"🔁 数据库去重命中 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if link_hash in seen_links:
+                            logger.warning(f"🔁 批次内去重 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if title_dedup and title_hash and title_hash in seen_titles:
+                            logger.warning(f"🔁 批次内去重 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if not await should_send_entry(entry, processor):
                             continue
