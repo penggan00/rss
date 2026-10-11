@@ -319,7 +319,7 @@ RSS_GROUPS = [ # RSS 组配置列表
           #  'https://rsshub.app/bilibili/user/video/52165725', #王骁Albert
         ],
         "group_key": "FIFTH_RSS_YOUTUBE", # YouTube频道
-        "interval": 3590,     # 1小时
+        "interval": 7199,     # 2小时
         "batch_send_interval": 71990,   # 批量推送
         "bot_token": os.getenv("YOUTUBE_RSS"),    # Telegram Bot Token
         "processor": {
