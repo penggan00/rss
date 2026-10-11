@@ -920,38 +920,38 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
 async def fetch_feed(session, feed_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
+    }
     parsed = urlparse(feed_url)
-    
-    # 构建尝试的域名列表
-    if parsed.netloc == "rsshub.app":
-        try_domains = [parsed.netloc] + BACKUP_DOMAINS
-    else:
-        try_domains = [parsed.netloc]
-    
+    try_domains = [parsed.netloc] + BACKUP_DOMAINS if parsed.netloc == "rsshub.app" else [parsed.netloc]
+
     for domain in try_domains:
         current_url = feed_url.replace(parsed.netloc, domain)
-        
         try:
             async with semaphore:
                 async with session.get(current_url, headers=headers, timeout=30) as response:
                     if response.status in (503, 403, 404, 429):
+                        logger.warning(f"⚠️ HTTP {response.status} | {current_url}")
                         continue
                     response.raise_for_status()
-                    
-                    feed_data = parse(await response.read())
-                    
-                    # ✅ 关键修复：无论用哪个备用域名，都返回原始feed_url
-                    # 这样不同域名访问同一RSS源时，数据库状态会合并在一起
+                    raw = await response.read()
+                    feed_data = parse(raw)
+                    if feed_data.bozo:
+                        logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前200字节: {raw[:400]}")
+                    if not feed_data.entries:
+                        logger.warning(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
                     return feed_data, feed_url
-
         except aiohttp.ClientResponseError as e:
+            logger.warning(f"⚠️ ClientResponseError {e.status} | {current_url}")
             if e.status in (503, 403, 404, 429):
                 continue
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ fetch_feed 异常 | {current_url} | {type(e).__name__}: {e}")
             continue
-    
-    return None, feed_url  # ✅ 失败时也返回原始feed_url
+    return None, feed_url
 
 def is_need_translate(text):
     try:
