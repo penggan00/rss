@@ -842,24 +842,17 @@ def get_entry_identifier(entry):
 
 def get_entry_hashes(entry, title_dedup=False):
     """返回 (link_hash, title_hash)
+    - 直接用原始 link，不做 query 清洗，避免误杀 YouTube 等 query 含 ID 的源
     - title_dedup=False: title_hash 返回 None
-    - title_dedup=True: 两个都返回
     """
-    # 链接哈希（始终计算）
     link = getattr(entry, 'link', '') or ''
-    try:
-        parsed = urlparse(link)
-        clean_link = parsed._replace(query=None, fragment=None).geturl().lower()
-    except Exception:
-        clean_link = link.lower()
-    link_hash = hashlib.sha256(clean_link.encode('utf-8')).hexdigest()
-    
-    # 标题哈希（可选）
+    link_hash = hashlib.sha256(link.lower().encode('utf-8')).hexdigest()
+
     title_hash = None
     if title_dedup:
         title = getattr(entry, 'title', '') or ''
         title_hash = hashlib.sha256(title.strip().encode('utf-8')).hexdigest()
-    
+
     return link_hash, title_hash
 
 def signal_handler(signum, frame):
