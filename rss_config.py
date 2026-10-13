@@ -239,7 +239,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "keep_count": 100000,  # ✅ 快讯更新快，保留100000条
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
-            "translate": True,       #翻译开
+            "translate": False,       #翻译开
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
