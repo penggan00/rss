@@ -24,14 +24,14 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "RSS_FEEDS",
         "interval": 1795,      # 60分钟 
-      #  "batch_send_interval": 14390,   # 4小时批量推送
-        "send_separately": True,  # 新增：设置为True时，每条消息单独发送
+        "batch_send_interval": 10199,   # 4小时批量推送
+        "send_separately": False,  # 新增：设置为True时，每条消息单独发送
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": True,       #翻译默认 False: 关闭 / True: 开启
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
-            "preview": True,         # False 禁止预览  True 允许预览
+            "preview": False,         # False 禁止预览  True 允许预览
             "show_count": False         # ✅新增📢▎
         }
     },
@@ -42,7 +42,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
        #      'https://www.chinanews.com.cn/rss/scroll-news.xml', #中新网
          #   'https://www.ftchinese.com/rss/news',   # ft中文网
-       #     'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
+            'https://sputniknews.cn/export/rss2/archive/index.xml',  # 俄新社
          #   'https://cn.nytimes.com/rss.html',  # 纽约时报中文网
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
@@ -62,8 +62,8 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "快讯",
         "urls": [
-         #   'https://rsshub.app/10jqka/realtimenews', #同花顺财经
-            'https://36kr.com/feed-newsflash',  # 36氪快讯
+            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+           # 'https://36kr.com/feed-newsflash',  # 36氪快讯
             'https://www.chinanews.com.cn/rss/scroll-news.xml', #中新网
         #    'https://36kr.com/feed',  # 36氪综合
             
@@ -83,13 +83,13 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "同花顺",
         "urls": [
-            'https://rsshub.app/10jqka/realtimenews', #同花顺财经
+          #  'https://rsshub.app/10jqka/realtimenews', #同花顺财经
          #   'https://36kr.com/feed-newsflash',  # 36氪快讯
-        #    'https://36kr.com/feed',  # 36氪综合
+            'https://36kr.com/feed',  # 36氪综合
             
         ],
         "group_key": "FOURTH_RRSS_FEEDS",
-        "interval": 700,       # 10分钟 
+        "interval": 1799,       # 10分钟 
         "batch_send_interval": 21590,   # 批量推送
         "bot_token": os.getenv("RSS_LINDA"),   # Telegram Bot Token
         "processor": {
@@ -394,8 +394,8 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
          #   'https://rsshub.app/telegram/channel/shareAliyun', # 阿里云盘资源分享
          #   'https://rsshub.app/telegram/channel/cosfulimax', 
-            'https://penggan0-pg.hf.space/',  #个人
-            'https://penggan0-iopenlist.hf.space',  #openlist
+          #  'https://penggan0-pg.hf.space/',  #个人
+         #   'https://penggan0-iopenlist.hf.space',  #openlist
 
 
         ],
