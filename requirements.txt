@@ -22,3 +22,5 @@ beautifulsoup4==4.13.4
 html5lib==1.1
 pdfplumber==0.11.7
 asyncpg==0.30.0
+#阿里云翻译
+alibabacloud_alimt20181012==1.1.0
