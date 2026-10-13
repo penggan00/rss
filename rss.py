@@ -606,7 +606,7 @@ class RSSDatabase:
                             f"链接={row['link']} | "
                             f"发布时间={expired_dt} (UTC) | "
                             f"滞留={age_days:.1f}天 | "
-                            f"entry_id={row['entry_id'][:12]}"
+                            f"entry_id={row['entry_id'][:40]}"
                         )
                 
                 await conn.execute(
@@ -707,7 +707,7 @@ class RSSDatabase:
                             f"链接={link} | "
                             f"发布时间={expired_dt} (UTC) | "
                             f"滞留={age_days:.1f}天 | "
-                            f"entry_id={entry_id[:12]}"
+                            f"entry_id={entry_id[:40]}"
                         )
                 
                 await c.execute(
@@ -933,7 +933,7 @@ async def fetch_feed(session, feed_url):
                     raw = await response.read()
                     feed_data = parse(raw)
                     if feed_data.bozo:
-                        logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前200字节: {raw[:400]}")
+                        logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前400字节: {raw[:400]}")
                     if not feed_data.entries:
                         logger.warning(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
                         continue   # ← 换成 continue，去试下一个备用域名
@@ -1562,7 +1562,7 @@ async def process_batch_send(group, db: RSSDatabase):
                         f"链接={row.get('link')} | "
                         f"发布时间={pub_dt} (UTC) | "
                         f"滞留={age_hours:.1f}小时 | "
-                        f"entry_id={row['entry_id'][:12]}"
+                        f"entry_id={row['entry_id'][:40]}"
                     )
     
     # 标记成功发送的
@@ -1624,16 +1624,16 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     seen_titles = set()
                     for entry, link_hash, title_hash, entry_id in entries_with_hashes:
                         if link_hash in existing_links:
-                            logger.warning(f"🔁 数据库去重命中 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
+                         #   logger.warning(f"🔁 数据库去重命中 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if title_dedup and title_hash and title_hash in existing_titles:
-                            logger.warning(f"🔁 数据库去重命中 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
+                          #  logger.warning(f"🔁 数据库去重命中 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if link_hash in seen_links:
-                            logger.warning(f"🔁 批次内去重 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
+                         #   logger.warning(f"🔁 批次内去重 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if title_dedup and title_hash and title_hash in seen_titles:
-                            logger.warning(f"🔁 批次内去重 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
+                          #  logger.warning(f"🔁 批次内去重 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if not await should_send_entry(entry, processor):
                             continue
