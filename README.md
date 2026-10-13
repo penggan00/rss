@@ -41,6 +41,20 @@ crontab -e
 (crontab -l 2>/dev/null; echo "10 06,16,23 * * 1-5 /bin/bash ~/rss/usd.sh") | crontab -
 (crontab -l 2>/dev/null; echo "10 06 * * 6-7 /bin/bash ~/rss/usd.sh") | crontab -
 (crontab -l 2>/dev/null; echo "22 2 * * * /bin/bash ~/rss/rssmail.sh") | crontab -
+# f2g
+crontab -l 2>/dev/null | grep -v -E 'rc-service sing-box|/root/rss/usd.sh|/root/rss/mail.sh|/root/rss/github.sh|/rss/rss.sh' > /tmp/cron_new
+cat >> /tmp/cron_new << 'EOF'
+0 5 * * * /sbin/rc-service sing-box restart
+10 06 * * * /bin/bash /root/rss/usd.sh
+10 16,23 * * 1-5 /bin/bash /root/rss/usd.sh
+*/5 * * * * /root/rss/mail.sh
+0 18 * * * /root/rss/github.sh
+5,15,25,35,45,55 * * * * /bin/bash ~/rss/rss.sh
+EOF
+crontab /tmp/cron_new
+rm -f /tmp/cron_new
+crontab -l
+
 # SEV00
 (crontab -l 2>/dev/null; echo "0 0 */22 * * /bin/bash /root/rss/ssh.sh") | crontab -
 ```
@@ -59,7 +73,7 @@ python3 -m venv rss_venv
 pip install google-generativeai
 # 激活虚拟环境
 source rss_venv/bin/activate
-python3 /root/rss/mail.py
+python3 /root/rss/rss.py
 ```
 python3 usd.py
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"
@@ -70,8 +84,8 @@ python3 mail.py
 python3 usd.py
 # alpine
 
+/root/rss/rss_venv/bin/python /root/rss/rss.py
 /root/rss/rss_venv/bin/python /root/rss/mail.py
-
 (crontab -l 2>/dev/null; echo "0 18 * * * /root/rss/github.sh >> /root/rss_cron.log 2>&1") | awk '!seen[$0]++' | crontab -
 
 chmod +x /root/rss/github.sh && \
