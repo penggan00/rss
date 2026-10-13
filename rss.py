@@ -927,23 +927,23 @@ async def fetch_feed(session, feed_url):
             async with semaphore:
                 async with session.get(current_url, headers=headers, timeout=30) as response:
                     if response.status in (503, 403, 404, 429):
-                        logger.warning(f"⚠️ HTTP {response.status} | {current_url}")
+                        logger.debug(f"⚠️ HTTP {response.status} | {current_url}")
                         continue
                     response.raise_for_status()
                     raw = await response.read()
                     feed_data = parse(raw)
                     if feed_data.bozo:
-                        logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前400字节: {raw[:400]}")
+                        logger.debug(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前400字节: {raw[:400]}")
                     if not feed_data.entries:
-                        logger.warning(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
-                        continue   # ← 换成 continue，去试下一个备用域名
+                        logger.debug(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
+                        continue   # ← 去试下一个备用域名
                     return feed_data, feed_url
         except aiohttp.ClientResponseError as e:
-            logger.warning(f"⚠️ ClientResponseError {e.status} | {current_url}")
+            logger.debug(f"⚠️ ClientResponseError {e.status} | {current_url}")
             if e.status in (503, 403, 404, 429):
                 continue
         except Exception as e:
-            logger.warning(f"⚠️ fetch_feed 异常 | {current_url} | {type(e).__name__}: {e}")
+            logger.debug(f"⚠️ fetch_feed 异常 | {current_url} | {type(e).__name__}: {e}")
             continue
     return None, feed_url
 

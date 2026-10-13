@@ -85,7 +85,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "urls": [
           #  'https://rsshub.app/10jqka/realtimenews', #同花顺财经
          #   'https://36kr.com/feed-newsflash',  # 36氪快讯
-            'https://36kr.com/feed',  # 36氪综合
+          #  'https://36kr.com/feed',  # 36氪综合
             
         ],
         "group_key": "FOURTH_RRSS_FEEDS",
