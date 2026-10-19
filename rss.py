@@ -877,23 +877,32 @@ def get_entry_timestamp(entry):
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
 async def send_single_message(bot, chat_id, text, disable_web_page_preview=False):
-    try:
-        MAX_MESSAGE_LENGTH = 4096
-        text_chunks = []
-        current_chunk = []
-        current_length = 0
-        paragraphs = text.split('\n\n')
-        for para in paragraphs:
-            para_length = len(para)  # 字符长度
-            if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
-                text_chunks.append('\n\n'.join(current_chunk))
-                current_chunk = []
-                current_length = 0
-            current_chunk.append(para)
-            current_length += para_length + 2
-        if current_chunk:
+    """
+    发送单条消息（自动分段 + MarkdownV2 失败降级纯文本重发）
+    - MarkdownV2 解析失败 → 去掉转义反斜杠，用 parse_mode=None 重发
+    - 纯文本也失败 → raise，让上层不写 rss_status / 不标记 sent，下轮重试
+    """
+    MAX_MESSAGE_LENGTH = 4096
+
+    # ========== 1. 分段 ==========
+    text_chunks = []
+    current_chunk = []
+    current_length = 0
+    paragraphs = text.split('\n\n')
+    for para in paragraphs:
+        para_length = len(para)
+        if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
             text_chunks.append('\n\n'.join(current_chunk))
-        for chunk in text_chunks:
+            current_chunk = []
+            current_length = 0
+        current_chunk.append(para)
+        current_length += para_length + 2
+    if current_chunk:
+        text_chunks.append('\n\n'.join(current_chunk))
+
+    # ========== 2. 逐段发送（失败不影响后续段） ==========
+    for idx, chunk in enumerate(text_chunks):
+        try:
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
@@ -902,10 +911,33 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                 read_timeout=10,
                 write_timeout=10
             )
-    except BadRequest as e:
-        logger.error(f"消息发送失败(Markdown错误): {e} - 文本长度: {len(text)}")
-    except Exception as e:
-        raise
+        except BadRequest as e:
+            logger.error(
+                f"MarkdownV2 发送失败，降级纯文本重发 | 段 {idx+1}/{len(text_chunks)} | "
+                f"长度={len(chunk)} | error={e}"
+            )
+            # 去掉 MarkdownV2 转义反斜杠，恢复可读原文
+            plain = re.sub(r'\\(.)', r'\1', chunk)
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=plain,
+                    parse_mode=None,   # 纯文本，不会再触发 Markdown 解析错误
+                    disable_web_page_preview=disable_web_page_preview,
+                    read_timeout=10,
+                    write_timeout=10
+                )
+                logger.warning(
+                    f"✅ 降级纯文本重发成功 | 段 {idx+1}/{len(text_chunks)} | 长度={len(plain)}"
+                )
+            except Exception as e2:
+                logger.error(
+                    f"❌ 纯文本重发也失败 | 段 {idx+1}/{len(text_chunks)} | "
+                    f"长度={len(plain)} | error={e2}"
+                )
+                # 抛出让上层感知：不写 rss_status、不标记 sent，下轮重试
+                raise
+        # 非 BadRequest 的网络类异常：直接 raise，交给 @retry 装饰器重试
 
 @retry(
     stop=stop_after_attempt(1),
