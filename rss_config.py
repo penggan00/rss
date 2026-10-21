@@ -47,7 +47,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         ],
         "group_key": "RSS_FEEDS_INTERNATIONAL",
         "interval": 1790,      # 30分钟
-        "batch_send_interval": 3590,   # 批量推送←加上即
+        "batch_send_interval": 10199,   # 批量推送←加上即
         "bot_token": os.getenv("RSS_TWO"),    # Telegram Bot Token
         "processor": {
             "translate": False,       #翻译 False: 关闭 / True: 开启
@@ -239,7 +239,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         "keep_count": 100000,  # ✅ 快讯更新快，保留100000条
         "bot_token": os.getenv("RSS_SAN"),    # Telegram Bot Token
         "processor": {
-            "translate": False,       #翻译开
+            "translate": True,       #True翻译开
             "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
             "template": "*{subject}*\n[more]({url})",
             "preview": False,         # 禁止预览
@@ -330,12 +330,12 @@ RSS_GROUPS = [ # RSS 组配置列表
         "header_template": "📢 _{source}_\n",  # 新增标题模板 ★
     #   "template": "*{subject}*\n🔗 {url}",
         "template": "*{subject}*\n[more]({url})",
-            "filter": {
-                "enable": False,  # 过滤开关     False: 关闭 / True: 开启
-                "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
-                "scope": "link",  # 只过滤链接
-                "keywords": ["/shorts/", "/shorts/"]  # 本组关键词列表
-            },
+      #      "filter": {
+        #        "enable": False,  # 过滤开关     False: 关闭 / True: 开启
+        #        "mode": "block",  # allow模式：包含关键词才发送 / block模式：包含关键词不发送
+        #        "scope": "link",  # 只过滤链接
+         #       "keywords": ["/shorts/", "/shorts/"]  # 本组关键词列表
+       #     },
         "preview": True,                       # 预览
         "show_count": False                    #计数
     }

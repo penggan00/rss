@@ -699,7 +699,7 @@ def main():
     if rain_info:
         message_parts.append(rain_info)
     
-    message_parts.append("-" * 38 + "\n")
+    message_parts.append("-" * 36 + "\n")
     
     # 获取主要指数（从环境变量读取）
     for code, name in get_index_list():
@@ -710,7 +710,7 @@ def main():
         elif code in ['IXIC', 'DJI']:
             message_parts.append(get_usa_index(code, name))
     
-    message_parts.append("-" * 38 + "\n")
+    message_parts.append("-" * 36 + "\n")
     
     # 获取ETF数据
     for code, name in get_etf_list():
@@ -720,7 +720,7 @@ def main():
     for code, name in get_stock_list():
         message_parts.append(get_cn_stock(code, name))
 
-    message_parts.append("-" * 38 + "\n")
+    message_parts.append("-" * 36 + "\n")
     
     # 获取黄金数据
     gold_data = get_gold_data_formatted()
