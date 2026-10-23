@@ -443,18 +443,19 @@ def get_usd_cny_formatted():
     if data:
         is_positive = data['change_point'] >= 0
         emoji = "🔴" if is_positive else "🔵"
-        sign = "+" if is_positive else ""
-        
+        sign = "+" if is_positive else "-"
+
         price_str = f"{data['price']:.2f}"
         percent_str = f"{abs(data['change_percent']):.2f}%"
         point_str = f"{abs(data['change_point']):.2f}"
-        
+
         price_str = escape_markdown(price_str)
         percent_str = escape_markdown(f"{sign}{percent_str}")
         point_str = escape_markdown(f"{sign}{point_str}")
-        
+
         return f"{emoji} USD/CNY: *{price_str}* ({percent_str}, {point_str})\n"
     return ""
+
 def get_dxy_sina():
     """从新浪财经获取美元指数"""
     try:
