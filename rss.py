@@ -879,10 +879,21 @@ def get_entry_timestamp(entry):
 async def send_single_message(bot, chat_id, text, disable_web_page_preview=False):
     """
     发送单条消息（自动分段 + MarkdownV2 失败降级纯文本重发）
-    - MarkdownV2 解析失败 → 去掉转义反斜杠，用 parse_mode=None 重发
-    - 纯文本也失败 → raise，让上层不写 rss_status / 不标记 sent，下轮重试
+    - preview 开启时：is_disabled=False + prefer_large_media=True 主动请求大图预览
+    - preview 关闭时：is_disabled=True 强制禁用预览
     """
     MAX_MESSAGE_LENGTH = 4096
+
+    # ========== 构造 LinkPreviewOptions ==========
+    if disable_web_page_preview:
+        # preview: False → 强制禁用预览
+        link_preview = LinkPreviewOptions(is_disabled=True)
+    else:
+        # preview: True → 不禁用 + 主动请求大图预览
+        link_preview = LinkPreviewOptions(
+            is_disabled=False,
+            prefer_large_media=True,
+        )
 
     # ========== 1. 分段 ==========
     text_chunks = []
@@ -907,7 +918,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                 chat_id=chat_id,
                 text=chunk,
                 parse_mode='MarkdownV2',
-                link_preview_options=LinkPreviewOptions(is_disabled=disable_web_page_preview),  # ✅ 换成这行
+                link_preview_options=link_preview,
                 read_timeout=10,
                 write_timeout=10
             )
@@ -916,14 +927,13 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                 f"MarkdownV2 发送失败，降级纯文本重发 | 段 {idx+1}/{len(text_chunks)} | "
                 f"长度={len(chunk)} | error={e}"
             )
-            # 去掉 MarkdownV2 转义反斜杠，恢复可读原文
             plain = re.sub(r'\\(.)', r'\1', chunk)
             try:
                 await bot.send_message(
                     chat_id=chat_id,
                     text=plain,
                     parse_mode=None,
-                    link_preview_options=LinkPreviewOptions(is_disabled=disable_web_page_preview),  # ✅ 换成这行
+                    link_preview_options=link_preview,
                     read_timeout=10,
                     write_timeout=10
                 )
@@ -935,9 +945,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                     f"❌ 纯文本重发也失败 | 段 {idx+1}/{len(text_chunks)} | "
                     f"长度={len(plain)} | error={e2}"
                 )
-                # 抛出让上层感知：不写 rss_status、不标记 sent，下轮重试
                 raise
-        # 非 BadRequest 的网络类异常：直接 raise，交给 @retry 装饰器重试
 
 @retry(
     stop=stop_after_attempt(1),
