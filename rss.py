@@ -19,7 +19,7 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 from feedparser import parse
-from telegram import Bot, LinkPreviewOptions
+from telegram import Bot
 from telegram.error import BadRequest
 from urllib.parse import urlparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -918,7 +918,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                 chat_id=chat_id,
                 text=chunk,
                 parse_mode='MarkdownV2',
-                link_preview_options=link_preview,
+                disable_web_page_preview=disable_web_page_preview,
                 read_timeout=10,
                 write_timeout=10
             )
@@ -933,7 +933,7 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                     chat_id=chat_id,
                     text=plain,
                     parse_mode=None,
-                    link_preview_options=link_preview,
+                    disable_web_page_preview=disable_web_page_preview,
                     read_timeout=10,
                     write_timeout=10
                 )
