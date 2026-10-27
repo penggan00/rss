@@ -876,76 +876,58 @@ def get_entry_timestamp(entry):
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
+
 async def send_single_message(bot, chat_id, text, disable_web_page_preview=False):
     """
     发送单条消息（自动分段 + MarkdownV2 失败降级纯文本重发）
-    - preview 开启时：is_disabled=False + prefer_large_media=True 主动请求大图预览
-    - preview 关闭时：is_disabled=True 强制禁用预览
+    - disable_web_page_preview=False：允许 Telegram 自动生成链接预览
+    - disable_web_page_preview=True：禁用链接预览
     """
     MAX_MESSAGE_LENGTH = 4096
 
-    # ========== 构造 LinkPreviewOptions ==========
-    if disable_web_page_preview:
-        # preview: False → 强制禁用预览
-        link_preview = LinkPreviewOptions(is_disabled=True)
-    else:
-        # preview: True → 不禁用 + 主动请求大图预览
-        link_preview = LinkPreviewOptions(
-            is_disabled=False,
-            prefer_large_media=True,
-        )
+    # 自动分段，避免超过 Telegram 单条消息长度限制
+    chunks = [
+        text[i:i + MAX_MESSAGE_LENGTH]
+        for i in range(0, len(text), MAX_MESSAGE_LENGTH)
+    ]
 
-    # ========== 1. 分段 ==========
-    text_chunks = []
-    current_chunk = []
-    current_length = 0
-    paragraphs = text.split('\n\n')
-    for para in paragraphs:
-        para_length = len(para)
-        if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
-            text_chunks.append('\n\n'.join(current_chunk))
-            current_chunk = []
-            current_length = 0
-        current_chunk.append(para)
-        current_length += para_length + 2
-    if current_chunk:
-        text_chunks.append('\n\n'.join(current_chunk))
-
-    # ========== 2. 逐段发送（失败不影响后续段） ==========
-    for idx, chunk in enumerate(text_chunks):
+    for chunk in chunks:
         try:
+            # 优先使用 MarkdownV2 格式发送
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
-                parse_mode='MarkdownV2',
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=disable_web_page_preview,
-                read_timeout=10,
-                write_timeout=10
             )
         except BadRequest as e:
-            logger.error(
-                f"MarkdownV2 发送失败，降级纯文本重发 | 段 {idx+1}/{len(text_chunks)} | "
-                f"长度={len(chunk)} | error={e}"
-            )
-            plain = re.sub(r'\\(.)', r'\1', chunk)
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=plain,
-                    parse_mode=None,
-                    disable_web_page_preview=disable_web_page_preview,
-                    read_timeout=10,
-                    write_timeout=10
-                )
-                logger.warning(
-                    f"✅ 降级纯文本重发成功 | 段 {idx+1}/{len(text_chunks)} | 长度={len(plain)}"
-                )
-            except Exception as e2:
+            # MarkdownV2 解析失败时，降级为纯文本重发
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        disable_web_page_preview=disable_web_page_preview,
+                    )
+                except Exception as fallback_error:
+                    logger.error(
+                        "纯文本降级发送失败，chat_id=%s，错误：%s",
+                        chat_id,
+                        fallback_error,
+                    )
+            else:
                 logger.error(
-                    f"❌ 纯文本重发也失败 | 段 {idx+1}/{len(text_chunks)} | "
-                    f"长度={len(plain)} | error={e2}"
+                    "消息发送失败，chat_id=%s，错误：%s",
+                    chat_id,
+                    e,
                 )
-                raise
+        except Exception as e:
+            logger.error(
+                "消息发送异常，chat_id=%s，错误：%s",
+                chat_id,
+                e,
+            )
+
 
 @retry(
     stop=stop_after_attempt(1),
