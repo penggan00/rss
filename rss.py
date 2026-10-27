@@ -1568,7 +1568,10 @@ async def process_batch_send(group, db: RSSDatabase):
                 await db.batch_save_status(records, title_dedup=group.get("title_dedup", False))
                 
         except Exception as e:
-            logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
+            logger.error(
+                f"批量推送失败[{group_key}-{feed_url}]: {type(e).__name__}: {e}",
+                exc_info=True
+            )
             
             for row in msgs:
                 if row["entry_timestamp"] < timeout_cutoff:
