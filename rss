@@ -876,36 +876,58 @@ def get_entry_timestamp(entry):
     wait=wait_exponential(multiplier=1, min=5, max=30),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
 )
+
 async def send_single_message(bot, chat_id, text, disable_web_page_preview=False):
-    try:
-        MAX_MESSAGE_LENGTH = 4096
-        text_chunks = []
-        current_chunk = []
-        current_length = 0
-        paragraphs = text.split('\n\n')
-        for para in paragraphs:
-            para_length = len(para)  # 字符长度
-            if current_length + para_length + 2 > MAX_MESSAGE_LENGTH:
-                text_chunks.append('\n\n'.join(current_chunk))
-                current_chunk = []
-                current_length = 0
-            current_chunk.append(para)
-            current_length += para_length + 2
-        if current_chunk:
-            text_chunks.append('\n\n'.join(current_chunk))
-        for chunk in text_chunks:
+    """
+    发送单条消息（自动分段 + MarkdownV2 失败降级纯文本重发）
+    - disable_web_page_preview=False：允许 Telegram 自动生成链接预览
+    - disable_web_page_preview=True：禁用链接预览
+    """
+    MAX_MESSAGE_LENGTH = 4096
+
+    # 自动分段，避免超过 Telegram 单条消息长度限制
+    chunks = [
+        text[i:i + MAX_MESSAGE_LENGTH]
+        for i in range(0, len(text), MAX_MESSAGE_LENGTH)
+    ]
+
+    for chunk in chunks:
+        try:
+            # 优先使用 MarkdownV2 格式发送
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
-                parse_mode='MarkdownV2',
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=disable_web_page_preview,
-                read_timeout=10,
-                write_timeout=10
             )
-    except BadRequest as e:
-        logger.error(f"消息发送失败(Markdown错误): {e} - 文本长度: {len(text)}")
-    except Exception as e:
-        raise
+        except BadRequest as e:
+            # MarkdownV2 解析失败时，降级为纯文本重发
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        disable_web_page_preview=disable_web_page_preview,
+                    )
+                except Exception as fallback_error:
+                    logger.error(
+                        "纯文本降级发送失败，chat_id=%s，错误：%s",
+                        chat_id,
+                        fallback_error,
+                    )
+            else:
+                logger.error(
+                    "消息发送失败，chat_id=%s，错误：%s",
+                    chat_id,
+                    e,
+                )
+        except Exception as e:
+            logger.error(
+                "消息发送异常，chat_id=%s，错误：%s",
+                chat_id,
+                e,
+            )
+
 
 @retry(
     stop=stop_after_attempt(1),
@@ -927,23 +949,23 @@ async def fetch_feed(session, feed_url):
             async with semaphore:
                 async with session.get(current_url, headers=headers, timeout=30) as response:
                     if response.status in (503, 403, 404, 429):
-                        logger.warning(f"⚠️ HTTP {response.status} | {current_url}")
+                        logger.debug(f"⚠️ HTTP {response.status} | {current_url}")
                         continue
                     response.raise_for_status()
                     raw = await response.read()
                     feed_data = parse(raw)
                     if feed_data.bozo:
-                        logger.warning(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前400字节: {raw[:400]}")
+                        logger.debug(f"⚠️ Feed 解析异常 | bozo={feed_data.bozo} | {feed_data.bozo_exception} | {current_url} | 前400字节: {raw[:400]}")
                     if not feed_data.entries:
-                        logger.warning(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
-                        continue   # ← 换成 continue，去试下一个备用域名
+                        logger.debug(f"⚠️ Feed 无条目 | {current_url} | Content-Type={response.headers.get('Content-Type')}")
+                        continue   # ← 去试下一个备用域名
                     return feed_data, feed_url
         except aiohttp.ClientResponseError as e:
-            logger.warning(f"⚠️ ClientResponseError {e.status} | {current_url}")
+            logger.debug(f"⚠️ ClientResponseError {e.status} | {current_url}")
             if e.status in (503, 403, 404, 429):
                 continue
         except Exception as e:
-            logger.warning(f"⚠️ fetch_feed 异常 | {current_url} | {type(e).__name__}: {e}")
+            logger.debug(f"⚠️ fetch_feed 异常 | {current_url} | {type(e).__name__}: {e}")
             continue
     return None, feed_url
 
@@ -1546,7 +1568,10 @@ async def process_batch_send(group, db: RSSDatabase):
                 await db.batch_save_status(records, title_dedup=group.get("title_dedup", False))
                 
         except Exception as e:
-            logger.error(f"批量推送失败[{group_key}-{feed_url}]: {e}")
+            logger.error(
+                f"批量推送失败[{group_key}-{feed_url}]: {type(e).__name__}: {e}",
+                exc_info=True
+            )
             
             for row in msgs:
                 if row["entry_timestamp"] < timeout_cutoff:
