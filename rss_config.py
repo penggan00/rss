@@ -20,7 +20,7 @@ RSS_GROUPS = [ # RSS 组配置列表
         #    'https://www.ft.com/?format=rss',                 # 金融时报
          #   'http://rss.cnn.com/rss/cnn_world.rss',   # cnn
        #     'https://www.theguardian.com/world/rss',     # 卫报
-            'https://www.theverge.com/rss/index.xml',   # The Verge: 科技新闻
+        #    'https://www.theverge.com/rss/index.xml',   # The Verge: 科技新闻
         ],
         "group_key": "RSS_FEEDS",
         "interval": 1795,      # 60分钟 

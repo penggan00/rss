@@ -22,6 +22,7 @@ DOWNLOAD_TARGETS=(
      "https://raw.githubusercontent.com/penggan00/rss/main/gpt.py|$HOME/rss"
      "https://raw.githubusercontent.com/penggan00/rss/main/qq.py|$HOME/rss"
      "https://raw.githubusercontent.com/penggan00/rss/main/mail.py|$HOME/rss"
+     "https://raw.githubusercontent.com/penggan00/rss/main/usd.py|$HOME/usd"
 #blog
   #   "https://raw.githubusercontent.com/penggan00/penggan00.github.io/main/index.html|$HOME/myblog/blog"
     # GitHub整个目录下载

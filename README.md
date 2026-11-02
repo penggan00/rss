@@ -73,6 +73,8 @@ python3 -m venv rss_venv
 pip install google-generativeai
 # 激活虚拟环境
 source rss_venv/bin/activate
+python3 /root/rss/mail.py
+source rss_venv/bin/activate
 python3 /root/rss/rss.py
 ```
 python3 usd.py
