@@ -23,13 +23,11 @@ OILPRICE_API_KEY = os.getenv("OILPRICE_API_KEY")
 
 # 配置参数
 def get_cities():
-    """从环境变量读取城市列表"""
-    cities = {}
-    for key, value in os.environ.items():
-        if key.startswith("CITY_") and value:
-            city_name = key.replace("CITY_", "")
-            cities[city_name] = value
-    return cities
+    """直接返回写死的城市列表"""
+    return {
+        "南昌": "101240101",
+        "萍乡": "101240901"
+    }
 
 
 # 新增原油 API 配置
@@ -79,7 +77,7 @@ class OilPriceService:
                 return f"⚠️ {escape_markdown(name)}: 数据暂不可用\n"
             
             emoji = "🔴" if change > 0 else "🔵"
-            sign = "+" if change > 0 else ""
+            sign = "+" if change > 0 else "-"
             
             # 计算涨跌金额（当前价 - 昨日价）
             change_amount = price - previous_price if previous_price else price * (change / 100)
