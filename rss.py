@@ -141,8 +141,24 @@ class RSSDatabase:
             await self.conn.close()
 
     async def ensure_initialized(self):
-        """确保数据库表已创建"""
-        await self.create_tables()
+        """只在表不存在时才建表"""
+        if USE_PG:
+            async with self.pg_pool.acquire() as conn:
+                count = await conn.fetchval("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name IN (
+                        'rss_status', 'timestamps', 'cleanup_timestamps',
+                        'pending_messages', 'batch_timestamps'
+                    )
+                """)
+            if count < 5:
+                logger.info("🛠️ 检测到表不完整，正在创建/补建表结构...")
+                await self.create_tables()
+            else:
+                logger.debug("✅ 表结构已存在，跳过建表")
+        else:
+            await self.create_tables()
 
     async def create_tables(self):
         """改进的建表语句，确保 PostgreSQL 和 SQLite 索引一致"""
