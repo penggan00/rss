@@ -75,7 +75,7 @@ pip install google-generativeai
 source rss_venv/bin/activate
 python3 /root/rss/mail.py
 source rss_venv/bin/activate
-python3 /root/rss/rss.py
+python3 ~/rss/rss.py
 ```
 python3 usd.py
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/penggan00/ss/main/github.sh)"

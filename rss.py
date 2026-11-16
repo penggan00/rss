@@ -5,6 +5,7 @@ import aiohttp
 import logging
 import re
 import os
+import ssl
 import hashlib
 import pytz
 import fcntl
@@ -128,6 +129,7 @@ class RSSDatabase:
                 max_size=2,
                 max_inactive_connection_lifetime=60,
                 command_timeout=60,
+                ssl="require", 
             )
         else:
             self.conn = await aiosqlite.connect(DATABASE_FILE)
