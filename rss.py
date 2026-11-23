@@ -74,7 +74,6 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID").split(",")
 semaphore = asyncio.Semaphore(2)
-_aliyun_semaphore = asyncio.Semaphore(2)
 BACKUP_DOMAINS_STR = os.getenv("BACKUP_DOMAINS", "")
 BACKUP_DOMAINS = [domain.strip() for domain in BACKUP_DOMAINS_STR.split(",") if domain.strip()]
 # 阿里云机器翻译（主）
@@ -94,9 +93,6 @@ def get_alimt_client():
                 access_key_secret=ALIYUN_AK_SECRET,
             )
             cfg.endpoint = f"mt.{ALIYUN_MT_REGION}.aliyuncs.com"
-            # Tea SDK 的超时单位为毫秒；避免同步 SDK 长时间占用线程。
-            cfg.connect_timeout = 5000
-            cfg.read_timeout = 10000
             _alimt_client = AlimtClient(cfg)
         except Exception as e:
             logger.warning(f"⚠️ 阿里云机器翻译初始化失败: {e}")
@@ -321,35 +317,21 @@ class RSSDatabase:
                 rows = await c.fetchall()
                 return [dict(zip(keys, row)) for row in rows]
 
-    async def mark_pending_as_sent(self, feed_group, items):
-        """按 (feed_url, entry_id) 标记，避免不同源 GUID 相同而误标记。"""
-        if not items:
+    async def mark_pending_as_sent(self, feed_group, ids):
+        if not ids:
             return
-        normalized = []
-        for item in items:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                normalized.append((feed_group, item[0], item[1]))
-            else:
-                # 兼容旧调用方式（只传 entry_id）。
-                normalized.append((feed_group, None, item))
-
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
                 await conn.executemany("""
                     UPDATE pending_messages SET sent=1
-                    WHERE feed_group=$1 AND entry_id=$3
-                      AND ($2::TEXT IS NULL OR feed_url=$2)
-                """, normalized)
+                    WHERE feed_group=$1 AND entry_id=$2
+                """, [(feed_group, eid) for eid in ids])
         else:
             async with self.conn.cursor() as c:
                 await c.executemany("""
                     UPDATE pending_messages SET sent=1
                     WHERE feed_group=? AND entry_id=?
-                      AND (? IS NULL OR feed_url=?)
-                """, [
-                    (g, eid, feed_url, feed_url)
-                    for g, feed_url, eid in normalized
-                ])
+                """, [(feed_group, eid) for eid in ids])
                 await self.conn.commit()
 
     async def get_last_batch_sent_time(self, feed_group):
@@ -384,112 +366,124 @@ class RSSDatabase:
                 await self.conn.commit()
 
     async def batch_save_status(self, records, title_dedup=True):
-        """批量保存已发送状态；任何唯一索引冲突都视为重复并安全跳过。"""
+        """批量写入，失败时降级为单个写入
+        - title_dedup=True：保留 title_hash，受唯一索引保护
+        - title_dedup=False：把 title_hash 置为 None，不受唯一索引约束
+        """
         if not records:
             return
 
+        # ✅ 没开 title_dedup 的组：title_hash 写 NULL，数据库不检查标题唯一性
         if not title_dedup:
             records = [
                 (g, u, eid, lh, None, ts)
                 for (g, u, eid, lh, th, ts) in records
             ]
-
-        # 同一批次内先去重，避免 executemany 中出现自身冲突。
-        unique_records = []
-        seen_links = set()
-        seen_titles = set()
-        seen_primary = set()
-        for record in records:
-            g, feed_url, entry_id, link_hash, title_hash, ts = record
-            primary_key = (g, feed_url, entry_id)
-            if primary_key in seen_primary or (g, link_hash) in seen_links:
-                continue
-            if title_dedup and title_hash and (g, title_hash) in seen_titles:
-                continue
-            seen_primary.add(primary_key)
-            seen_links.add((g, link_hash))
-            if title_dedup and title_hash:
-                seen_titles.add((g, title_hash))
-            unique_records.append(record)
-
-        if not unique_records:
-            return
-
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
-                await conn.executemany("""
-                    INSERT INTO rss_status
-                        (feed_group, feed_url, entry_url, entry_link_hash,
-                         entry_title_hash, entry_timestamp)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT DO NOTHING
-                """, unique_records)
+                try:
+                    await conn.executemany("""
+                        INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
+                        VALUES ($1, $2, $3, $4, $5, $6) 
+                        ON CONFLICT (feed_group, feed_url, entry_url) 
+                        DO UPDATE SET 
+                            entry_link_hash = EXCLUDED.entry_link_hash,
+                            entry_title_hash = EXCLUDED.entry_title_hash,
+                            entry_timestamp = EXCLUDED.entry_timestamp
+                    """, records)
+                #    logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
+                except Exception as e:
+                    logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
+                    # ✅ 降级：逐条写入
+                    success_count = 0
+                    fail_count = 0
+                    for record in records:
+                        try:
+                            await conn.execute("""
+                                INSERT INTO rss_status (feed_group, feed_url, entry_url, entry_link_hash, entry_title_hash, entry_timestamp) 
+                                VALUES ($1, $2, $3, $4, $5, $6) 
+                                ON CONFLICT (feed_group, feed_url, entry_url) 
+                                DO UPDATE SET 
+                                    entry_link_hash = EXCLUDED.entry_link_hash,
+                                    entry_title_hash = EXCLUDED.entry_title_hash,
+                                    entry_timestamp = EXCLUDED.entry_timestamp
+                            """, *record)
+                            success_count += 1
+                        except Exception as single_error:
+                            fail_count += 1
+                            logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
+                    
+                    logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
         else:
             async with self.conn.cursor() as c:
-                await c.executemany(
-                    "INSERT OR IGNORE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
-                    unique_records
-                )
-                await self.conn.commit()
+                try:
+                    await c.executemany(
+                        "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
+                        records
+                    )
+                    await self.conn.commit()
+                #  logger.warning(f"💾 [批量写入成功] 共 {len(records)} 条")
+                except Exception as e:
+                    logger.warning(f"⚠️ [批量写入失败] {len(records)} 条 | error={e}，降级为单个写入")
+                    # ✅ 降级：逐条写入
+                    success_count = 0
+                    fail_count = 0
+                    for record in records:
+                        try:
+                            await c.execute(
+                                "INSERT OR REPLACE INTO rss_status VALUES (?, ?, ?, ?, ?, ?)",
+                                record
+                            )
+                            success_count += 1
+                        except Exception as single_error:
+                            fail_count += 1
+                            logger.error(f"❌ [单条写入失败] {record[2][:12]} | error={single_error}")
+                    
+                    await self.conn.commit()
+                    logger.warning(f"💾 [降级写入完成] 成功 {success_count} 条，失败 {fail_count} 条")
 
     async def batch_has_hashes(self, feed_group, link_hashes, title_hashes=None):
-        """查询已发送记录和待发送队列，实现同一 feed_group 跨 RSS 源共享去重。"""
+        """批量查询：查 link_hash，如果 title_hashes 非空也查 title_hash"""
         existing_links = set()
         existing_titles = set()
-
+        
         if not link_hashes:
             return existing_links, existing_titles
-
-        link_values = list(set(link_hashes))
-        title_values = list(set(title_hashes or []))
-
+        
         if USE_PG:
             async with self.pg_pool.acquire() as conn:
+                # 查 link_hash
                 rows = await conn.fetch(
-                    """SELECT entry_link_hash AS value FROM rss_status
-                       WHERE feed_group=$1 AND entry_link_hash = ANY($2)
-                       UNION
-                       SELECT link_hash AS value FROM pending_messages
-                       WHERE feed_group=$1 AND sent=0 AND link_hash = ANY($2)""",
-                    feed_group, link_values
+                    "SELECT entry_link_hash FROM rss_status WHERE feed_group=$1 AND entry_link_hash = ANY($2)",
+                    feed_group, list(link_hashes)
                 )
-                existing_links = {row['value'] for row in rows if row['value']}
-
-                if title_values:
+                existing_links = {row['entry_link_hash'] for row in rows}
+                
+                # 查 title_hash（如果有）
+                if title_hashes:
                     rows = await conn.fetch(
-                        """SELECT entry_title_hash AS value FROM rss_status
-                           WHERE feed_group=$1 AND entry_title_hash = ANY($2)
-                           UNION
-                           SELECT title_hash AS value FROM pending_messages
-                           WHERE feed_group=$1 AND sent=0 AND title_hash = ANY($2)""",
-                        feed_group, title_values
+                        "SELECT entry_title_hash FROM rss_status WHERE feed_group=$1 AND entry_title_hash = ANY($2)",
+                        feed_group, list(title_hashes)
                     )
-                    existing_titles = {row['value'] for row in rows if row['value']}
+                    existing_titles = {row['entry_title_hash'] for row in rows if row['entry_title_hash']}
         else:
             async with self.conn.cursor() as c:
-                placeholders = ','.join('?' * len(link_values))
+                placeholders = ','.join('?' * len(link_hashes))
                 await c.execute(
-                    f"""SELECT entry_link_hash AS value FROM rss_status
-                        WHERE feed_group=? AND entry_link_hash IN ({placeholders})
-                        UNION
-                        SELECT link_hash AS value FROM pending_messages
-                        WHERE feed_group=? AND sent=0 AND link_hash IN ({placeholders})""",
-                    [feed_group] + link_values + [feed_group] + link_values
+                    f"SELECT entry_link_hash FROM rss_status WHERE feed_group=? AND entry_link_hash IN ({placeholders})",
+                    [feed_group] + list(link_hashes)
                 )
-                existing_links = {row[0] for row in await c.fetchall() if row[0]}
-
-                if title_values:
-                    placeholders = ','.join('?' * len(title_values))
+                existing_links = {row[0] for row in await c.fetchall()}
+                
+                if title_hashes:
+                    placeholders = ','.join('?' * len(title_hashes))
                     await c.execute(
-                        f"""SELECT entry_title_hash AS value FROM rss_status
-                            WHERE feed_group=? AND entry_title_hash IN ({placeholders})
-                            UNION
-                            SELECT title_hash AS value FROM pending_messages
-                            WHERE feed_group=? AND sent=0 AND title_hash IN ({placeholders})""",
-                        [feed_group] + title_values + [feed_group] + title_values
+                        f"SELECT entry_title_hash FROM rss_status WHERE feed_group=? AND entry_title_hash IN ({placeholders})",
+                        [feed_group] + list(title_hashes)
                     )
                     existing_titles = {row[0] for row in await c.fetchall() if row[0]}
-
+        
         return existing_links, existing_titles
 
     async def load_status(self):
@@ -600,7 +594,49 @@ class RSSDatabase:
                     feed_group
                 )
 
-                # 未发送消息无论滞留多久都保留，交由后续批量任务继续重试。
+                # 3. 未发送超过3天，强制标记为已发送（记录日志）
+                expired_rows = await conn.fetch(
+                    """
+                    SELECT entry_id, feed_url, title, translated_title, link, 
+                           entry_timestamp, feed_title
+                    FROM pending_messages 
+                    WHERE feed_group = $1 
+                    AND sent = 0 
+                    AND entry_timestamp < $2
+                    """,
+                    feed_group, now - 3 * 86400
+                )
+                
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [清理过期未发送] 组={feed_group} | "
+                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
+                    )
+                    for row in expired_rows:
+                        age_days = (now - row['entry_timestamp']) / 86400
+                        expired_dt = datetime.fromtimestamp(
+                            row['entry_timestamp'], tz=pytz.utc
+                        ).strftime('%Y-%m-%d %H:%M:%S')
+                        logger.warning(
+                            f"   ❌ 发送失败 | 组={feed_group} | "
+                            f"源={row['feed_title'] or row['feed_url']} | "
+                            f"标题={row['translated_title'] or row['title']} | "
+                            f"链接={row['link']} | "
+                            f"发布时间={expired_dt} (UTC) | "
+                            f"滞留={age_days:.1f}天 | "
+                            f"entry_id={row['entry_id'][:40]}"
+                        )
+                
+                await conn.execute(
+                    """
+                    UPDATE pending_messages 
+                    SET sent = 1 
+                    WHERE feed_group = $1 
+                    AND sent = 0 
+                    AND entry_timestamp < $2
+                    """,
+                    feed_group, now - 3 * 86400
+                )
 
                 # 更新清理时间戳
                 await conn.execute("""
@@ -656,7 +692,52 @@ class RSSDatabase:
                     (feed_group,)
                 )
 
-                # 未发送消息无论滞留多久都保留，交由后续批量任务继续重试。
+                # 3. 未发送超过3天，强制标记为已发送（记录日志）
+                await c.execute(
+                    """
+                    SELECT entry_id, feed_url, title, translated_title, link, 
+                           entry_timestamp, feed_title
+                    FROM pending_messages 
+                    WHERE feed_group = ? 
+                    AND sent = 0 
+                    AND entry_timestamp < ?
+                    """,
+                    (feed_group, now - 3 * 86400)
+                )
+                expired_rows = await c.fetchall()
+                
+                if expired_rows:
+                    logger.warning(
+                        f"🗑️ [清理过期未发送] 组={feed_group} | "
+                        f"共 {len(expired_rows)} 条超过3天仍未发送成功，强制标记为已发送"
+                    )
+                    for row in expired_rows:
+                        (entry_id, feed_url, title, translated_title, 
+                         link, entry_timestamp, feed_title) = row
+                        age_days = (now - entry_timestamp) / 86400
+                        expired_dt = datetime.fromtimestamp(
+                            entry_timestamp, tz=pytz.utc
+                        ).strftime('%Y-%m-%d %H:%M:%S')
+                        logger.warning(
+                            f"   ❌ 发送失败 | 组={feed_group} | "
+                            f"源={feed_title or feed_url} | "
+                            f"标题={translated_title or title} | "
+                            f"链接={link} | "
+                            f"发布时间={expired_dt} (UTC) | "
+                            f"滞留={age_days:.1f}天 | "
+                            f"entry_id={entry_id[:40]}"
+                        )
+                
+                await c.execute(
+                    """
+                    UPDATE pending_messages 
+                    SET sent = 1 
+                    WHERE feed_group = ? 
+                    AND sent = 0 
+                    AND entry_timestamp < ?
+                    """,
+                    (feed_group, now - 3 * 86400)
+                )
 
                 # 更新清理时间戳
                 await c.execute(
@@ -815,15 +896,22 @@ def get_entry_timestamp(entry):
 )
 
 async def send_single_message(bot, chat_id, text, disable_web_page_preview=False):
-    """发送消息；MarkdownV2 解析失败才降级纯文本，其余异常向上抛出。"""
-    if not text:
-        return
-
+    """
+    发送单条消息（自动分段 + MarkdownV2 失败降级纯文本重发）
+    - disable_web_page_preview=False：允许 Telegram 自动生成链接预览
+    - disable_web_page_preview=True：禁用链接预览
+    """
     MAX_MESSAGE_LENGTH = 4096
-    chunks = [text[i:i + MAX_MESSAGE_LENGTH] for i in range(0, len(text), MAX_MESSAGE_LENGTH)]
+
+    # 自动分段，避免超过 Telegram 单条消息长度限制
+    chunks = [
+        text[i:i + MAX_MESSAGE_LENGTH]
+        for i in range(0, len(text), MAX_MESSAGE_LENGTH)
+    ]
 
     for chunk in chunks:
         try:
+            # 优先使用 MarkdownV2 格式发送
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
@@ -831,16 +919,32 @@ async def send_single_message(bot, chat_id, text, disable_web_page_preview=False
                 disable_web_page_preview=disable_web_page_preview,
             )
         except BadRequest as e:
-            message = str(e).lower()
-            if "parse entities" in message or "can't parse" in message or "cannot parse" in message:
-                # 只有格式解析错误才尝试纯文本；纯文本失败必须继续抛出。
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=chunk,
-                    disable_web_page_preview=disable_web_page_preview,
-                )
+            # MarkdownV2 解析失败时，降级为纯文本重发
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        disable_web_page_preview=disable_web_page_preview,
+                    )
+                except Exception as fallback_error:
+                    logger.error(
+                        "纯文本降级发送失败，chat_id=%s，错误：%s",
+                        chat_id,
+                        fallback_error,
+                    )
             else:
-                raise
+                logger.error(
+                    "消息发送失败，chat_id=%s，错误：%s",
+                    chat_id,
+                    e,
+                )
+        except Exception as e:
+            logger.error(
+                "消息发送异常，chat_id=%s，错误：%s",
+                chat_id,
+                e,
+            )
 
 
 @retry(
@@ -1001,12 +1105,10 @@ async def translate_with_aliyun(text):
             scene='general',
         )
         # 阿里云 SDK 是同步的，放到线程池里跑，避免阻塞事件循环
-        loop = asyncio.get_running_loop()
-        async with _aliyun_semaphore:
-            response = await asyncio.wait_for(
-                loop.run_in_executor(None, client.translate_general, request),
-                timeout=12
-            )
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, client.translate_general, request
+        )
 
         translated = None
         if response and response.body and response.body.data:
@@ -1017,10 +1119,8 @@ async def translate_with_aliyun(text):
         logger.warning("⚠️ 阿里云返回空或相同文本")
         return None
 
-    except asyncio.TimeoutError:
-        logger.warning("⚠️ 阿里云翻译请求超时（12秒），降级到 DeepL")
     except Exception as e:
-        logger.warning(f"⚠️ 阿里云翻译失败，降级到 DeepL: {e}")
+        logger.warning(f"⚠️ 阿里云翻译失败: {e}")
 
     return None
 
@@ -1324,9 +1424,9 @@ async def generate_single_messages(feed_data, entries, processor):
         return []
 
 async def send_single_messages_separately(bot, chat_id, messages_data, processor):
-    """逐条发送并返回实际成功的消息下标，避免失败项错位标记。"""
-    sent_indices = []
-    for index, msg_data in enumerate(messages_data):
+    """单独发送每条消息"""
+    sent_count = 0
+    for msg_data in messages_data:
         try:
             await send_single_message(
                 bot,
@@ -1334,12 +1434,13 @@ async def send_single_messages_separately(bot, chat_id, messages_data, processor
                 msg_data["content"],
                 disable_web_page_preview=not processor.get("preview", True)
             )
-            sent_indices.append(index)
+            sent_count += 1
+            # 在消息之间添加短暂延迟，避免发送过快
             await asyncio.sleep(0.5)
         except Exception as e:
-            logger.error(f"发送单条消息失败（第 {index + 1} 条）: {e}")
-    return sent_indices
-
+            logger.error(f"发送单条消息失败: {e}")
+    
+    return sent_count
 async def _format_batch_message(header, messages, processor):
     """改进的批量消息格式化，确保Markdown格式完整"""
     MAX_MESSAGE_LENGTH = 4096
@@ -1394,27 +1495,24 @@ async def _format_batch_message(header, messages, processor):
     return segments
 
 async def send_batch_messages(bot, chat_id, message_content, disable_web_page_preview=False):
-    """发送批量消息；任何分段失败都向上抛出，禁止误标记整批已发送。"""
-    if isinstance(message_content, list):
-        segments = message_content
-    else:
-        segments = [message_content]
-
-    for i, segment in enumerate(segments):
-        if not segment or not segment.strip():
-            continue
-        try:
-            await send_single_message(
-                bot, chat_id, segment,
-                disable_web_page_preview=disable_web_page_preview
-            )
-        except Exception as e:
-            logger.error(
-                f"发送分段消息失败（{i + 1}/{len(segments)}），本批次保留待发送状态：{e}"
-            )
-            raise
-        if i < len(segments) - 1:
-            await asyncio.sleep(1)
+    """发送批量消息，处理分段"""
+    if isinstance(message_content, list):  # 分段消息
+        for i, segment in enumerate(message_content):
+            if segment.strip():  # 确保段不为空
+                try:
+                    await send_single_message(
+                        bot, chat_id, segment, 
+                        disable_web_page_preview=disable_web_page_preview
+                    )
+                    if i < len(message_content) - 1:  # 不是最后一条
+                        await asyncio.sleep(1)  # 避免发送过快
+                except Exception as e:
+                    logger.error(f"发送分段消息失败: {e}")
+    else:  # 单条消息
+        await send_single_message(
+            bot, chat_id, message_content,
+            disable_web_page_preview=disable_web_page_preview
+        )
 
 # 修改批量发送函数中的调用
 async def process_batch_send(group, db: RSSDatabase):
@@ -1422,121 +1520,103 @@ async def process_batch_send(group, db: RSSDatabase):
     bot_token = group["bot_token"]
     processor = group["processor"]
     batch_interval = group.get("batch_send_interval")
-
+    
     if not batch_interval:
         return
-
+    
+    MAX_RETRY_COUNT = 3
+    timeout_seconds = batch_interval * MAX_RETRY_COUNT
+    
     now = datetime.now(pytz.utc).timestamp()
     last_batch_sent = await db.get_last_batch_sent_time(group_key)
     if now - last_batch_sent < batch_interval:
         return
-
+    
     pending = await db.get_pending_messages(group_key)
     if not pending:
         await db.save_last_batch_sent_time(group_key, now)
         return
 
-    # 清理旧版本可能已经写入的跨源重复待发送记录。
-    # 每个链接整组只保留一条；只有开启 title_dedup 的组才按标题再去重。
-    title_dedup = group.get("title_dedup", False)
-    pending_seen_links = set()
-    pending_seen_titles = set()
-    unique_pending = []
-    duplicate_pending = []
-    for row in pending:
-        link_hash = row.get("link_hash") or row.get("content_hash")
-        title_hash = row.get("title_hash")
-        if link_hash and link_hash in pending_seen_links:
-            duplicate_pending.append((row["feed_url"], row["entry_id"]))
-            continue
-        if title_dedup and title_hash and title_hash in pending_seen_titles:
-            duplicate_pending.append((row["feed_url"], row["entry_id"]))
-            continue
-        if link_hash:
-            pending_seen_links.add(link_hash)
-        if title_dedup and title_hash:
-            pending_seen_titles.add(title_hash)
-        unique_pending.append(row)
+    timeout_cutoff = now - timeout_seconds
 
-    if duplicate_pending:
-        await db.mark_pending_as_sent(group_key, duplicate_pending)
-        logger.warning(
-            f"🔁 [待发送队列整组去重] 组={group_key} | "
-            f"跳过 {len(duplicate_pending)} 条重复记录"
-        )
-
-    pending = unique_pending
-    if not pending:
-        await db.save_last_batch_sent_time(group_key, now)
-        return
-
-    # 按 feed_url 分组；一组源发送完整成功后才标记该组消息已发送。
+    # 按 feed_url 分组消息
     feed_url_to_msgs = defaultdict(list)
     for row in pending:
         feed_url_to_msgs[row["feed_url"]].append(row)
 
     bot = Bot(token=bot_token)
     sent_entry_ids = []
+    force_sent_entry_ids = []
 
     for feed_url, msgs in feed_url_to_msgs.items():
-        feed_title = msgs[0].get("feed_title") or group.get("name") or feed_url
-
+        feed_title = (msgs[0].get("feed_title") or group.get("name") or feed_url)
+        
         class DummyFeed:
             feed = {'title': feed_title}
-
+            
         class Entry:
             def __init__(self, row):
-                self.title = row.get("translated_title") or row.get("title") or "无标题"
-                self.link = row.get("link") or ""
-                self.summary = row.get("summary") or ""
-
+                self.title = row["translated_title"] or row["title"]
+                self.link = row["link"]
+                self.summary = row.get("summary", "") or ""
         entries = [Entry(row) for row in msgs]
-
+        
         try:
             feed_message = await generate_group_message(
                 DummyFeed, entries, {**processor, "translate": False}
             )
-            if not feed_message:
-                raise RuntimeError("生成批量消息为空，保留待发送状态")
-
-            await send_batch_messages(
-                bot,
-                TELEGRAM_CHAT_ID[0],
-                feed_message,
-                disable_web_page_preview=not processor.get("preview", True)
-            )
-
-            records = [
-                (group_key, row["feed_url"], row["entry_id"],
-                 row["link_hash"], row["title_hash"], time.time())
-                for row in msgs
-            ]
-            await db.batch_save_status(
-                records, title_dedup=group.get("title_dedup", False)
-            )
-            sent_entry_ids.extend((row["feed_url"], row["entry_id"]) for row in msgs)
-
+            
+            if feed_message:
+                await send_batch_messages(
+                    bot,
+                    TELEGRAM_CHAT_ID[0],
+                    feed_message,
+                    disable_web_page_preview=not processor.get("preview", True)
+                )
+                # ✅ 发送成功 → 记录
+                sent_entry_ids.extend([row["entry_id"] for row in msgs])
+                
+                # ✅ 关键改动：发送成功后，批量写入 rss_status
+                records = [
+                    (group_key, row["feed_url"], row["entry_id"], 
+                    row["link_hash"], row["title_hash"], time.time())
+                    for row in msgs
+                ]
+                # ✅ 从 group 配置读取 title_dedup，传给数据库
+                await db.batch_save_status(records, title_dedup=group.get("title_dedup", False))
+                
         except Exception as e:
             logger.error(
-                f"批量推送失败[{group_key}-{feed_url}]: {type(e).__name__}: {e}；保留待发送状态，下一轮重试",
+                f"批量推送失败[{group_key}-{feed_url}]: {type(e).__name__}: {e}",
                 exc_info=True
             )
-            oldest_age_days = max(
-                (now - row.get("entry_timestamp", now)) / 86400 for row in msgs
-            )
-            if oldest_age_days >= 3:
-                logger.warning(
-                    f"⚠️ [待发送消息仍保留] 组={group_key} | 源={feed_title} | "
-                    f"共 {len(msgs)} 条 | 最旧滞留={oldest_age_days:.1f}天"
-                )
-
+            
+            for row in msgs:
+                if row["entry_timestamp"] < timeout_cutoff:
+                    force_sent_entry_ids.append(row["entry_id"])
+                    age_hours = (now - row["entry_timestamp"]) / 3600
+                    pub_dt = datetime.fromtimestamp(
+                        row["entry_timestamp"], tz=pytz.utc
+                    ).strftime('%Y-%m-%d %H:%M:%S')
+                    logger.warning(
+                        f"   ❌ 发送失败(批量) | 组={group_key} | "
+                        f"源={row.get('feed_title') or feed_url} | "
+                        f"标题={row.get('translated_title') or row.get('title')} | "
+                        f"链接={row.get('link')} | "
+                        f"发布时间={pub_dt} (UTC) | "
+                        f"滞留={age_hours:.1f}小时 | "
+                        f"entry_id={row['entry_id'][:40]}"
+                    )
+    
+    # 标记成功发送的
     if sent_entry_ids:
         await db.mark_pending_as_sent(group_key, sent_entry_ids)
-
-    # 即使某个源发送失败，也记录本轮尝试时间；失败消息仍是 sent=0，
-    # 下一次 batch_send_interval 到期后会再次进入发送队列。
+    
+    # 标记强制放弃的
+    if force_sent_entry_ids:
+        await db.mark_pending_as_sent(group_key, force_sent_entry_ids)
+    
     await db.save_last_batch_sent_time(group_key, now)
-
         
 # ========== 组采集（采集但可选择是否立即推送） ==========
 async def process_group(session, group_config, global_status, db: RSSDatabase):
@@ -1548,7 +1628,7 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
         bot_token = group_config["bot_token"]
         batch_send_interval = group_config.get("batch_send_interval", None)
         send_separately = group_config.get("send_separately", False)
-        shared_dedup = group_config.get("shared_dedup", True)
+        shared_dedup = group_config.get("shared_dedup", False)
         title_dedup = group_config.get("title_dedup", False)
         
         try:
@@ -1558,9 +1638,6 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                 return
                 
             bot = Bot(token=bot_token)
-            # 整组共享：跨不同 RSS 源维护本轮已接纳的链接/标题哈希。
-            group_seen_links = set()
-            group_seen_titles = set()
             for index, feed_url in enumerate(group_config["urls"]):
                 try:
                     if index > 0:
@@ -1586,6 +1663,8 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                     
                     # ✅ 3. 过滤
                     new_entries = []
+                    seen_links = set()
+                    seen_titles = set()
                     for entry, link_hash, title_hash, entry_id in entries_with_hashes:
                         if link_hash in existing_links:
                          #   logger.warning(f"🔁 数据库去重命中 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
@@ -1593,15 +1672,17 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                         if title_dedup and title_hash and title_hash in existing_titles:
                           #  logger.warning(f"🔁 数据库去重命中 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
-                        if link_hash in group_seen_links:
+                        if link_hash in seen_links:
+                         #   logger.warning(f"🔁 批次内去重 link | {link_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
-                        if title_dedup and title_hash and title_hash in group_seen_titles:
+                        if title_dedup and title_hash and title_hash in seen_titles:
+                          #  logger.warning(f"🔁 批次内去重 title | {title_hash[:12]} | {getattr(entry,'title','')[:40]}")
                             continue
                         if not await should_send_entry(entry, processor):
                             continue
-                        group_seen_links.add(link_hash)
-                        if title_dedup and title_hash:
-                            group_seen_titles.add(title_hash)
+                        seen_links.add(link_hash)
+                        if title_hash:
+                            seen_titles.add(title_hash)
                         new_entries.append((entry, link_hash, title_hash, entry_id))
                     
                     # ✅ 4. 发送 + 批量写入
@@ -1636,15 +1717,14 @@ async def process_group(session, group_config, global_status, db: RSSDatabase):
                             )
                             
                             if messages_data:
-                                sent_indices = await send_single_messages_separately(
+                                sent_count = await send_single_messages_separately(
                                     bot, TELEGRAM_CHAT_ID[0], messages_data, processor
                                 )
-                                sent_count = len(sent_indices)
-
-                                # 只记录真正成功发送的对应文章，不能简单按成功数量截断。
+                                
+                                # ✅ 只批量写入发送成功的
                                 records = []
                                 for i, (entry, link_hash, title_hash, entry_id) in enumerate(new_entries):
-                                    if i in sent_indices:
+                                    if i < sent_count:
                                         records.append((group_key, canonical_url, entry_id, link_hash, title_hash, time.time()))
                                 if records:
                                     await db.batch_save_status(records, title_dedup=title_dedup)
@@ -1728,7 +1808,7 @@ async def run_main_logic():
         for group in RSS_GROUPS:
             try:
                 days = group.get("history_days", 30)
-                shared_dedup = group.get("shared_dedup", True)
+                shared_dedup = group.get("shared_dedup", False)
                 keep_count = group.get("keep_count", 100)
                 await db.cleanup_history(group["group_key"], shared_dedup, keep_count)
             except Exception as e:
