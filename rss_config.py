@@ -230,8 +230,8 @@ RSS_GROUPS = [ # RSS 组配置列表
     {
         "name": "vps",
         "urls": [
-            'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
-            'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
+        #    'https://lowendspirit.com/discussions/feed.rss', # lowendspirit
+       #     'https://lowendtalk.com/discussions/feed.rss',   # lowendtalk
         ],
         "group_key": "FIFTH_RSS_RRSS_SAN",
         "interval": 3590,      # 60分钟 
